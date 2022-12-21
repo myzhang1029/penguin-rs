@@ -15,6 +15,8 @@ categories = ["command-line-utilities"]
 [dependencies]
 clap = { version = "4", features = ["cargo", "derive"] }
 env_logger = "0.10"
+futures-util = { version = "0.3", default-features = false }
 log = "0.4"
+warp-reverse-proxy = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 warp = { version = "0.3", features = ["tls"] }

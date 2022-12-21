@@ -3,6 +3,7 @@
 
 mod arg;
 mod client;
+mod proto_version;
 mod server;
 
 use clap::Parser;
