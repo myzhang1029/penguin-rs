@@ -1,0 +1,224 @@
+//! Command line arguments parsing.
+//! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
+
+use clap::{arg, command, Args, Parser, Subcommand};
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+#[command(propagate_version = true)]
+pub struct PenguinCli {
+    #[clap(subcommand)]
+    pub(crate) subcommand: Commands,
+    #[arg(short, long)]
+    pub(crate) verbose: bool,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum Commands {
+    /// Penguin client
+    #[clap(name = "client")]
+    Client(ClientArgs),
+    /// Penguin server
+    #[clap(name = "server")]
+    Server(ServerArgs),
+}
+
+// Descriptions are mainly directly stripped from myzhang1029/penguin
+/// Penguin client arguments.
+#[derive(Args, Debug)]
+pub struct ClientArgs {
+    /// URL to the penguin server.
+    pub(crate) server: String,
+    /// Remote connections tunneled through the server, each of
+    /// which come in the form:
+    ///
+    /// <local-host>:<local-port>:<remote-host>:<remote-port>/<protocol>
+    ///
+    /// - local-host defaults to 0.0.0.0 (all interfaces).
+    ///
+    /// - local-port defaults to remote-port.
+    ///
+    /// - remote-port is required*.
+    ///
+    /// - remote-host defaults to 0.0.0.0 (server localhost).
+    ///
+    /// - protocol defaults to tcp.
+    ///
+    /// which shares <remote-host>:<remote-port> from the server to the client
+    /// as <local-host>:<local-port>, or:
+    ///
+    ///   R:<local-interface>:<local-port>:<remote-host>:<remote-port>/<protocol>
+    ///
+    /// which does reverse port forwarding, sharing <remote-host>:<remote-port>
+    /// from the client to the server's <local-interface>:<local-port>.
+    ///
+    ///   example remotes
+    ///
+    ///     3000
+    ///
+    ///     example.com:3000
+    ///
+    ///     3000:google.com:80
+    ///
+    ///     192.168.0.5:3000:google.com:80
+    ///
+    ///     socks
+    ///
+    ///     5000:socks
+    ///
+    ///     R:2222:localhost:22
+    ///
+    ///     R:socks
+    ///
+    ///     R:5000:socks
+    ///
+    ///     stdio:example.com:22
+    ///
+    ///     1.1.1.1:53/udp
+    ///
+    ///   When the penguin server has --socks5 enabled, remotes can
+    ///   specify "socks" in place of remote-host and remote-port.
+    ///   The default local host and port for a "socks" remote is
+    ///   127.0.0.1:1080. Connections to this remote will terminate
+    ///   at the server's internal SOCKS5 proxy.
+    ///
+    ///   When the penguin server has --reverse enabled, remotes can
+    ///   be prefixed with R to denote that they are reversed. That
+    ///   is, the server will listen and accept connections, and they
+    ///   will be proxied through the client which specified the remote.
+    ///   Reverse remotes specifying "R:socks" will listen on the server's
+    ///   default socks port (1080) and terminate the connection at the
+    ///   client's internal SOCKS5 proxy.
+    ///
+    ///   When stdio is used as local-host, the tunnel will connect standard
+    ///   input/output of this program with the remote. This is useful when
+    ///   combined with ssh ProxyCommand. You can use
+    ///     ssh -o ProxyCommand='penguin client <server> stdio:%h:%p' \
+    ///         user@example.com
+    ///   to connect to an SSH server through the tunnel.
+    pub(crate) remote: Vec<String>,
+    /// An optional Pre-Shared Key for WebSocket upgrade to present
+    /// to the server in the HTTP header X-Penguin-Psk. If the server requires
+    /// this key but the client does not present the correct key, the upgrade
+    /// to WebSocket silently fails.
+    #[arg(long)]
+    pub(crate) ws_psk: Option<String>,
+    /// An optional keepalive interval. Since the underlying
+    /// transport is HTTP, in many instances we'll be traversing through
+    /// proxies, often these proxies will close idle connections. You must
+    /// specify a time with a unit, for example '5s' or '2m'. Defaults
+    /// to '25s' (set to 0s to disable).
+    #[arg(long, default_value_t = 0)]
+    pub(crate) keepalive: u64,
+    /// Maximum number of times to retry before exiting.
+    /// Defaults 0, meaning unlimited.
+    #[arg(long, default_value_t = 0)]
+    pub(crate) max_retry_count: u32,
+    /// Maximum wait time (in seconds) before retrying after a
+    /// disconnection.
+    #[arg(long, default_value_t = 300)]
+    pub(crate) max_retry_interval: u64,
+    /// An optional HTTP CONNECT or SOCKS5 proxy which will be
+    /// used to reach the penguin server. Authentication can be specified
+    /// inside the URL.
+    /// For example, http://admin:password@my-server.com:8081
+    ///         or: socks://admin:password@my-server.com:1080
+    #[arg(short = 'x', long)]
+    pub(crate) proxy: Option<String>,
+    /// Set a custom header in the form "HeaderName: HeaderContent".
+    /// Can be used multiple times.
+    /// (e.g --header "Foo: Bar" --header "Hello: World")
+    #[arg(short = 'H', long)]
+    pub(crate) header: Vec<String>,
+    /// Optionally set the 'Host' header (defaults to the host
+    /// found in the server url).
+    #[arg(long)]
+    pub(crate) hostname: Option<String>,
+    /// Override the ServerName when using TLS (defaults to the
+    /// hostname).
+    #[arg(long)]
+    pub(crate) sni: Option<String>,
+    /// An optional root certificate bundle used to verify the
+    /// penguin server. Only valid when connecting to the server with
+    /// "https" or "wss". By default, the operating system CAs will be used.
+    #[arg(short, long)]
+    pub(crate) tls_ca: Option<String>,
+    /// Skip server TLS certificate verification of
+    /// chain and host name (if TLS is used for transport connections to
+    /// server). If set, client accepts any TLS certificate presented by
+    /// the server and any host name in that certificate. This only affects
+    /// transport https (wss) connection.
+    #[arg(long)]
+    pub(crate) tls_skip_verify: bool,
+    /// A path to a PEM encoded private key used for client
+    /// authentication (mutual-TLS).
+    #[arg(long)]
+    pub(crate) tls_key: Option<String>,
+    /// A path to a PEM encoded certificate matching the provided
+    /// private key. The certificate must have client authentication
+    ///enabled (mutual-TLS).
+    #[arg(long)]
+    pub(crate) tls_cert: Option<String>,
+}
+
+/// Penguin server arguments.
+#[derive(Args, Debug)]
+pub struct ServerArgs {
+    /// Defines the HTTP listening host - the network interface
+    /// (defaults to ::).
+    #[arg(long, default_value = "::")]
+    pub(crate) host: String,
+    /// Defines the HTTP listening port (defaults to port 8080).
+    #[arg(short, long, default_value_t = 8080)]
+    pub(crate) port: u16,
+    /// An optional keepalive interval. Since the underlying
+    /// transport is HTTP, in many instances we'll be traversing through
+    /// proxies, often these proxies will close idle connections. You must
+    /// specify a time with a unit, for example '5s' or '2m'. Defaults
+    /// to '25s' (set to 0s to disable).
+    #[arg(long, default_value_t = 0)]
+    pub(crate) keepalive: u64,
+    /// Specifies another HTTP server to proxy requests to when
+    /// penguin receives a normal HTTP request. Useful for hiding penguin in
+    /// plain sight.
+    #[arg(long)]
+    pub(crate) backend: Option<String>,
+    /// Allow clients to access the internal SOCKS5 proxy. See
+    /// `penguin client --help` for more information.
+    #[arg(long)]
+    pub(crate) socks5: bool,
+    /// Allow clients to specify reverse port forwarding remotes
+    /// in addition to normal remotes.
+    #[arg(long)]
+    pub(crate) reverse: bool,
+    /// Try harder to hide from Active Probes (disable /health and
+    /// /version endpoints and HTTP headers that could potentially be used
+    /// to fingerprint penguin). It is strongly recommended to use --ws-psk
+    /// and TLS.
+    #[arg(long)]
+    pub(crate) obfs: bool,
+    /// Content to send with a 404 response. Defaults to 'Not found'.
+    #[arg(long = "404-resp", default_value = "Not found")]
+    pub(crate) not_found_resp: String,
+    /// An optional Pre-Shared Key for WebSocket upgrade. If this
+    /// option is supplied but the client does not present the correct key
+    /// in the HTTP header X-Penguin-PSK, the upgrade to WebSocket silently fails.
+    #[arg(long)]
+    pub(crate) ws_psk: Option<String>,
+    /// Enables TLS and provides optional path to a PEM-encoded
+    /// TLS private key. When this flag is set, you must also set --tls-cert,
+    /// and you cannot set --tls-domain.
+    #[arg(long, requires = "tls_cert")]
+    pub(crate) tls_key: Option<String>,
+    /// Enables TLS and provides optional path to a PEM-encoded
+    /// TLS certificate. When this flag is set, you must also set --tls-key,
+    /// and you cannot set --tls-domain.
+    #[arg(long, requires = "tls_key")]
+    pub(crate) tls_cert: Option<String>,
+    /// A path to a PEM encoded CA certificate bundle or a directory
+    /// holding multiple PEM encode CA certificate bundle files, which is used to
+    /// validate client connections. The provided CA certificates will be used
+    /// instead of the system roots. This is commonly used to implement mutual-TLS.
+    #[arg(long)]
+    pub(crate) tls_ca: Option<String>,
+}
