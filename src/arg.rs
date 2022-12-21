@@ -45,12 +45,7 @@ pub struct ClientArgs {
     /// - protocol defaults to tcp.
     ///
     /// which shares <remote-host>:<remote-port> from the server to the client
-    /// as <local-host>:<local-port>, or:
-    ///
-    ///   R:<local-interface>:<local-port>:<remote-host>:<remote-port>/<protocol>
-    ///
-    /// which does reverse port forwarding, sharing <remote-host>:<remote-port>
-    /// from the client to the server's <local-interface>:<local-port>.
+    /// as <local-host>:<local-port>.
     ///
     ///   example remotes
     ///
@@ -66,12 +61,6 @@ pub struct ClientArgs {
     ///
     ///     5000:socks
     ///
-    ///     R:2222:localhost:22
-    ///
-    ///     R:socks
-    ///
-    ///     R:5000:socks
-    ///
     ///     stdio:example.com:22
     ///
     ///     1.1.1.1:53/udp
@@ -81,14 +70,6 @@ pub struct ClientArgs {
     ///   The default local host and port for a "socks" remote is
     ///   127.0.0.1:1080. Connections to this remote will terminate
     ///   at the server's internal SOCKS5 proxy.
-    ///
-    ///   When the penguin server has --reverse enabled, remotes can
-    ///   be prefixed with R to denote that they are reversed. That
-    ///   is, the server will listen and accept connections, and they
-    ///   will be proxied through the client which specified the remote.
-    ///   Reverse remotes specifying "R:socks" will listen on the server's
-    ///   default socks port (1080) and terminate the connection at the
-    ///   client's internal SOCKS5 proxy.
     ///
     ///   When stdio is used as local-host, the tunnel will connect standard
     ///   input/output of this program with the remote. This is useful when
@@ -106,9 +87,8 @@ pub struct ClientArgs {
     /// An optional keepalive interval. Since the underlying
     /// transport is HTTP, in many instances we'll be traversing through
     /// proxies, often these proxies will close idle connections. You must
-    /// specify a time with a unit, for example '5s' or '2m'. Defaults
-    /// to '25s' (set to 0s to disable).
-    #[arg(long, default_value_t = 0)]
+    /// specify a time in seconds (set to 0 to disable).
+    #[arg(long, default_value_t = 25)]
     pub(crate) keepalive: u64,
     /// Maximum number of times to retry before exiting.
     /// Defaults 0, meaning unlimited.
@@ -148,7 +128,7 @@ pub struct ClientArgs {
     /// server). If set, client accepts any TLS certificate presented by
     /// the server and any host name in that certificate. This only affects
     /// transport https (wss) connection.
-    #[arg(long)]
+    #[arg(short = 'k', long)]
     pub(crate) tls_skip_verify: bool,
     /// A path to a PEM encoded private key used for client
     /// authentication (mutual-TLS).
@@ -171,13 +151,6 @@ pub struct ServerArgs {
     /// Defines the HTTP listening port (defaults to port 8080).
     #[arg(short, long, default_value_t = 8080)]
     pub(crate) port: u16,
-    /// An optional keepalive interval. Since the underlying
-    /// transport is HTTP, in many instances we'll be traversing through
-    /// proxies, often these proxies will close idle connections. You must
-    /// specify a time with a unit, for example '5s' or '2m'. Defaults
-    /// to '25s' (set to 0s to disable).
-    #[arg(long, default_value_t = 0)]
-    pub(crate) keepalive: u64,
     /// Specifies another HTTP server to proxy requests to when
     /// penguin receives a normal HTTP request. Useful for hiding penguin in
     /// plain sight.
@@ -187,10 +160,6 @@ pub struct ServerArgs {
     /// `penguin client --help` for more information.
     #[arg(long)]
     pub(crate) socks5: bool,
-    /// Allow clients to specify reverse port forwarding remotes
-    /// in addition to normal remotes.
-    #[arg(long)]
-    pub(crate) reverse: bool,
     /// Try harder to hide from Active Probes (disable /health and
     /// /version endpoints and HTTP headers that could potentially be used
     /// to fingerprint penguin). It is strongly recommended to use --ws-psk

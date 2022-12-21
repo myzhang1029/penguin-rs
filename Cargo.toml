@@ -17,6 +17,6 @@ clap = { version = "4", features = ["cargo", "derive"] }
 env_logger = "0.10"
 futures-util = { version = "0.3", default-features = false }
 log = "0.4"
-warp-reverse-proxy = "1"
+warp-reverse-proxy = { version = "1", features = ["rustls-tls"], default-features = false }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 warp = { version = "0.3", features = ["tls"] }

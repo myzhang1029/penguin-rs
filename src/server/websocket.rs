@@ -3,7 +3,7 @@
 
 use crate::proto_version::PROTOCOL_VERSION;
 use futures_util::{FutureExt, StreamExt};
-use log::{error, info};
+use log::{debug, error, info};
 use warp::{Filter, Rejection, Reply};
 
 /// Check the PSK and protocol version and upgrade to a websocket if the PSK matches (if required).
@@ -23,6 +23,7 @@ pub fn ws_filter(
                 match (psk, predefined_ws_psk) {
                     (Some(psk), Some(predefined_psk)) => {
                         if psk == predefined_psk {
+                            debug!("Valid client PSK: {}", psk);
                             Ok(ws)
                         } else {
                             info!("Ignoring invalid client PSK: {}", psk);
@@ -35,13 +36,14 @@ pub fn ws_filter(
                         Err(warp::reject::not_found())
                     }
                     (_, None) => {
-                        // No PSK required
+                        debug!("No PSK required");
                         Ok(ws)
                     }
                 }
             }
         })
         .map(|ws: warp::ws::Ws| {
+            debug!("Upgrading to websocket");
             // And then our closure will be called when it completes
             ws.on_upgrade(|websocket| {
                 // Just echo all messages back
