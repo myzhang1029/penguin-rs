@@ -6,9 +6,9 @@ mod websocket;
 
 use crate::arg::ServerArgs;
 use backend_proxy::check_pass_proxy;
-use websocket::ws_filter;
 use log::{debug, info};
 use warp::Filter;
+use websocket::ws_filter;
 
 pub async fn server_main(args: ServerArgs) {
     debug!("Server args: {:?}", args);

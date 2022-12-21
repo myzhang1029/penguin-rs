@@ -591,6 +591,7 @@ dependencies = [
  "env_logger",
  "futures-util",
  "log",
+ "thiserror",
  "tokio",
  "warp",
  "warp-reverse-proxy",

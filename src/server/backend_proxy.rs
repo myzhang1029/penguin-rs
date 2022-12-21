@@ -34,9 +34,9 @@ async fn add_host_header(
     let host = proxy_address
         .replace("http://", "")
         .replace("https://", "")
-        .replace("/", "");
+        .replace('/', "");
     debug!("Host: {}", host);
-    let mut headers = headers.clone();
+    let mut headers = headers;
     headers.insert("host", host.parse().unwrap());
     Ok((proxy_address, base_path, uri, params, method, headers, body))
 }

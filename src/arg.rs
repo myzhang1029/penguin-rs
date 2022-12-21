@@ -40,7 +40,7 @@ pub struct ClientArgs {
     ///
     /// - remote-port is required*.
     ///
-    /// - remote-host defaults to 0.0.0.0 (server localhost).
+    /// - remote-host defaults to 127.0.0.1 (server localhost).
     ///
     /// - protocol defaults to tcp.
     ///
