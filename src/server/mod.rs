@@ -7,18 +7,25 @@ mod websocket;
 use crate::arg::ServerArgs;
 use backend_proxy::check_pass_proxy;
 use log::{debug, info};
+use thiserror::Error;
 use warp::Filter;
 use websocket::ws_filter;
 
-pub async fn server_main(args: ServerArgs) -> i32 {
+/// Server Errors
+#[derive(Debug, Error)]
+pub enum Error {
+    /// Invalid listening host
+    #[error("invalid listening host: {0}")]
+    InvalidHost(#[from] std::net::AddrParseError),
+    /// IO error
+    #[error("IO error: {0}")]
+    IO(#[from] std::io::Error),
+}
+
+pub async fn server_main(args: ServerArgs) -> Result<(), Error> {
     debug!("Server args: {:?}", args);
 
-    let sockaddr = (
-        args.host
-            .parse::<std::net::IpAddr>()
-            .expect("Invalid listening host"),
-        args.port,
-    );
+    let sockaddr = (args.host.parse::<std::net::IpAddr>()?, args.port);
 
     // Upgrade to a websocket if the path is `/ws` and the PSK matches
     // (if required)
@@ -78,5 +85,5 @@ pub async fn server_main(args: ServerArgs) -> i32 {
     } else {
         warp::serve(routes).run(sockaddr).await;
     }
-    0
+    Ok(())
 }

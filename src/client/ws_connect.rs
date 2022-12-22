@@ -21,21 +21,21 @@ use url::Url;
 /// Error type for WebSocket connection.
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("failed to read CA store")]
+    #[error("failed to read CA store: {0}")]
     CaStoreIO(#[from] std::io::Error),
-    #[error("failed to parse CA store")]
+    #[error("failed to parse CA store: {0}")]
     CaStoreParse(#[from] webpki::Error),
-    #[error("rustls error")]
+    #[error("rustls error: {0}")]
     Rustls(#[from] rustls::Error),
-    #[error("tungstenite error")]
+    #[error("tungstenite error: {0}")]
     Tungstenite(#[from] tungstenite::error::Error),
-    #[error("failed to parse URL")]
+    #[error("failed to parse URL: {0}")]
     UrlParse(#[from] url::ParseError),
     #[error("incorrect scheme: {0}")]
     IncorrectScheme(String),
-    #[error("invalid header value or hostname")]
+    #[error("invalid header value or hostname: {0}")]
     InvalidHeaderValue(#[from] http::header::InvalidHeaderValue),
-    #[error("invalid header name")]
+    #[error("invalid header name: {0}")]
     InvalidHeaderName(#[from] http::header::InvalidHeaderName),
     #[error("invalid header: {0}")]
     InvalidHeaderFormat(String),

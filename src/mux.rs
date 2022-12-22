@@ -11,7 +11,7 @@ use tokio_tungstenite::tungstenite::protocol::Message as ClientMessage;
 use warp::ws::Message as ServerMessage;
 
 /// Generic representation of a WebSocket message
-pub trait WebSocketMessage {
+pub trait WebSocketMessage: Unpin + Send + Sync + 'static {
     fn from_data(data: Vec<u8>) -> Self;
     fn into_data(self) -> Vec<u8>;
 }
@@ -36,19 +36,29 @@ impl WebSocketMessage for ServerMessage {
     }
 }
 
+/// std::error::Error + Sync + Send + 'static. Just for saving ink.
+pub trait AsyncIoError: std::error::Error + Unpin + Sync + Send + Sized + 'static {
+    fn into_io_error(self) -> std::io::Error {
+        // Takes ownership of self
+        std::io::Error::new(std::io::ErrorKind::Other, self)
+    }
+}
+
+impl<T> AsyncIoError for T where T: std::error::Error + Unpin + Sync + Send + 'static {}
+
 /// A generic WebSocket connection
 #[derive(Debug)]
 pub struct WebSocket<Inner, Msg, Err>(Inner)
 where
-    Err: std::error::Error + Sync + Send + 'static,
-    Msg: WebSocketMessage + 'static,
+    Msg: WebSocketMessage,
+    Err: AsyncIoError,
     Inner:
         Stream<Item = Result<Msg, Err>> + Sink<Msg, Error = Err> + Unpin + Send + Sized + 'static;
 
 impl<Inner, Msg, Err> WebSocket<Inner, Msg, Err>
 where
-    Err: std::error::Error + Sync + Send + 'static,
-    Msg: WebSocketMessage + 'static,
+    Msg: WebSocketMessage,
+    Err: AsyncIoError,
     Inner:
         Stream<Item = Result<Msg, Err>> + Sink<Msg, Error = Err> + Unpin + Send + Sized + 'static,
 {
@@ -60,8 +70,8 @@ where
 
 impl<Inner, Msg, Err> AsyncRead for WebSocket<Inner, Msg, Err>
 where
-    Err: std::error::Error + Sync + Send + 'static,
-    Msg: WebSocketMessage + 'static,
+    Msg: WebSocketMessage,
+    Err: AsyncIoError,
     Inner:
         Stream<Item = Result<Msg, Err>> + Sink<Msg, Error = Err> + Unpin + Send + Sized + 'static,
 {
@@ -75,7 +85,7 @@ where
                 buf.put_slice(&message.into_data());
                 Ok(())
             }
-            Some(Err(e)) => Err(std::io::Error::new(std::io::ErrorKind::Other, e)),
+            Some(Err(e)) => Err(e.into_io_error()),
             None => Ok(()),
         })
     }
@@ -83,8 +93,8 @@ where
 
 impl<Inner, Msg, Err> Deref for WebSocket<Inner, Msg, Err>
 where
-    Err: std::error::Error + Sync + Send + 'static,
-    Msg: WebSocketMessage + 'static,
+    Msg: WebSocketMessage,
+    Err: AsyncIoError,
     Inner:
         Stream<Item = Result<Msg, Err>> + Sink<Msg, Error = Err> + Unpin + Send + Sized + 'static,
 {
@@ -97,8 +107,8 @@ where
 
 impl<Inner, Msg, Err> DerefMut for WebSocket<Inner, Msg, Err>
 where
-    Err: std::error::Error + Sync + Send + 'static,
-    Msg: WebSocketMessage + 'static,
+    Msg: WebSocketMessage,
+    Err: AsyncIoError,
     Inner:
         Stream<Item = Result<Msg, Err>> + Sink<Msg, Error = Err> + Unpin + Send + Sized + 'static,
 {
@@ -109,8 +119,8 @@ where
 
 impl<Inner, Msg, Err> AsyncWrite for WebSocket<Inner, Msg, Err>
 where
-    Err: std::error::Error + Sync + Send + 'static,
-    Msg: WebSocketMessage + 'static,
+    Msg: WebSocketMessage,
+    Err: AsyncIoError,
     Inner:
         Stream<Item = Result<Msg, Err>> + Sink<Msg, Error = Err> + Unpin + Send + Sized + 'static,
 {
@@ -124,12 +134,10 @@ where
                 let msg = Msg::from_data(data.to_vec());
                 Pin::new(&mut self.0)
                     .start_send(msg)
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                    .map_err(|e| e.into_io_error())?;
                 Poll::Ready(Ok(data.len()))
             }
-            Poll::Ready(Err(e)) => {
-                Poll::Ready(Err(std::io::Error::new(std::io::ErrorKind::Other, e)))
-            }
+            Poll::Ready(Err(e)) => Poll::Ready(Err(e.into_io_error())),
             Poll::Pending => Poll::Pending,
         }
     }
@@ -137,7 +145,7 @@ where
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
         Pin::new(&mut self.get_mut().0)
             .poll_flush(cx)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+            .map_err(|e| e.into_io_error())
     }
 
     fn poll_shutdown(
@@ -146,7 +154,7 @@ where
     ) -> Poll<Result<(), std::io::Error>> {
         Pin::new(&mut self.get_mut().0)
             .poll_close(cx)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+            .map_err(|e| e.into_io_error())
     }
 }
 
@@ -154,8 +162,8 @@ where
 #[derive(Debug)]
 pub struct Multiplexor<I, M, E>
 where
-    E: std::error::Error + Sync + Send + 'static,
-    M: WebSocketMessage + 'static,
+    E: AsyncIoError,
+    M: WebSocketMessage,
     I: Stream<Item = Result<M, E>> + Sink<M, Error = E> + Unpin + Send + Sized + 'static,
 {
     mux: StreamMultiplexor<WebSocket<I, M, E>>,
@@ -163,8 +171,8 @@ where
 
 impl<I, M, E> Multiplexor<I, M, E>
 where
-    E: std::error::Error + Sync + Send + 'static,
-    M: WebSocketMessage + 'static,
+    E: AsyncIoError,
+    M: WebSocketMessage,
     I: Stream<Item = Result<M, E>> + Sink<M, Error = E> + Unpin + Send + Sized + 'static,
 {
     /// Create a new `ClientMultiplexor` from a `ClientWebSocket`
@@ -177,8 +185,8 @@ where
 
 impl<I, M, E> Deref for Multiplexor<I, M, E>
 where
-    E: std::error::Error + Sync + Send + 'static,
-    M: WebSocketMessage + 'static,
+    E: AsyncIoError,
+    M: WebSocketMessage,
     I: Stream<Item = Result<M, E>> + Sink<M, Error = E> + Unpin + Send + Sized + 'static,
 {
     type Target = StreamMultiplexor<WebSocket<I, M, E>>;
@@ -190,8 +198,8 @@ where
 
 impl<I, M, E> DerefMut for Multiplexor<I, M, E>
 where
-    E: std::error::Error + Sync + Send + 'static,
-    M: WebSocketMessage + 'static,
+    E: AsyncIoError,
+    M: WebSocketMessage,
     I: Stream<Item = Result<M, E>> + Sink<M, Error = E> + Unpin + Send + Sized + 'static,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {

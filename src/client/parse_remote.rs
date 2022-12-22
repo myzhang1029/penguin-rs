@@ -1,7 +1,7 @@
 //! Client `remote` specification.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use std::str::FromStr;
+use std::{fmt::Display, str::FromStr};
 
 use thiserror::Error;
 
@@ -46,6 +46,15 @@ pub enum Error {
     Port(#[from] std::num::ParseIntError),
 }
 
+impl Display for Protocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Protocol::Tcp => write!(f, "tcp"),
+            Protocol::Udp => write!(f, "udp"),
+        }
+    }
+}
+
 impl FromStr for Protocol {
     type Err = Error;
 
@@ -88,6 +97,21 @@ fn tokenize_remote(s: &str) -> Result<Vec<&str>, Error> {
     }
 }
 
+impl Display for Remote {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.local_addr {
+            LocalSpec::Inet((host, port)) => write!(f, "{}:{}", host, port)?,
+            LocalSpec::Stdio => write!(f, "stdio")?,
+        }
+        match &self.remote_addr {
+            RemoteSpec::Inet((host, port)) => write!(f, ":{}:{}", host, port)?,
+            RemoteSpec::Socks => write!(f, ":socks")?,
+        }
+        write!(f, "/{}", self.protocol)?;
+        Ok(())
+    }
+}
+
 impl FromStr for Remote {
     type Err = Error;
 
@@ -111,9 +135,19 @@ impl FromStr for Remote {
                 protocol: proto,
             }),
             // Two elements: either "socks" and local port number, or remote host and port number.
+            ["stdio", "socks"] => Ok(Remote {
+                local_addr: LocalSpec::Stdio,
+                remote_addr: RemoteSpec::Socks,
+                protocol: proto,
+            }),
             [port, "socks"] => Ok(Remote {
                 local_addr: LocalSpec::Inet(("127.0.0.1".to_string(), port.parse()?)),
                 remote_addr: RemoteSpec::Socks,
+                protocol: proto,
+            }),
+            ["stdio", port] => Ok(Remote {
+                local_addr: LocalSpec::Stdio,
+                remote_addr: RemoteSpec::Inet(("127.0.0.1".to_string(), port.parse()?)),
                 protocol: proto,
             }),
             [host, port] => Ok(Remote {
@@ -154,7 +188,7 @@ impl FromStr for Remote {
 mod tests {
     use super::*;
 
-    /// Simply jpillora's test cases.
+    /// Simply jpillora's test cases and a few additions.
     #[test]
     fn test_parse_remote() {
         let tests: &[(&str, Remote)] = &[
@@ -228,6 +262,22 @@ mod tests {
                     local_addr: LocalSpec::Stdio,
                     remote_addr: RemoteSpec::Inet((String::from("google.com"), 80)),
                     protocol: Protocol::Tcp,
+                },
+            ),
+            (
+                "stdio:socks",
+                Remote {
+                    local_addr: LocalSpec::Stdio,
+                    remote_addr: RemoteSpec::Socks,
+                    protocol: Protocol::Tcp,
+                },
+            ),
+            (
+                "stdio:5353/udp",
+                Remote {
+                    local_addr: LocalSpec::Stdio,
+                    remote_addr: RemoteSpec::Inet((String::from("127.0.0.1"), 5353)),
+                    protocol: Protocol::Udp,
                 },
             ),
         ];
