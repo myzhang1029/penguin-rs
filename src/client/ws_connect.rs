@@ -57,22 +57,41 @@ impl ServerCertVerifier for TlsEmptyVerifier {
     }
 }
 
+/// Load system certificates
+#[cfg(feature = "rustls-native-roots")]
+fn get_system_certs() -> Result<RootCertStore, Error> {
+    let mut roots = RootCertStore::empty();
+    for cert in rustls_native_certs::load_native_certs()? {
+        roots.add(&rustls::Certificate(cert.0))?;
+    }
+    Ok(roots)
+}
+#[cfg(feature = "rustls-webpki-roots")]
+fn get_system_certs() -> Result<RootCertStore, Error> {
+    let mut roots = RootCertStore::empty();
+    roots.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
+        rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(
+            ta.subject,
+            ta.spki,
+            ta.name_constraints,
+        )
+    }));
+    Ok(roots)
+}
+
 /// Load system certificates or a custom CA store.
 fn generate_rustls_rootcertstore(custom_ca: &Option<String>) -> Result<RootCertStore, Error> {
-    let mut roots = RootCertStore::empty();
     // Whether to use a custom CA store.
     if let Some(ca) = custom_ca {
+        let mut roots = RootCertStore::empty();
         let mut reader = std::io::BufReader::new(std::fs::File::open(ca)?);
         for cert in rustls_pemfile::certs(&mut reader)? {
             roots.add(&rustls::Certificate(cert))?;
         }
+        Ok(roots)
     } else {
-        // TODO: support for webpki_roots
-        for cert in rustls_native_certs::load_native_certs()? {
-            roots.add(&rustls::Certificate(cert.0))?;
-        }
-    };
-    Ok(roots)
+        get_system_certs()
+    }
 }
 
 /// Load client certificate if provided.
@@ -193,6 +212,8 @@ pub async fn handshake(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rcgen::generate_simple_self_signed;
+    use tempfile::tempdir;
 
     #[test]
     fn test_sanitize_url() {
@@ -213,5 +234,22 @@ mod tests {
             "ws://example.com/"
         );
         assert!(sanitize_url("ftp://example.com").is_err());
+    }
+
+    #[test]
+    fn test_generate_rustls_rootcertstore() {
+        // No custom CA store
+        let sys_root = generate_rustls_rootcertstore(&None);
+        assert!(sys_root.is_ok());
+        assert!(!sys_root.unwrap().is_empty());
+        // Custom CA store
+        let tmpdir = tempdir().unwrap();
+        let ca_path = tmpdir.path().join("ca.pem");
+        let custom_ca = generate_simple_self_signed(vec!["example.com".into()]).unwrap();
+        std::fs::write(&ca_path, custom_ca.serialize_pem().unwrap()).unwrap();
+        let custom_root =
+            generate_rustls_rootcertstore(&Some(ca_path.to_str().unwrap().to_string()));
+        assert!(custom_root.is_ok());
+        assert_eq!(custom_root.unwrap().len(), 1);
     }
 }

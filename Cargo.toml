@@ -20,14 +20,26 @@ futures-util = { version = "0.3", default-features = false }
 http = "0.2"
 log = "0.4"
 rustls = "0.20"
-rustls-native-certs = "0.6"
+rustls-native-certs = { version = "0.6", optional = true }
 rustls-pemfile = "1"
 thiserror = "1"
 tokio = { version = "1", features = ["io-std", "macros", "rt-multi-thread"] }
 tokio-stream-multiplexor = "0.5"
-tokio-tungstenite = { version = "0.18", features = ["rustls-tls-native-roots"] }
-tungstenite = { version = "0.18", features = ["rustls-tls-native-roots"] }
+tokio-tungstenite = "0.18"
+tungstenite = "0.18"
 url = "2"
 warp-reverse-proxy = { version = "1", features = ["rustls-tls"], default-features = false }
 warp = { version = "0.3", features = ["tls"] }
 webpki = "0.22"
+webpki-roots = { version = "0.22", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+rcgen = "0.10"
+
+[features]
+default = ["rustls-native-roots"]
+# Note that it does not make sense to use rustls-webpki-roots and
+# rustls-native-roots at the same time, but there must be at least one. 
+rustls-webpki-roots = ["webpki-roots", "tokio-tungstenite/rustls-tls-webpki-roots", "tungstenite/rustls-tls-webpki-roots"]
+rustls-native-roots = ["rustls-native-certs", "tokio-tungstenite/rustls-tls-native-roots", "tungstenite/rustls-tls-native-roots"]

@@ -2,7 +2,7 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use futures_util::{Sink, Stream};
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -37,6 +37,7 @@ impl WebSocketMessage for ServerMessage {
 }
 
 /// A generic WebSocket connection
+#[derive(Debug)]
 pub struct WebSocket<Inner, Msg, Err>(Inner)
 where
     Err: std::error::Error + Sync + Send + 'static,
@@ -91,6 +92,18 @@ where
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl<Inner, Msg, Err> DerefMut for WebSocket<Inner, Msg, Err>
+where
+    Err: std::error::Error + Sync + Send + 'static,
+    Msg: WebSocketMessage + 'static,
+    Inner:
+        Stream<Item = Result<Msg, Err>> + Sink<Msg, Error = Err> + Unpin + Send + Sized + 'static,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
@@ -172,5 +185,16 @@ where
 
     fn deref(&self) -> &Self::Target {
         &self.mux
+    }
+}
+
+impl<I, M, E> DerefMut for Multiplexor<I, M, E>
+where
+    E: std::error::Error + Sync + Send + 'static,
+    M: WebSocketMessage + 'static,
+    I: Stream<Item = Result<M, E>> + Sink<M, Error = E> + Unpin + Send + Sized + 'static,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.mux
     }
 }
