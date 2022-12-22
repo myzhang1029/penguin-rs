@@ -1,5 +1,5 @@
 [package]
-name = "penguin-rs"
+name = "penguin"
 version = "0.1.0"
 authors = ["Zhang Maiyun <me@myzhangll.xyz>"]
 edition = "2021"
