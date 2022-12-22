@@ -1,10 +1,16 @@
 //! Penguin server WebSocket listener.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
+use super::mux::{ServerMultiplexor, ServerWebSocket};
 use crate::proto_version::PROTOCOL_VERSION;
-use futures_util::{FutureExt, StreamExt};
 use log::{debug, error, info};
-use warp::{Filter, Rejection, Reply};
+use warp::{ws::WebSocket, Filter, Rejection, Reply};
+
+/// Multiplex the WebSocket connection, create a SOCKS proxy over it,
+/// and handle the forwarding requests.
+async fn handle_websocket(websocket: WebSocket) {
+    let mux = ServerMultiplexor::new(ServerWebSocket::new(websocket));
+}
 
 /// Check the PSK and protocol version and upgrade to a websocket if the PSK matches (if required).
 pub fn ws_filter(
@@ -45,14 +51,6 @@ pub fn ws_filter(
         .map(|ws: warp::ws::Ws| {
             debug!("Upgrading to websocket");
             // And then our closure will be called when it completes
-            ws.on_upgrade(|websocket| {
-                // Just echo all messages back
-                let (tx, rx) = websocket.split();
-                rx.forward(tx).map(|result| {
-                    if let Err(e) = result {
-                        error!("websocket error: {:?}", e);
-                    }
-                })
-            })
+            ws.on_upgrade(handle_websocket)
         })
 }

@@ -15,7 +15,7 @@ use tokio::net::TcpStream;
 use tokio_tungstenite::{
     connect_async_tls_with_config, Connector, MaybeTlsStream, WebSocketStream,
 };
-use tungstenite::client::IntoClientRequest;
+use tungstenite::{client::IntoClientRequest, handshake::client::Request};
 use url::Url;
 
 /// Error type for WebSocket connection.
@@ -133,7 +133,7 @@ pub async fn handshake(
     let is_tls = url.scheme() == "wss";
 
     // Use a request to allow additional headers
-    let mut req: tungstenite::handshake::client::Request = url.into_client_request()?;
+    let mut req: Request = url.into_client_request()?;
     let req_headers = req.headers_mut();
     // Add protocol version
     req_headers.insert(

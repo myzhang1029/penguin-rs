@@ -1,6 +1,8 @@
 //! Client `remote` specification.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
+use std::str::FromStr;
+
 use thiserror::Error;
 
 #[derive(Debug, Clone, Hash, Ord, PartialOrd, Eq, PartialEq)]
@@ -44,7 +46,7 @@ pub enum Error {
     Port(#[from] std::num::ParseIntError),
 }
 
-impl std::str::FromStr for Protocol {
+impl FromStr for Protocol {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -86,7 +88,7 @@ fn tokenize_remote(s: &str) -> Result<Vec<&str>, Error> {
     }
 }
 
-impl std::str::FromStr for Remote {
+impl FromStr for Remote {
     type Err = Error;
 
     /// Parse a remote specification.
