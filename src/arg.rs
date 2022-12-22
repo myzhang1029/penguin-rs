@@ -79,7 +79,7 @@ pub struct ClientArgs {
     ///   to connect to an SSH server through the tunnel.
     pub(crate) remote: Vec<String>,
     /// An optional Pre-Shared Key for WebSocket upgrade to present
-    /// to the server in the HTTP header X-Penguin-Psk. If the server requires
+    /// to the server in the HTTP header X-Penguin-PSK. If the server requires
     /// this key but the client does not present the correct key, the upgrade
     /// to WebSocket silently fails.
     #[arg(long)]
@@ -114,10 +114,6 @@ pub struct ClientArgs {
     /// found in the server url).
     #[arg(long)]
     pub(crate) hostname: Option<String>,
-    /// Override the ServerName when using TLS (defaults to the
-    /// hostname).
-    #[arg(long)]
-    pub(crate) sni: Option<String>,
     /// An optional root certificate bundle used to verify the
     /// penguin server. Only valid when connecting to the server with
     /// "https" or "wss". By default, the operating system CAs will be used.
@@ -132,12 +128,12 @@ pub struct ClientArgs {
     pub(crate) tls_skip_verify: bool,
     /// A path to a PEM encoded private key used for client
     /// authentication (mutual-TLS).
-    #[arg(long)]
+    #[arg(long, requires = "tls_cert")]
     pub(crate) tls_key: Option<String>,
     /// A path to a PEM encoded certificate matching the provided
     /// private key. The certificate must have client authentication
-    ///enabled (mutual-TLS).
-    #[arg(long)]
+    /// enabled (mutual-TLS).
+    #[arg(long, requires = "tls_key")]
     pub(crate) tls_cert: Option<String>,
 }
 

@@ -12,10 +12,10 @@ pub fn ws_filter(
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     warp::ws()
         .and(warp::header::exact(
-            "Sec-WebSocket-Protocol",
+            "sec-websocket-protocol",
             PROTOCOL_VERSION,
         ))
-        .and(warp::header::optional::<String>("X-Penguin-PSK"))
+        .and(warp::header::optional::<String>("x-penguin-psk"))
         .and_then(move |ws: warp::ws::Ws, psk: Option<String>| {
             let predefined_ws_psk = predefined_ws_psk.clone();
             async move {

@@ -116,7 +116,7 @@ mod tests {
         assert_eq!(base_path, "");
         assert_eq!(uri.as_str(), "/foo/bar");
         assert_eq!(method, Method::POST);
-        assert_eq!(headers.get("Host").unwrap(), "proxy:8080");
+        assert_eq!(headers.get("host").unwrap(), "proxy:8080");
         assert_eq!(body, Bytes::from_static(b"Hello, world!"));
 
         let backend = None;
