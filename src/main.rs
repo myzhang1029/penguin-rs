@@ -3,6 +3,7 @@
 
 mod arg;
 mod client;
+mod mux;
 mod proto_version;
 mod server;
 

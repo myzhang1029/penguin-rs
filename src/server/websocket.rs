@@ -1,7 +1,7 @@
 //! Penguin server WebSocket listener.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use super::mux::{ServerMultiplexor, ServerWebSocket};
+use crate::mux::{Multiplexor, WebSocket as MuxWebSocket};
 use crate::proto_version::PROTOCOL_VERSION;
 use log::{debug, error, info};
 use warp::{ws::WebSocket, Filter, Rejection, Reply};
@@ -9,7 +9,7 @@ use warp::{ws::WebSocket, Filter, Rejection, Reply};
 /// Multiplex the WebSocket connection, create a SOCKS proxy over it,
 /// and handle the forwarding requests.
 async fn handle_websocket(websocket: WebSocket) {
-    let mux = ServerMultiplexor::new(ServerWebSocket::new(websocket));
+    let mux = Multiplexor::new(MuxWebSocket::new(websocket));
 }
 
 /// Check the PSK and protocol version and upgrade to a websocket if the PSK matches (if required).
