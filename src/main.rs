@@ -16,8 +16,8 @@ async fn main() {
     let cli_args = arg::PenguinCli::parse();
     trace!("Parsed: {:?}", cli_args);
 
-    match cli_args.subcommand {
+    std::process::exit(match cli_args.subcommand {
         arg::Commands::Client(args) => client::client_main(args).await,
         arg::Commands::Server(args) => server::server_main(args).await,
-    }
+    })
 }

@@ -31,14 +31,14 @@ pub enum Error {
     Tungstenite(#[from] tungstenite::error::Error),
     #[error("failed to parse URL")]
     UrlParse(#[from] url::ParseError),
-    #[error("incorrect scheme")]
-    IncorrectScheme,
+    #[error("incorrect scheme: {0}")]
+    IncorrectScheme(String),
     #[error("invalid header value or hostname")]
     InvalidHeaderValue(#[from] http::header::InvalidHeaderValue),
     #[error("invalid header name")]
     InvalidHeaderName(#[from] http::header::InvalidHeaderName),
-    #[error("invalid header")]
-    InvalidHeaderFormat,
+    #[error("invalid header: {0}")]
+    InvalidHeaderFormat(String),
 }
 
 pub struct TlsEmptyVerifier {}
@@ -118,8 +118,8 @@ fn sanitize_url(url: &str) -> Result<Url, Error> {
             url.set_scheme("ws").unwrap();
             url
         }
-        _ => {
-            return Err(Error::IncorrectScheme);
+        scheme => {
+            return Err(Error::IncorrectScheme(scheme.to_string()));
         }
     };
     Ok(url)
@@ -150,7 +150,9 @@ pub async fn handshake(
     }
     // Now add custom headers
     for header in &args.header {
-        let (name, value) = header.split_once(':').ok_or(Error::InvalidHeaderFormat)?;
+        let (name, value) = header
+            .split_once(':')
+            .ok_or(Error::InvalidHeaderFormat(header.to_string()))?;
         req_headers.insert(
             HeaderName::from_bytes(name.as_bytes())?,
             HeaderValue::from_str(value.trim())?,

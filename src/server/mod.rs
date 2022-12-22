@@ -10,7 +10,7 @@ use log::{debug, info};
 use warp::Filter;
 use websocket::ws_filter;
 
-pub async fn server_main(args: ServerArgs) {
+pub async fn server_main(args: ServerArgs) -> i32 {
     debug!("Server args: {:?}", args);
 
     let sockaddr = (
@@ -78,4 +78,5 @@ pub async fn server_main(args: ServerArgs) {
     } else {
         warp::serve(routes).run(sockaddr).await;
     }
+    0
 }

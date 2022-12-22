@@ -10,9 +10,15 @@ use log::debug;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_tungstenite::tungstenite::protocol::Message;
 
-pub async fn client_main(args: ClientArgs) {
+pub async fn client_main(args: ClientArgs) -> i32 {
     debug!("Client args: {:?}", args);
-    let ws_stream = ws_connect::handshake(&args).await.unwrap();
+    let ws_stream = match ws_connect::handshake(&args).await {
+        Ok(ws_stream) => ws_stream,
+        Err(e) => {
+            eprintln!("Failed to connect: {}", e);
+            return 1;
+        }
+    };
 
     let (stdin_tx, stdin_rx) = futures_channel::mpsc::unbounded();
     tokio::spawn(read_stdin(stdin_tx));
@@ -29,6 +35,7 @@ pub async fn client_main(args: ClientArgs) {
 
     pin_mut!(stdin_to_ws, ws_to_stdout);
     future::select(stdin_to_ws, ws_to_stdout).await;
+    0
 }
 
 // Our helper method which will read data from stdin and send it along the
