@@ -17,13 +17,13 @@ async fn handle_websocket(websocket: WebSocket) -> Result<(), super::Error> {
     for idx in 0..n_chan {
         let listener = mux.bind(idx + 2).await?;
         tokio::spawn(async move {
-            info!("Waiting for connection on channel {}", idx + 1);
             let mut chan = listener.accept().await.unwrap();
             // Just doing random stuff here to test the multiplexor
             info!("Got connection on channel {}", idx + 1);
             let content = chan.read_u16().await.unwrap();
             println!("Got content: {content}");
             chan.write_u16(content).await.unwrap();
+            chan.shutdown().await.unwrap();
         });
     }
     // TODO: await on the connections. Currently we just await the first one to close.
@@ -31,6 +31,7 @@ async fn handle_websocket(websocket: WebSocket) -> Result<(), super::Error> {
     loop {
         if let Err(err) = keepalive_chan.read_u16().await {
             info!("Keep alive channel closed: {err}");
+            keepalive_chan.shutdown().await?;
             break;
         }
     }

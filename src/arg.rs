@@ -77,6 +77,10 @@ pub struct ClientArgs {
     ///     ssh -o ProxyCommand='penguin client <server> stdio:%h:%p' \
     ///         user@example.com
     ///   to connect to an SSH server through the tunnel.
+    // The underlying port is a u16, which gives 0..=65535; 0 is not allowed,
+    // 1 is reserved for keep alive, so the range of available ports is
+    // 2..=65535, giving 65534 available remotes.
+    #[arg(num_args=1..65535)]
     pub(crate) remote: Vec<String>,
     /// An optional Pre-Shared Key for WebSocket upgrade to present
     /// to the server in the HTTP header X-Penguin-PSK. If the server requires

@@ -82,17 +82,12 @@ fn tokenize_remote(s: &str) -> Result<Vec<&str>, Error> {
                 return Err(Error::Format);
             }
             stuff = &stuff[end + 1..];
+        } else if let Some((token, rest)) = stuff.split_once(':') {
+            tokens.push(token);
+            stuff = rest;
         } else {
-            match stuff.split_once(':') {
-                Some((token, rest)) => {
-                    tokens.push(token);
-                    stuff = rest;
-                }
-                None => {
-                    tokens.push(stuff);
-                    return Ok(tokens);
-                }
-            };
+            tokens.push(stuff);
+            return Ok(tokens);
         }
     }
 }
@@ -100,11 +95,11 @@ fn tokenize_remote(s: &str) -> Result<Vec<&str>, Error> {
 impl Display for Remote {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.local_addr {
-            LocalSpec::Inet((host, port)) => write!(f, "{}:{}", host, port)?,
+            LocalSpec::Inet((host, port)) => write!(f, "{host}:{port}")?,
             LocalSpec::Stdio => write!(f, "stdio")?,
         }
         match &self.remote_addr {
-            RemoteSpec::Inet((host, port)) => write!(f, ":{}:{}", host, port)?,
+            RemoteSpec::Inet((host, port)) => write!(f, ":{host}:{port}")?,
             RemoteSpec::Socks => write!(f, ":socks")?,
         }
         write!(f, "/{}", self.protocol)?;

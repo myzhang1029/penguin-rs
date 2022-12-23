@@ -36,7 +36,7 @@ async fn main_real() -> Result<(), Error> {
 async fn main() {
     env_logger::init();
     if let Err(e) = main_real().await {
-        eprintln!("Error: {}", e);
+        eprintln!("Error: {e}");
         std::process::exit(1);
     }
 }

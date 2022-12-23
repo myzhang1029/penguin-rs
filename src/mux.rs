@@ -7,7 +7,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_stream_multiplexor::{StreamMultiplexor, StreamMultiplexorConfig};
-use tokio_tungstenite::tungstenite::protocol::Message as ClientMessage;
+use tungstenite::Message as ClientMessage;
 use warp::ws::Message as ServerMessage;
 
 /// Generic representation of a WebSocket message
@@ -36,7 +36,7 @@ impl WebSocketMessage for ServerMessage {
     }
 }
 
-/// std::error::Error + Sync + Send + 'static. Just for saving ink.
+/// `std::error::Error` + Sync + Send + 'static. Just for saving ink.
 pub trait AsyncIoError: std::error::Error + Unpin + Sync + Send + Sized + 'static {
     fn into_io_error(self) -> std::io::Error {
         // Takes ownership of self
@@ -134,7 +134,7 @@ where
                 let msg = Msg::from_data(data.to_vec());
                 Pin::new(&mut self.0)
                     .start_send(msg)
-                    .map_err(|e| e.into_io_error())?;
+                    .map_err(AsyncIoError::into_io_error)?;
                 Poll::Ready(Ok(data.len()))
             }
             Poll::Ready(Err(e)) => Poll::Ready(Err(e.into_io_error())),
@@ -145,7 +145,7 @@ where
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
         Pin::new(&mut self.get_mut().0)
             .poll_flush(cx)
-            .map_err(|e| e.into_io_error())
+            .map_err(AsyncIoError::into_io_error)
     }
 
     fn poll_shutdown(
@@ -154,7 +154,7 @@ where
     ) -> Poll<Result<(), std::io::Error>> {
         Pin::new(&mut self.get_mut().0)
             .poll_close(cx)
-            .map_err(|e| e.into_io_error())
+            .map_err(AsyncIoError::into_io_error)
     }
 }
 

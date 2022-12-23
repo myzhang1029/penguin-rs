@@ -61,7 +61,7 @@ fn check_proxy(
             let backend = backend.clone();
             async move {
                 if let Some(backend) = backend {
-                    Ok((backend, String::from("")))
+                    Ok((backend, String::new()))
                 } else {
                     // No backend configured
                     Err(warp::reject::not_found())

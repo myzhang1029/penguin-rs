@@ -8,7 +8,7 @@ use std::str::FromStr;
 
 use crate::arg::ClientArgs;
 use crate::mux::{Multiplexor, WebSocket};
-use log::{debug, info};
+use log::{debug, info, warn};
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -27,7 +27,17 @@ pub enum Error {
 }
 
 pub async fn client_main(args: ClientArgs) -> Result<(), Error> {
-    debug!("Client args: {:?}", args);
+    debug!("Client args: {args:?}");
+    // TODO: Temporary, remove when implemented
+    if args.proxy.is_some() {
+        warn!("Proxy not implemented yet");
+    }
+    if args.max_retry_count != 0 {
+        warn!("Max retry count not implemented yet");
+    }
+    if args.max_retry_interval != 300 {
+        warn!("Max retry interval not implemented yet");
+    }
     let mut ws_stream = WebSocket::new(ws_connect::handshake(&args).await?);
     // Allow one channel for each remote, plus one for keep alive
     let num_channels = args.remote.len();
@@ -47,6 +57,7 @@ pub async fn client_main(args: ClientArgs) -> Result<(), Error> {
             chan.write_u16(idx).await.unwrap();
             let content = chan.read_u16().await.unwrap();
             println!("Got content: {content}");
+            chan.shutdown().await.unwrap();
         });
     }
     // Keep alive channel

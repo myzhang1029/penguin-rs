@@ -1,6 +1,8 @@
 # Rusty Penguin
 A fast TCP/UDP tunnel, transported over HTTP WebSockets.
-Based on myzhang1029/penguin and rewritten in Rust.
+You are right. This project is inspired by jpillora/chisel (and subsequently
+my fork myzhang1029/penguin), but completely rewritten in Rust without any
+linkage to `chisel`.
 
 Compared to the original `penguin` or `chisel`, this project stripped away
 some functionalities:
@@ -15,6 +17,8 @@ some functionalities:
 
 - There is no reverse port forwarding because it is equivalent to spawning
   another server on the client side.
+
+- There is no support to acquire an ACME certificate on-the-fly.
 
 Other than that, this project offers these functionalities compared to
 `chisel`:

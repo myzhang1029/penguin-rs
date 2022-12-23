@@ -119,7 +119,7 @@ fn sanitize_url(url: &str) -> Result<Url, Error> {
     // Provide a default scheme if none is provided.
     let url = Url::parse(url).or_else(|e| {
         if e == url::ParseError::RelativeUrlWithoutBase {
-            Url::parse(&format!("{}{}", "http://", url))
+            Url::parse(&format!("http://{url}"))
         } else {
             Err(e)
         }
