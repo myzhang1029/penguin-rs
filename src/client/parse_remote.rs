@@ -44,6 +44,8 @@ pub enum Error {
     Host,
     #[error("Invalid port")]
     Port(#[from] std::num::ParseIntError),
+    #[error("socks remote must be TCP")]
+    UdpSocks,
 }
 
 impl Display for Protocol {
@@ -117,7 +119,7 @@ impl FromStr for Remote {
             None => (s, Protocol::Tcp),
         };
         let tokens = tokenize_remote(rest)?;
-        match tokens[..] {
+        let result = match tokens[..] {
             // One element: either "socks" or a port number.
             ["socks"] => Ok(Remote {
                 local_addr: LocalSpec::Inet(("127.0.0.1".to_string(), 1080)),
@@ -175,6 +177,18 @@ impl FromStr for Remote {
                 protocol: proto,
             }),
             _ => Err(Error::Format),
+        };
+        // I love Rust's pattern matching
+        // (this sentence is written by GitHub Copilot)
+        if let Ok(Remote {
+            remote_addr: RemoteSpec::Socks,
+            protocol: Protocol::Udp,
+            ..
+        }) = &result
+        {
+            Err(Error::UdpSocks)
+        } else {
+            result
         }
     }
 }

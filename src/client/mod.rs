@@ -1,6 +1,7 @@
 //! Penguin client.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
+mod handle_remote;
 mod parse_remote;
 mod ws_connect;
 
@@ -8,9 +9,12 @@ use std::str::FromStr;
 
 use crate::arg::ClientArgs;
 use crate::mux::{Multiplexor, WebSocket};
+use handle_remote::handle_remote;
 use log::{debug, info, warn};
+use parse_remote::Remote;
 use thiserror::Error;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
+use tokio::task::JoinSet;
 
 /// Errors
 #[derive(Debug, Error)]
@@ -46,19 +50,13 @@ pub async fn client_main(args: ClientArgs) -> Result<(), Error> {
     ws_stream.flush().await?;
     info!("Connected to server, asking for {} channels", num_channels);
     let mux = Multiplexor::new(ws_stream);
+    let mut jobs = JoinSet::new();
 
     // Leave the first channel for keep alive, regardless of whether keep alive is enabled
     for (idx, remote) in (2..).zip(args.remote.iter()) {
-        let remote = parse_remote::Remote::from_str(remote)?;
-        let mut chan = mux.connect(idx).await?;
-        // Just doing random stuff here to test the multiplexor
-        tokio::spawn(async move {
-            info!("Connected to remote {}", remote);
-            chan.write_u16(idx).await.unwrap();
-            let content = chan.read_u16().await.unwrap();
-            println!("Got content: {content}");
-            chan.shutdown().await.unwrap();
-        });
+        let remote = Remote::from_str(remote)?;
+        let stream = mux.connect(idx).await?;
+        jobs.spawn(handle_remote(remote, stream));
     }
     // Keep alive channel
     if args.keepalive != 0 {
