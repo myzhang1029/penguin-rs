@@ -48,12 +48,16 @@ impl<T> AsyncIoError for T where T: std::error::Error + Unpin + Sync + Send + 's
 
 /// A generic WebSocket connection
 #[derive(Debug)]
-pub struct WebSocket<Inner, Msg, Err>(Inner)
+pub struct WebSocket<Inner, Msg, Err>
 where
     Msg: WebSocketMessage,
     Err: AsyncIoError,
     Inner:
-        Stream<Item = Result<Msg, Err>> + Sink<Msg, Error = Err> + Unpin + Send + Sized + 'static;
+        Stream<Item = Result<Msg, Err>> + Sink<Msg, Error = Err> + Unpin + Send + Sized + 'static,
+{
+    inner: Inner,
+    buffer: Option<Vec<u8>>,
+}
 
 impl<Inner, Msg, Err> WebSocket<Inner, Msg, Err>
 where
@@ -64,7 +68,10 @@ where
 {
     /// Create a new `WebSocket` from a `WebSocketStream`
     pub fn new(ws: Inner) -> Self {
-        Self(ws)
+        Self {
+            inner: ws,
+            buffer: None,
+        }
     }
 }
 
@@ -80,14 +87,41 @@ where
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<Result<(), std::io::Error>> {
-        Pin::new(&mut self.0).poll_next(cx).map(|x| match x {
-            Some(Ok(message)) => {
-                buf.put_slice(&message.into_data());
-                Ok(())
+        /// Fill `buf` from `data` and save the remaining data back in `data`
+        fn fill_save_extra(buf: &mut ReadBuf<'_>, data: &mut Vec<u8>) {
+            let buf_remaining = buf.remaining();
+            if buf_remaining < data.len() {
+                let remaining_data = data.split_off(buf_remaining);
+                buf.put_slice(data);
+                *data = remaining_data;
+            } else {
+                buf.put_slice(data);
+                data.clear();
             }
-            Some(Err(e)) => Err(e.into_io_error()),
-            None => Ok(()),
-        })
+        }
+        if let Some(mut data) = self.buffer.take() {
+            // Fill `buf` from leftover data
+            fill_save_extra(buf, &mut data);
+            if !data.is_empty() {
+                // Save leftover data
+                self.buffer = Some(data);
+            }
+            Poll::Ready(Ok(()))
+        } else {
+            Pin::new(&mut self.inner).poll_next(cx).map(|x| match x {
+                Some(Ok(message)) => {
+                    let mut data = message.into_data();
+                    fill_save_extra(buf, &mut data);
+                    if !data.is_empty() {
+                        // Save leftover data
+                        self.buffer = Some(data);
+                    }
+                    Ok(())
+                }
+                Some(Err(e)) => Err(e.into_io_error()),
+                None => Ok(()),
+            })
+        }
     }
 }
 
@@ -101,7 +135,7 @@ where
     type Target = Inner;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.inner
     }
 }
 
@@ -113,7 +147,7 @@ where
         Stream<Item = Result<Msg, Err>> + Sink<Msg, Error = Err> + Unpin + Send + Sized + 'static,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+        &mut self.inner
     }
 }
 
@@ -129,10 +163,13 @@ where
         cx: &mut Context<'_>,
         data: &[u8],
     ) -> Poll<Result<usize, std::io::Error>> {
-        match Pin::new(&mut self.0).poll_ready(cx) {
+        match Pin::new(&mut self.inner).poll_ready(cx) {
             Poll::Ready(Ok(())) => {
+                // XXX: warp::ws::Message has a default max size of 64MB,
+                // so we can safely assume that no one will send a message
+                // larger than that. Prove me wrong.
                 let msg = Msg::from_data(data.to_vec());
-                Pin::new(&mut self.0)
+                Pin::new(&mut self.inner)
                     .start_send(msg)
                     .map_err(AsyncIoError::into_io_error)?;
                 Poll::Ready(Ok(data.len()))
@@ -143,7 +180,7 @@ where
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
-        Pin::new(&mut self.get_mut().0)
+        Pin::new(&mut self.get_mut().inner)
             .poll_flush(cx)
             .map_err(AsyncIoError::into_io_error)
     }
@@ -152,7 +189,7 @@ where
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Result<(), std::io::Error>> {
-        Pin::new(&mut self.get_mut().0)
+        Pin::new(&mut self.get_mut().inner)
             .poll_close(cx)
             .map_err(AsyncIoError::into_io_error)
     }
