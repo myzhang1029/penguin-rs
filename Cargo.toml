@@ -1,5 +1,5 @@
 [package]
-name = "penguin"
+name = "rusty-penguin"
 version = "0.1.0"
 authors = ["Zhang Maiyun <me@myzhangll.xyz>"]
 edition = "2021"
@@ -9,6 +9,10 @@ repository = "https://github.com/myzhang1029/penguin-rs"
 license = "Apache-2.0 OR GPL-3.0-or-later"
 keywords = ["cli", "web", "websocket"]
 categories = ["asynchronous", "command-line-utilities", "network-programming"]
+
+[[bin]]
+name = "penguin"
+path = "src/main.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
