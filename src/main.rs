@@ -4,19 +4,20 @@
 mod arg;
 mod client;
 mod mux;
+mod parse_remote;
 mod proto_version;
 mod server;
 
 use clap::Parser;
-use log::trace;
+use log::{error, trace};
 use thiserror::Error;
 
 /// Errors
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("{0}")]
+    #[error(transparent)]
     Client(#[from] client::Error),
-    #[error("{0}")]
+    #[error(transparent)]
     Server(#[from] server::Error),
 }
 
@@ -34,9 +35,10 @@ async fn main_real() -> Result<(), Error> {
 
 #[tokio::main]
 async fn main() {
-    env_logger::init();
+    //env_logger::init();
+    env_logger::builder().format_timestamp_nanos().init();
     if let Err(e) = main_real().await {
-        eprintln!("Error: {e}");
+        error!("Error: {e}");
         std::process::exit(1);
     }
 }

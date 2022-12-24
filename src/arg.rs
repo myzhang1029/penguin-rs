@@ -1,6 +1,7 @@
 //! Command line arguments parsing.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
+use crate::parse_remote::Remote;
 use clap::{arg, command, Args, Parser, Subcommand};
 
 #[derive(Parser, Debug)]
@@ -74,14 +75,14 @@ pub struct ClientArgs {
     ///   When stdio is used as local-host, the tunnel will connect standard
     ///   input/output of this program with the remote. This is useful when
     ///   combined with ssh ProxyCommand. You can use
-    ///     ssh -o ProxyCommand='penguin client <server> stdio:%h:%p' \
+    ///     ssh -o ProxyCommand='penguin client <server> stdio:%h:%p'
     ///         user@example.com
     ///   to connect to an SSH server through the tunnel.
     // The underlying port is a u16, which gives 0..=65535; 0 is not allowed,
-    // 1 is reserved for keep alive, so the range of available ports is
-    // 2..=65535, giving 65534 available remotes.
+    // 1 is the control channel, so the range of available ports is 2..=65535,
+    // giving 65534 available remotes.
     #[arg(num_args=1..65535)]
-    pub(crate) remote: Vec<String>,
+    pub(crate) remote: Vec<Remote>,
     /// An optional Pre-Shared Key for WebSocket upgrade to present
     /// to the server in the HTTP header X-Penguin-PSK. If the server requires
     /// this key but the client does not present the correct key, the upgrade

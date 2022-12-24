@@ -1,10 +1,11 @@
 //! Run a remote connection.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use super::parse_remote::Remote;
-use super::parse_remote::{LocalSpec, Protocol, RemoteSpec};
+use crate::mux::pipe_streams;
+use crate::parse_remote::Remote;
+use crate::parse_remote::{LocalSpec, Protocol, RemoteSpec};
 use async_socks5::SocksListener;
-use log::info;
+use log::{debug, info};
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -15,9 +16,9 @@ use tokio_stream_multiplexor::DuplexStream;
 pub enum Error {
     #[error("socks5 proxy failed: {0}")]
     Socks(#[from] async_socks5::Error),
-    #[error("{0}")]
+    #[error(transparent)]
     Io(#[from] std::io::Error),
-    #[error("{0}")]
+    #[error(transparent)]
     Task(#[from] tokio::task::JoinError),
 }
 
@@ -27,9 +28,11 @@ pub async fn handle_remote(remote: Remote, stream: DuplexStream) -> Result<(), E
     // I could have used a giant match here, but I think this is more readable.
     if remote.remote_addr == RemoteSpec::Socks {
         assert!(remote.protocol == Protocol::Tcp, "should be unreachable");
+        debug!("Forwarding local to the internal socks5 proxy");
         // Simple case: we want to forward to our socks5 proxy.
-        match remote.local_addr {
-            LocalSpec::Inet((lhost, lport)) => connect_tcp(stream, lhost, lport).await,
+        match &remote.local_addr {
+            // TODO: allow multiple connections
+            LocalSpec::Inet((lhost, lport)) => connect_tcp(stream, lhost, *lport).await,
             LocalSpec::Stdio => connect_stdio(stream).await,
         }
     } else if remote.protocol == Protocol::Tcp {
@@ -42,8 +45,8 @@ pub async fn handle_remote(remote: Remote, stream: DuplexStream) -> Result<(), E
             .await?
             .accept()
             .await?;
-        match remote.local_addr {
-            LocalSpec::Inet((lhost, lport)) => connect_tcp(socksified, lhost, lport).await,
+        match &remote.local_addr {
+            LocalSpec::Inet((lhost, lport)) => connect_tcp(socksified, lhost, *lport).await,
             LocalSpec::Stdio => connect_stdio(socksified).await,
         }
     } else {
@@ -52,14 +55,18 @@ pub async fn handle_remote(remote: Remote, stream: DuplexStream) -> Result<(), E
 }
 
 /// Connect a stream to a local TCP socket.
-async fn connect_tcp<Stream>(mut stream: Stream, host: String, port: u16) -> Result<(), Error>
+async fn connect_tcp<Stream>(stream: Stream, host: &str, port: u16) -> Result<(), Error>
 where
     Stream: AsyncReadExt + AsyncWriteExt + Unpin + Send + 'static,
 {
     let tcp_listener = TcpListener::bind((host, port)).await?;
+    let (mut rx, mut tx) = tokio::io::split(stream);
     loop {
-        let (mut tcp_stream, _) = tcp_listener.accept().await?;
-        tokio::io::copy_bidirectional(&mut tcp_stream, &mut stream).await?;
+        debug!("Waiting for connection on port {port}");
+        let (tcp_stream, _) = tcp_listener.accept().await?;
+        let (mut tcp_rx, mut tcp_tx) = tokio::io::split(tcp_stream);
+        pipe_streams(&mut rx, &mut tx, &mut tcp_rx, &mut tcp_tx).await?;
+        debug!("SOCKS connection closed");
     }
 }
 
@@ -68,8 +75,6 @@ async fn connect_stdio(stream: DuplexStream) -> Result<(), Error> {
     let (mut rx, mut tx) = tokio::io::split(stream);
     let mut stdin = tokio::io::stdin();
     let mut stdout = tokio::io::stdout();
-    let send_task = tokio::spawn(async move { tokio::io::copy(&mut rx, &mut stdout).await });
-    tokio::io::copy(&mut stdin, &mut tx).await?;
-    send_task.await??;
+    pipe_streams(&mut rx, &mut tx, &mut stdin, &mut stdout).await?;
     Ok(())
 }

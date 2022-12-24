@@ -1,6 +1,7 @@
 //! Client `remote` specification.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
+use log::trace;
 use std::{fmt::Display, str::FromStr};
 
 use thiserror::Error;
@@ -106,6 +107,25 @@ impl Display for Remote {
         }
         write!(f, "/{}", self.protocol)?;
         Ok(())
+    }
+}
+
+impl clap::builder::TypedValueParser for Remote {
+    type Value = Self;
+
+    /// Parse a remote specification for clap.
+    fn parse_ref(
+        &self,
+        _cmd: &clap::Command,
+        _arg: Option<&clap::Arg>,
+        value: &std::ffi::OsStr,
+    ) -> Result<Self, clap::error::Error> {
+        trace!("Parsing remote {:?}", value);
+        let string_value = value
+            .to_str()
+            .ok_or_else(|| clap::Error::new(clap::error::ErrorKind::InvalidUtf8))?;
+        Self::from_str(string_value)
+            .map_err(|_err| clap::Error::new(clap::error::ErrorKind::ValueValidation))
     }
 }
 

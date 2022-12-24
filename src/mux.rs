@@ -1,12 +1,15 @@
 //! Client- and server-side connection multiplexing and processing
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use futures_util::{Sink, Stream};
+use futures_util::{pin_mut, FutureExt, Sink, Stream};
+use log::{debug, trace};
+use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio_stream_multiplexor::{StreamMultiplexor, StreamMultiplexorConfig};
+use thiserror::Error;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
+use tokio_stream_multiplexor::{DuplexStream, StreamMultiplexor, StreamMultiplexorConfig};
 use tungstenite::Message as ClientMessage;
 use warp::ws::Message as ServerMessage;
 
@@ -47,7 +50,7 @@ pub trait AsyncIoError: std::error::Error + Unpin + Sync + Send + Sized + 'stati
 impl<T> AsyncIoError for T where T: std::error::Error + Unpin + Sync + Send + 'static {}
 
 /// A generic WebSocket connection
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct WebSocket<Inner, Msg, Err>
 where
     Msg: WebSocketMessage,
@@ -195,7 +198,31 @@ where
     }
 }
 
-/// The actual multiplexor
+/// Multiplexor error
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("no available ports")]
+    NoAvailablePorts,
+    #[error("control channel not established")]
+    ControlChannelNotEstablished,
+    #[error("server not in sync")]
+    ServerNotInSync,
+}
+/// Multiplexor role
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    /// Client role
+    Client,
+    /// Server role
+    Server,
+}
+
+/// The actual multiplexor, which is a wrapper around a `StreamMultiplexor`
+/// and a `WebSocket` instance.
+/// When we need a new channel, both ends synchronize on the `ctrl_chan`
+/// channel.
 #[derive(Debug)]
 pub struct Multiplexor<I, M, E>
 where
@@ -203,7 +230,15 @@ where
     M: WebSocketMessage,
     I: Stream<Item = Result<M, E>> + Sink<M, Error = E> + Unpin + Send + Sized + 'static,
 {
+    /// The underlying `StreamMultiplexor`
     mux: StreamMultiplexor<WebSocket<I, M, E>>,
+    /// The role of this multiplexor
+    role: Role,
+    /// The control channel
+    pub ctrl_chan: Option<DuplexStream>,
+    /// The set of ports that are currently in use. Only used by the client though.
+    /// TODO: remove port from this set when the channel is closed
+    used_ports: HashSet<u16>,
 }
 
 impl<I, M, E> Multiplexor<I, M, E>
@@ -213,10 +248,108 @@ where
     I: Stream<Item = Result<M, E>> + Sink<M, Error = E> + Unpin + Send + Sized + 'static,
 {
     /// Create a new `ClientMultiplexor` from a `ClientWebSocket`
-    pub fn new(s: WebSocket<I, M, E>) -> Self {
+    pub fn new(s: WebSocket<I, M, E>, role: Role) -> Self {
         let config = StreamMultiplexorConfig::default();
         let mux = StreamMultiplexor::new(s, config);
-        Self { mux }
+        Self {
+            mux,
+            role,
+            ctrl_chan: None,
+            used_ports: HashSet::new(),
+        }
+    }
+
+    /// Establish the new control channel
+    pub async fn establish_control_channel(&mut self) -> std::io::Result<()> {
+        let ctrl_chan = match self.role {
+            Role::Client => self.mux.connect(1).await?,
+            Role::Server => self.mux.bind(1).await?.accept().await?,
+        };
+        self.ctrl_chan = Some(ctrl_chan);
+        Ok(())
+    }
+
+    /// Attempt to claim the next usable port
+    fn claim_next_usable_port(&mut self) -> Option<u16> {
+        let mut port = 2;
+        loop {
+            while self.used_ports.contains(&port) {
+                port += 1;
+                if port == u16::MAX {
+                    return None;
+                }
+            }
+            // crude synchronization
+            if self.used_ports.insert(port) {
+                return Some(port);
+            }
+        }
+    }
+
+    /// Ask to open a new channel on the client side,
+    /// or accept a new channel on the server side.
+    /// Note that on the server side, this server will block until
+    /// a new channel is requested.
+    pub async fn open_channel(&mut self) -> Result<DuplexStream, Error> {
+        let port = self
+            .claim_next_usable_port()
+            .ok_or(Error::NoAvailablePorts)?;
+        // TODO: mutex on ctrl_chan and concurrent access
+        let ctrl_chan = self
+            .ctrl_chan
+            .as_mut()
+            .ok_or(Error::ControlChannelNotEstablished)?;
+        match self.role {
+            Role::Client => {
+                debug!("Requesting channel on port {port}");
+                ctrl_chan.write_u16(port).await?;
+                // Sync with the server: wait for it to tell us to connect
+                if ctrl_chan.read_u16().await? != port {
+                    return Err(Error::ServerNotInSync);
+                }
+                trace!("Server is in sync, connecting to port {port}");
+                // A psuedo sleep for the server to accept()
+                tokio::task::yield_now().await;
+                Ok(self.mux.connect(port).await?)
+            }
+            Role::Server => {
+                loop {
+                    let port = ctrl_chan.read_u16().await?;
+                    if port == 0 {
+                        // Ping
+                        ctrl_chan.write_u16(0).await?;
+                    } else {
+                        let listener = self.mux.bind(port).await?;
+                        debug!("Listening on port {port}");
+                        // Tell the client that we are ready and they can connect to this port
+                        ctrl_chan.write_u16(port).await?;
+                        break Ok(listener.accept().await?);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Ping the other side
+    pub async fn ping(&mut self) -> Result<(), Error> {
+        let ctrl_chan = self
+            .ctrl_chan
+            .as_mut()
+            .ok_or(Error::ControlChannelNotEstablished)?;
+        if self.role == Role::Client {
+            ctrl_chan.write_u16(0).await?;
+            ctrl_chan.read_u16().await?;
+        }
+        // Nothing to do on the server side
+        Ok(())
+    }
+
+    /// Close the multiplexor
+    pub async fn shutdown(&mut self) -> std::io::Result<()> {
+        if let Some(mut ctrl_chan) = self.ctrl_chan.take() {
+            ctrl_chan.shutdown().await?;
+        }
+        Ok(())
     }
 }
 
@@ -241,5 +374,28 @@ where
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.mux
+    }
+}
+
+pub async fn pipe_streams<R1, W1, R2, W2>(
+    mut reader1: R1,
+    mut writer1: W1,
+    mut reader2: R2,
+    mut writer2: W2,
+) -> std::io::Result<u64>
+where
+    R1: AsyncRead + Unpin,
+    W1: AsyncWrite + Unpin,
+    R2: AsyncRead + Unpin,
+    W2: AsyncWrite + Unpin,
+{
+    let pipe1 = tokio::io::copy(&mut reader1, &mut writer2).fuse();
+    let pipe2 = tokio::io::copy(&mut reader2, &mut writer1).fuse();
+
+    pin_mut!(pipe1, pipe2);
+
+    tokio::select! {
+        res = pipe1 => res,
+        res = pipe2 => res
     }
 }

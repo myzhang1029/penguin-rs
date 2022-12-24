@@ -7,7 +7,7 @@ mod websocket;
 
 use crate::arg::ServerArgs;
 use backend_proxy::check_pass_proxy;
-use log::{debug, info};
+use log::trace;
 use thiserror::Error;
 use warp::Filter;
 use websocket::ws_filter;
@@ -20,11 +20,11 @@ pub enum Error {
     InvalidHost(#[from] std::net::AddrParseError),
     /// IO error
     #[error("IO error: {0}")]
-    IO(#[from] std::io::Error),
+    Io(#[from] std::io::Error),
 }
 
 pub async fn server_main(args: ServerArgs) -> Result<(), Error> {
-    debug!("Server args: {:?}", args);
+    trace!("Server args: {:?}", args);
 
     let sockaddr = (args.host.parse::<std::net::IpAddr>()?, args.port);
 
@@ -39,6 +39,7 @@ pub async fn server_main(args: ServerArgs) -> Result<(), Error> {
         .and(warp::path::end())
         .and_then(move || async move {
             if args.obfs {
+                trace!("Rejecting health check because obfuscating");
                 Err(warp::reject::not_found())
             } else {
                 Ok("OK")
@@ -49,6 +50,7 @@ pub async fn server_main(args: ServerArgs) -> Result<(), Error> {
         .and(warp::path::end())
         .and_then(move || async move {
             if args.obfs {
+                trace!("Rejecting version check because obfuscating");
                 Err(warp::reject::not_found())
             } else {
                 Ok(env!("CARGO_PKG_VERSION"))
@@ -69,7 +71,7 @@ pub async fn server_main(args: ServerArgs) -> Result<(), Error> {
     let routes = ws_upgrader.or(health).or(version).or(backend).or(not_found);
 
     if let Some(tls_key) = args.tls_key {
-        info!("Enabling TLS");
+        trace!("Enabling TLS");
         let tls_server = warp::serve(routes)
             .tls()
             // clap should ensure that cert and key are both present
@@ -77,6 +79,7 @@ pub async fn server_main(args: ServerArgs) -> Result<(), Error> {
             .key_path(tls_key);
         // If a client CA is provided, enable client auth
         if let Some(client_tls_ca) = args.tls_ca {
+            trace!("Enabling client auth");
             tls_server.client_auth_optional_path(client_tls_ca)
         } else {
             tls_server
