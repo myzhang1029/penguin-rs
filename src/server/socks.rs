@@ -1,14 +1,13 @@
 //! SOCKS 5 server.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use crate::mux::pipe_streams;
+use crate::mux::{pipe_streams, DuplexStream};
 use log::{debug, trace};
 use socksv5::v5::SocksV5Host;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio_stream_multiplexor::DuplexStream;
 
 const SOCKS5_HOST_UNKNOWN: SocksV5Host = SocksV5Host::Ipv4([0, 0, 0, 0]);
 

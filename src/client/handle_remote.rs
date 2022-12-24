@@ -1,7 +1,7 @@
 //! Run a remote connection.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use crate::mux::pipe_streams;
+use crate::mux::{pipe_streams, DuplexStream};
 use crate::parse_remote::Remote;
 use crate::parse_remote::{LocalSpec, Protocol, RemoteSpec};
 use async_socks5::SocksListener;
@@ -10,7 +10,6 @@ use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
-use tokio_stream_multiplexor::DuplexStream;
 
 use super::Command;
 

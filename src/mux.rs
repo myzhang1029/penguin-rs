@@ -3,13 +3,14 @@
 
 use futures_util::{pin_mut, FutureExt, Sink, Stream};
 use log::{debug, error, trace};
+pub use penguin_tokio_stream_multiplexor::DuplexStream;
+use penguin_tokio_stream_multiplexor::{StreamMultiplexor, StreamMultiplexorConfig};
 use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
-use tokio_stream_multiplexor::{DuplexStream, StreamMultiplexor, StreamMultiplexorConfig};
 use tungstenite::Message as ClientMessage;
 use warp::ws::Message as ServerMessage;
 

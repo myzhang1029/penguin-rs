@@ -1,3 +1,8 @@
+# This is not a workspace because I don't want to have to
+# upload my own `tokio-stream-multiplexor` fork to crates.io.
+# Note that we need to delete lib/tokio-stream-multiplexor/Cargo.toml
+# before publishing.
+
 [package]
 name = "rusty-penguin"
 version = "0.1.0"
@@ -14,7 +19,9 @@ categories = ["asynchronous", "command-line-utilities", "network-programming"]
 name = "penguin"
 path = "src/main.rs"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+name = "penguin_tokio_stream_multiplexor"
+path = "lib/tokio-stream-multiplexor/src/lib.rs"
 
 [dependencies]
 async-socks5 = "0.5"
@@ -29,7 +36,6 @@ rustls-pemfile = "1"
 socksv5 = { version = "0.3", features = ["tokio"], default-features = false }
 thiserror = "1"
 tokio = { version = "1", features = ["io-std", "macros", "rt-multi-thread"] }
-tokio-stream-multiplexor = "0.5"
 tokio-tungstenite = "0.18"
 tungstenite = "0.18"
 url = "2"
@@ -38,9 +44,26 @@ warp = { version = "0.3", features = ["tls"] }
 webpki = "0.22"
 webpki-roots = { version = "0.22", optional = true }
 
+# From tokio-stream-multiplexor
+async-channel = "1"
+bincode = "1"
+bytes = { version = "1", features = ["serde"] }
+futures = "0.3"
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+tracing = "0.1"
+
 [dev-dependencies]
 tempfile = "3"
 rcgen = "0.10"
+
+# From tokio-stream-multiplexor
+criterion = { version = "0.3", features = ["async_tokio"] }
+ctor = "0.1"
+tokio = { version = "1", features = ["io-util", "io-std", "rt", "net", "macros", "time", "rt-multi-thread"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+version-sync = "0.9"
 
 [features]
 default = ["rustls-native-roots"]

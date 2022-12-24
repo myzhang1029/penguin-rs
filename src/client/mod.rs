@@ -5,7 +5,7 @@ mod handle_remote;
 mod ws_connect;
 
 use crate::arg::ClientArgs;
-use crate::mux::{Multiplexor, Role, WebSocket};
+use crate::mux::{DuplexStream, Multiplexor, Role, WebSocket};
 use futures_util::pin_mut;
 use handle_remote::handle_remote;
 use log::{info, trace, warn};
@@ -13,7 +13,6 @@ use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
 use tokio::time;
-use tokio_stream_multiplexor::DuplexStream;
 
 /// Errors
 #[derive(Debug, Error)]
