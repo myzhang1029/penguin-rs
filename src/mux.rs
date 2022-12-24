@@ -2,7 +2,6 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use futures_util::{pin_mut, FutureExt, Sink, Stream};
-use log::{debug, error, trace};
 pub use penguin_tokio_stream_multiplexor::DuplexStream;
 use penguin_tokio_stream_multiplexor::{StreamMultiplexor, StreamMultiplexorConfig};
 use std::collections::HashSet;
@@ -11,6 +10,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
+use tracing::{debug, error};
 use tungstenite::Message as ClientMessage;
 use warp::ws::Message as ServerMessage;
 
@@ -301,12 +301,12 @@ where
     }
 
     /// Ask server to open a new channel
+    #[tracing::instrument(skip(self), level = "debug")]
     async fn client_side_open_channel(&mut self) -> Result<(DuplexStream, u16), Error> {
         let ctrl_chan = self
             .ctrl_chan
             .as_mut()
             .ok_or(Error::ControlChannelNotEstablished)?;
-        trace!("Requesting channel");
         ctrl_chan.write_u16(1).await?;
         // Sync with the server: wait for it to tell us to connect
         let port = ctrl_chan.read_u16().await?;
@@ -321,12 +321,24 @@ where
         }
     }
 
-    /// Server side: indicate that a port has been closed
-    pub fn close_channel(&mut self, port: u16) {
-        self.used_ports.remove(&port);
+    /// Server side: indicate that a port has been closed.
+    ///
+    /// # Panics
+    /// Panics if called on the client side.
+    #[tracing::instrument(skip(self), level = "debug")]
+    pub async fn close_channel(&mut self, port: u16) {
+        if self.role == Role::Client {
+            panic!("close_channel() should only be called on the server side");
+        } else {
+            self.used_ports.remove(&port);
+            unsafe {
+                self.mux.close_bound_port(port).await;
+            }
+        }
     }
 
     /// Offer a new channel to the client
+    #[tracing::instrument(skip(self), level = "debug")]
     async fn server_side_open_channel(&mut self) -> Result<(DuplexStream, u16), Error> {
         let ctrl_chan = self
             .ctrl_chan
@@ -363,6 +375,7 @@ where
     }
 
     /// Ping the other side
+    #[tracing::instrument(skip(self), level = "trace")]
     pub async fn ping(&mut self) -> Result<(), Error> {
         let ctrl_chan = self
             .ctrl_chan
@@ -377,6 +390,7 @@ where
     }
 
     /// Close the multiplexor
+    #[tracing::instrument(skip(self))]
     pub async fn shutdown(&mut self) -> std::io::Result<()> {
         if let Some(mut ctrl_chan) = self.ctrl_chan.take() {
             ctrl_chan.shutdown().await?;
@@ -409,6 +423,7 @@ where
     }
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn pipe_streams<R1, W1, R2, W2>(
     mut reader1: R1,
     mut writer1: W1,

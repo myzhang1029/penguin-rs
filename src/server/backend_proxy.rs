@@ -1,7 +1,7 @@
 //! Penguin server backend proxy.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use log::debug;
+use tracing::debug;
 use warp::filters::path::FullPath;
 use warp::http::HeaderMap;
 use warp::hyper::body::Bytes;
@@ -11,6 +11,7 @@ use warp_reverse_proxy::{
 };
 
 /// Add a correct `Host` header to the proxied request.
+#[tracing::instrument(skip(body))]
 async fn add_host_header(
     proxy_address: String,
     base_path: String,

@@ -3,7 +3,6 @@
 
 [![Build Releases](https://github.com/myzhang1029/penguin-rs/actions/workflows/releases.yml/badge.svg)](https://github.com/myzhang1029/penguin-rs/actions/workflows/releases.yml)
 [![Crates.io](https://img.shields.io/crates/v/rusty-penguin.svg)](https://crates.io/crates/rusty-penguin)
-[![Docs.rs](https://docs.rs/rusty-penguin/badge.svg)](https://docs.rs/rusty-penguin)
 ![License](https://img.shields.io/crates/l/rusty-penguin.svg)
 
 A fast TCP/UDP tunnel, transported over HTTP WebSockets.

@@ -29,7 +29,6 @@ clap = { version = "4", features = ["cargo", "derive"] }
 env_logger = "0.10"
 futures-util = { version = "0.3", default-features = false }
 http = "0.2"
-log = "0.4"
 rustls = "0.20"
 rustls-native-certs = { version = "0.6", optional = true }
 rustls-pemfile = "1"
@@ -37,6 +36,7 @@ socksv5 = { version = "0.3", features = ["tokio"], default-features = false }
 thiserror = "1"
 tokio = { version = "1", features = ["io-std", "macros", "rt-multi-thread"] }
 tokio-tungstenite = "0.18"
+tracing = "0.1"
 tungstenite = "0.18"
 url = "2"
 warp-reverse-proxy = { version = "1", features = ["rustls-tls"], default-features = false }
@@ -52,7 +52,6 @@ futures = "0.3"
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 tokio-util = { version = "0.7", features = ["codec"] }
-tracing = "0.1"
 
 [dev-dependencies]
 tempfile = "3"

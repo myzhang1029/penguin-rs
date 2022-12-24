@@ -1330,7 +1330,6 @@ dependencies = [
  "futures",
  "futures-util",
  "http",
- "log",
  "rand",
  "rcgen",
  "rustls",

@@ -5,11 +5,11 @@ use crate::mux::{pipe_streams, DuplexStream};
 use crate::parse_remote::Remote;
 use crate::parse_remote::{LocalSpec, Protocol, RemoteSpec};
 use async_socks5::SocksListener;
-use log::{debug, info};
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
+use tracing::{debug, info};
 
 use super::Command;
 
@@ -29,6 +29,7 @@ pub enum Error {
 }
 
 /// Construct a remote based on the description.
+#[tracing::instrument(skip(command_tx))]
 pub async fn handle_remote(remote: Remote, command_tx: mpsc::Sender<Command>) -> Result<(), Error> {
     debug!("Opening remote {remote}");
     match remote.local_addr {
@@ -65,6 +66,7 @@ pub async fn handle_remote(remote: Remote, command_tx: mpsc::Sender<Command>) ->
 }
 
 /// Handle a connection.
+#[tracing::instrument(skip(stream, local_rx, local_tx))]
 async fn handle_connection<R, T>(
     stream: DuplexStream,
     rspec: RemoteSpec,

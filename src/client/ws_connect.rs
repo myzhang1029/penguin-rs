@@ -3,7 +3,6 @@
 
 use crate::proto_version::PROTOCOL_VERSION;
 use http::header::{HeaderName, HeaderValue};
-use log::debug;
 use rustls::{
     client::{ServerCertVerified, ServerCertVerifier},
     ClientConfig, RootCertStore,
@@ -14,6 +13,7 @@ use tokio::net::TcpStream;
 use tokio_tungstenite::{
     connect_async_tls_with_config, Connector, MaybeTlsStream, WebSocketStream,
 };
+use tracing::debug;
 use tungstenite::{client::IntoClientRequest, handshake::client::Request};
 use url::Url;
 
@@ -144,6 +144,7 @@ fn sanitize_url(url: &str) -> Result<Url, Error> {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(level = "debug", skip(extra_headers))]
 pub async fn handshake(
     server_url: &str,
     ws_psk: Option<&str>,

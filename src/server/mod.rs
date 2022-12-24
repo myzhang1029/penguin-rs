@@ -7,8 +7,8 @@ mod websocket;
 
 use crate::arg::ServerArgs;
 use backend_proxy::check_pass_proxy;
-use log::trace;
 use thiserror::Error;
+use tracing::trace;
 use warp::Filter;
 use websocket::ws_filter;
 
@@ -23,9 +23,8 @@ pub enum Error {
     Io(#[from] std::io::Error),
 }
 
+#[tracing::instrument]
 pub async fn server_main(args: ServerArgs) -> Result<(), Error> {
-    trace!("Server args: {:?}", args);
-
     let sockaddr = (args.host.parse::<std::net::IpAddr>()?, args.port);
 
     // Upgrade to a websocket if the path is `/ws` and the PSK matches

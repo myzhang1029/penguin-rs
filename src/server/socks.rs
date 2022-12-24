@@ -2,12 +2,12 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use crate::mux::{pipe_streams, DuplexStream};
-use log::{debug, trace};
 use socksv5::v5::SocksV5Host;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tracing::{debug, trace};
 
 const SOCKS5_HOST_UNKNOWN: SocksV5Host = SocksV5Host::Ipv4([0, 0, 0, 0]);
 
@@ -38,6 +38,7 @@ pub enum Error {
 
 /// Start a SOCKS server on the given listener.
 /// Should be the entry point for a new task.
+#[tracing::instrument(skip(chan), level = "debug")]
 pub async fn start_socks_server_on_channel(chan: DuplexStream, port: u16) -> Result<u16, Error> {
     debug!("SOCKS connection accepted");
     let (mut reader1, mut writer1) = tokio::io::split(chan);
@@ -51,6 +52,7 @@ pub async fn start_socks_server_on_channel(chan: DuplexStream, port: u16) -> Res
 
 /// Perform the SOCKS handshake.
 /// Based on socksv5's example.
+#[tracing::instrument(skip(reader, writer), level = "trace")]
 async fn handshake<R, W>(mut reader: R, mut writer: W) -> Result<TcpStream, Error>
 where
     R: AsyncRead + Unpin,

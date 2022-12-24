@@ -9,8 +9,8 @@ mod proto_version;
 mod server;
 
 use clap::Parser;
-use log::{error, trace};
 use thiserror::Error;
+use tracing::{error, trace};
 
 /// Errors
 #[derive(Debug, Error)]
@@ -22,6 +22,7 @@ pub enum Error {
 }
 
 /// Real entry point
+#[tracing::instrument]
 async fn main_real() -> Result<(), Error> {
     let cli_args = arg::PenguinCli::parse();
     trace!("Parsed: {:?}", cli_args);
@@ -34,6 +35,7 @@ async fn main_real() -> Result<(), Error> {
 }
 
 #[tokio::main]
+#[tracing::instrument]
 async fn main() {
     //env_logger::init();
     env_logger::builder().format_timestamp_nanos().init();

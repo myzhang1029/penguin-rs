@@ -4,12 +4,13 @@
 use super::socks::start_socks_server_on_channel;
 use crate::mux::{Multiplexor, Role, WebSocket as MuxWebSocket};
 use crate::proto_version::PROTOCOL_VERSION;
-use log::{debug, error, info};
 use tokio::task::JoinSet;
+use tracing::{debug, error, info, warn};
 use warp::{ws::WebSocket, Filter, Rejection, Reply};
 
 /// Multiplex the WebSocket connection, create a SOCKS proxy over it,
 /// and handle the forwarding requests.
+#[tracing::instrument(skip(websocket))]
 async fn handle_websocket(websocket: WebSocket) -> Result<(), super::Error> {
     let mws = MuxWebSocket::new(websocket);
     let mut mux = Multiplexor::new(mws, Role::Server);
@@ -25,7 +26,7 @@ async fn handle_websocket(websocket: WebSocket) -> Result<(), super::Error> {
                 jobs.spawn(start_socks_server_on_channel(chan, port));
             }
             Err(err) => {
-                info!("Client disconnected: {err}");
+                warn!("Client disconnected: {err}");
                 mux.shutdown().await?;
                 break;
             }
@@ -37,9 +38,7 @@ async fn handle_websocket(websocket: WebSocket) -> Result<(), super::Error> {
             match r {
                 Ok(Ok(port)) => {
                     debug!("SOCKS listener on port {port} finished");
-                    // TODO: I haven't find a way to release the port for reuse
-                    // in the multiplexor.
-                    //mux.close_channel(port);
+                    mux.close_channel(port).await;
                 }
                 Ok(Err(err)) => {
                     error!("SOCKS listener failed: {err}");
@@ -57,6 +56,7 @@ async fn handle_websocket(websocket: WebSocket) -> Result<(), super::Error> {
 }
 
 /// Check the PSK and protocol version and upgrade to a websocket if the PSK matches (if required).
+#[tracing::instrument]
 pub fn ws_filter(
     predefined_ws_psk: Option<String>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {

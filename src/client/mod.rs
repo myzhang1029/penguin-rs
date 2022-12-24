@@ -8,11 +8,11 @@ use crate::arg::ClientArgs;
 use crate::mux::{DuplexStream, Multiplexor, Role, WebSocket};
 use futures_util::pin_mut;
 use handle_remote::handle_remote;
-use log::{info, trace, warn};
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
 use tokio::time;
+use tracing::{info, trace, warn};
 
 /// Errors
 #[derive(Debug, Error)]
@@ -33,8 +33,8 @@ pub enum Error {
 /// Type that local listeners send to the main loop to request a connection
 type Command = oneshot::Sender<DuplexStream>;
 
+#[tracing::instrument]
 pub async fn client_main(args: ClientArgs) -> Result<(), Error> {
-    trace!("Client args: {args:?}");
     // TODO: Temporary, remove when implemented
     if args.proxy.is_some() {
         warn!("Proxy not implemented yet");
@@ -67,7 +67,7 @@ pub async fn client_main(args: ClientArgs) -> Result<(), Error> {
         {
             Ok(ws_stream) => {
                 current_retry_count = 0;
-                current_retry_interval = 1;
+                current_retry_interval = 200;
                 on_connected(ws_stream, &mut cmd_rx, args.keepalive).await?;
             }
             Err(ws_connect::Error::Tungstenite(tungstenite::error::Error::Io(e))) => {
@@ -82,7 +82,7 @@ pub async fn client_main(args: ClientArgs) -> Result<(), Error> {
         };
 
         // If we get here, retry.
-        warn!("Control channel not connected, retrying in {current_retry_interval} seconds");
+        warn!("Control channel not connected, retrying in {current_retry_interval} ms");
         current_retry_count += 1;
         if args.max_retry_count != 0 && current_retry_count > args.max_retry_count {
             warn!("Max retry count reached, giving up");
@@ -98,6 +98,7 @@ pub async fn client_main(args: ClientArgs) -> Result<(), Error> {
 /// Called when the main socket is connected.
 /// If this function returns `Ok`, the client will retry;
 /// if it returns `Err`, the client will exit.
+#[tracing::instrument(skip_all)]
 async fn on_connected(
     ws_stream: tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
@@ -139,6 +140,7 @@ async fn on_connected(
 }
 
 /// Get a new channel from the multiplexor and send it to the handler.
+#[tracing::instrument(skip_all, level = "trace")]
 async fn get_send_chan(
     mux: &mut Multiplexor<
         tokio_tungstenite::WebSocketStream<
