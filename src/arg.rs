@@ -99,9 +99,9 @@ pub struct ClientArgs {
     /// Defaults 0, meaning unlimited.
     #[arg(long, default_value_t = 0)]
     pub(crate) max_retry_count: u32,
-    /// Maximum wait time (in seconds) before retrying after a
+    /// Maximum wait time (in milliseconds) before retrying after a
     /// disconnection.
-    #[arg(long, default_value_t = 300)]
+    #[arg(long, default_value_t = 300000)]
     pub(crate) max_retry_interval: u64,
     /// An optional HTTP CONNECT or SOCKS5 proxy which will be
     /// used to reach the penguin server. Authentication can be specified

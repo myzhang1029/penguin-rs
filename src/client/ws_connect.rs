@@ -1,7 +1,6 @@
 //! WebSocket connection.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use crate::arg::ClientArgs;
 use crate::proto_version::PROTOCOL_VERSION;
 use http::header::{HeaderName, HeaderValue};
 use log::debug;
@@ -80,7 +79,7 @@ fn get_system_certs() -> Result<RootCertStore, Error> {
 }
 
 /// Load system certificates or a custom CA store.
-fn generate_rustls_rootcertstore(custom_ca: &Option<String>) -> Result<RootCertStore, Error> {
+fn generate_rustls_rootcertstore(custom_ca: Option<&str>) -> Result<RootCertStore, Error> {
     // Whether to use a custom CA store.
     if let Some(ca) = custom_ca {
         let mut roots = RootCertStore::empty();
@@ -96,8 +95,8 @@ fn generate_rustls_rootcertstore(custom_ca: &Option<String>) -> Result<RootCertS
 
 /// Load client certificate if provided.
 fn try_load_client_certificate(
-    tls_key: &Option<String>,
-    tls_cert: &Option<String>,
+    tls_key: Option<&str>,
+    tls_cert: Option<&str>,
 ) -> Result<Option<(Vec<rustls::Certificate>, rustls::PrivateKey)>, Error> {
     if let (Some(key), Some(cert)) = (tls_key, tls_cert) {
         let mut reader = std::io::BufReader::new(std::fs::File::open(cert)?);
@@ -144,10 +143,18 @@ fn sanitize_url(url: &str) -> Result<Url, Error> {
     Ok(url)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn handshake(
-    args: &ClientArgs,
+    server_url: &str,
+    ws_psk: Option<&str>,
+    override_hostname: Option<&str>,
+    extra_headers: Vec<String>,
+    tls_ca: Option<&str>,
+    tls_key: Option<&str>,
+    tls_cert: Option<&str>,
+    tls_insecure: bool,
 ) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Error> {
-    let url = sanitize_url(&args.server)?;
+    let url = sanitize_url(server_url)?;
     // We already sanitized https URLs to wss
     let is_tls = url.scheme() == "wss";
 
@@ -160,15 +167,15 @@ pub async fn handshake(
         HeaderValue::from_str(PROTOCOL_VERSION)?,
     );
     // Add PSK
-    if let Some(ws_psk) = args.ws_psk.as_ref() {
+    if let Some(ws_psk) = ws_psk {
         req_headers.insert("x-penguin-psk", HeaderValue::from_str(ws_psk)?);
     }
     // Add potentially custom hostname
-    if let Some(hostname) = args.hostname.as_ref() {
+    if let Some(hostname) = override_hostname {
         req_headers.insert("host", HeaderValue::from_str(hostname)?);
     }
     // Now add custom headers
-    for header in &args.header {
+    for header in &extra_headers {
         let (name, value) = header
             .split_once(':')
             .ok_or(Error::InvalidHeaderFormat(header.to_string()))?;
@@ -181,10 +188,10 @@ pub async fn handshake(
     let connector = if is_tls {
         let config_builder = ClientConfig::builder().with_safe_defaults();
         // Whether there is a custom CA store
-        let roots = generate_rustls_rootcertstore(&args.tls_ca)?;
-        let client_certificate = try_load_client_certificate(&args.tls_key, &args.tls_cert)?;
+        let roots = generate_rustls_rootcertstore(tls_ca)?;
+        let client_certificate = try_load_client_certificate(tls_key, tls_cert)?;
         // Whether to skip TLS verification and whether there is a client certificate
-        let config = match (args.tls_skip_verify, client_certificate) {
+        let config = match (tls_insecure, client_certificate) {
             (true, Some((cert_chain, key_der))) => config_builder
                 .with_custom_certificate_verifier(Arc::new(TlsEmptyVerifier {}))
                 .with_single_cert(cert_chain, key_der)?,
@@ -239,7 +246,7 @@ mod tests {
     #[test]
     fn test_generate_rustls_rootcertstore() {
         // No custom CA store
-        let sys_root = generate_rustls_rootcertstore(&None);
+        let sys_root = generate_rustls_rootcertstore(None);
         assert!(sys_root.is_ok());
         assert!(!sys_root.unwrap().is_empty());
         // Custom CA store
@@ -247,8 +254,7 @@ mod tests {
         let ca_path = tmpdir.path().join("ca.pem");
         let custom_ca = generate_simple_self_signed(vec!["example.com".into()]).unwrap();
         std::fs::write(&ca_path, custom_ca.serialize_pem().unwrap()).unwrap();
-        let custom_root =
-            generate_rustls_rootcertstore(&Some(ca_path.to_str().unwrap().to_string()));
+        let custom_root = generate_rustls_rootcertstore(Some(ca_path.to_str().unwrap()));
         assert!(custom_root.is_ok());
         assert_eq!(custom_root.unwrap().len(), 1);
     }

@@ -238,9 +238,8 @@ where
     /// The role of this multiplexor
     role: Role,
     /// The control channel
-    pub ctrl_chan: Option<DuplexStream>,
+    ctrl_chan: Option<DuplexStream>,
     /// The set of ports that are currently in use. Only used by the server though.
-    /// TODO: remove port from this set when the channel is closed
     used_ports: HashSet<u16>,
 }
 
@@ -293,7 +292,7 @@ where
     /// or offer a new channel on the server side.
     /// Note that on the server side, this server will block until
     /// a new channel is requested.
-    pub async fn open_channel(&mut self) -> Result<DuplexStream, Error> {
+    pub async fn open_channel(&mut self) -> Result<(DuplexStream, u16), Error> {
         match self.role {
             Role::Client => self.client_side_open_channel().await,
             Role::Server => self.server_side_open_channel().await,
@@ -301,28 +300,33 @@ where
     }
 
     /// Ask server to open a new channel
-    async fn client_side_open_channel(&mut self) -> Result<DuplexStream, Error> {
+    async fn client_side_open_channel(&mut self) -> Result<(DuplexStream, u16), Error> {
         let ctrl_chan = self
             .ctrl_chan
             .as_mut()
             .ok_or(Error::ControlChannelNotEstablished)?;
-        trace!("Requesting channel.");
+        trace!("Requesting channel");
         ctrl_chan.write_u16(1).await?;
         // Sync with the server: wait for it to tell us to connect
         let port = ctrl_chan.read_u16().await?;
         if port == 0 {
-            error!("Server returned no available ports.");
+            error!("Server returned no available ports");
             Err(Error::NoAvailablePorts)
         } else {
-            debug!("Connecting to port {port}.");
+            debug!("Connecting to port {port}");
             // A psuedo sleep for the server to accept()
             tokio::task::yield_now().await;
-            Ok(self.mux.connect(port).await?)
+            Ok((self.mux.connect(port).await?, port))
         }
     }
 
+    /// Server side: indicate that a port has been closed
+    pub fn close_channel(&mut self, port: u16) {
+        self.used_ports.remove(&port);
+    }
+
     /// Offer a new channel to the client
-    async fn server_side_open_channel(&mut self) -> Result<DuplexStream, Error> {
+    async fn server_side_open_channel(&mut self) -> Result<(DuplexStream, u16), Error> {
         let ctrl_chan = self
             .ctrl_chan
             .as_mut()
@@ -343,14 +347,14 @@ where
                         debug!("Listening on port {port}");
                         // Tell the client that we are ready and they can connect to this port
                         ctrl_chan.write_u16(port).await?;
-                        Ok(listener.accept().await?)
+                        Ok((listener.accept().await?, port))
                     } else {
                         ctrl_chan.write_u16(0).await?;
                         Err(Error::NoAvailablePorts)
                     };
                 }
                 _ => {
-                    error!("Invalid command received on control channel.");
+                    error!("Invalid command received on control channel");
                     break Err(Error::InvalidControlChannelMessage);
                 }
             }

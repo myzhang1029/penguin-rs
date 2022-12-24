@@ -19,13 +19,36 @@ async fn handle_websocket(websocket: WebSocket) -> Result<(), super::Error> {
     let mut jobs = JoinSet::new();
     loop {
         match mux.open_channel().await {
-            Ok(chan) => {
-                jobs.spawn(start_socks_server_on_channel(chan));
+            Ok((chan, port)) => {
+                // `start_socks_server_on_channel` saves the port so we know
+                // which port to free when the channel is closed.
+                jobs.spawn(start_socks_server_on_channel(chan, port));
             }
             Err(err) => {
                 info!("Client disconnected: {err}");
                 mux.shutdown().await?;
                 break;
+            }
+        }
+        // Check if any of the jobs have finished
+        if let Ok(Some(r)) =
+            tokio::time::timeout(tokio::time::Duration::from_millis(1), jobs.join_next()).await
+        {
+            match r {
+                Ok(Ok(port)) => {
+                    debug!("SOCKS listener on port {port} finished");
+                    // TODO: I haven't find a way to release the port for reuse
+                    // in the multiplexor.
+                    //mux.close_channel(port);
+                }
+                Ok(Err(err)) => {
+                    error!("SOCKS listener failed: {err}");
+                }
+                Err(err) => {
+                    if err.is_panic() {
+                        error!("Panic in a SOCKS listener: {err}");
+                    }
+                }
             }
         }
     }

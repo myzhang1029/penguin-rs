@@ -28,7 +28,7 @@ pub enum RemoteSpec {
 }
 
 /// Protocol can be either "tcp" or "udp".
-#[derive(Debug, Clone, Hash, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Hash, Ord, PartialOrd, Eq, PartialEq)]
 pub enum Protocol {
     Tcp,
     Udp,

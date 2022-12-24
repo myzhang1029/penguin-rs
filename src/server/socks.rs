@@ -6,7 +6,7 @@ use log::{debug, trace};
 use socksv5::v5::SocksV5Host;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_stream_multiplexor::DuplexStream;
 
@@ -39,14 +39,15 @@ pub enum Error {
 
 /// Start a SOCKS server on the given listener.
 /// Should be the entry point for a new task.
-pub async fn start_socks_server_on_channel(chan: DuplexStream) -> Result<(), Error> {
+pub async fn start_socks_server_on_channel(chan: DuplexStream, port: u16) -> Result<u16, Error> {
     debug!("SOCKS connection accepted");
     let (mut reader1, mut writer1) = tokio::io::split(chan);
     let server_socket = handshake(&mut reader1, &mut writer1).await?;
     let (mut reader2, mut writer2) = tokio::io::split(server_socket);
     pipe_streams(&mut reader1, &mut writer1, &mut reader2, &mut writer2).await?;
     debug!("SOCKS connection closed");
-    Ok(())
+    reader1.unsplit(writer1).shutdown().await?;
+    Ok(port)
 }
 
 /// Perform the SOCKS handshake.
