@@ -29,6 +29,8 @@ jobs:
     steps:
     - name: Checkout source
       uses: actions/checkout@v2
+      with:
+        submodules: true
 
     - name: Install dependencies
       run: |

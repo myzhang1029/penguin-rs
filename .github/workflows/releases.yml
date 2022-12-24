@@ -21,10 +21,14 @@ jobs:
           os: macos-latest
         - name: Linux
           os: ubuntu-latest
+        - name: Windows
+          os: windows-latest
 
     steps:
     - name: Checkout source
       uses: actions/checkout@v2
+      with:
+        submodules: true
 
     - name: Rust Cache
       uses: Swatinem/rust-cache@v1
