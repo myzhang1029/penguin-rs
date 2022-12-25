@@ -65,7 +65,7 @@ fn get_system_certs() -> Result<RootCertStore, Error> {
     }
     Ok(roots)
 }
-#[cfg(feature = "rustls-webpki-roots")]
+#[cfg(all(feature = "rustls-native-roots", not(feature = "rustls-native-roots")))]
 fn get_system_certs() -> Result<RootCertStore, Error> {
     let mut roots = RootCertStore::empty();
     roots.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
