@@ -2,11 +2,22 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::socks::start_socks_server_on_channel;
-use crate::mux::{Multiplexor, Role, WebSocket as MuxWebSocket};
+use super::udp_forwarder::start_udp_forwarder_on_channel;
+use crate::mux::{ChannelType, Multiplexor, Role, WebSocket as MuxWebSocket};
 use crate::proto_version::PROTOCOL_VERSION;
+use thiserror::Error;
 use tokio::task::JoinSet;
 use tracing::{debug, error, info, warn};
 use warp::{ws::WebSocket, Filter, Rejection, Reply};
+
+/// Error type for WebSocket connection.
+#[derive(Error, Debug)]
+pub enum Error {
+    #[error(transparent)]
+    SocksServer(#[from] super::socks::Error),
+    #[error(transparent)]
+    UdpForwarder(#[from] super::udp_forwarder::Error),
+}
 
 /// Multiplex the WebSocket connection, create a SOCKS proxy over it,
 /// and handle the forwarding requests.
@@ -19,11 +30,18 @@ async fn handle_websocket(websocket: WebSocket) -> Result<(), super::Error> {
     debug!("WebSocket connection established");
     let mut jobs = JoinSet::new();
     loop {
-        match mux.open_channel().await {
-            Ok((chan, port)) => {
+        match mux.server_open_channel().await {
+            Ok((chan, port, chan_type)) => {
                 // `start_socks_server_on_channel` saves the port so we know
                 // which port to free when the channel is closed.
-                jobs.spawn(start_socks_server_on_channel(chan, port));
+                match chan_type {
+                    ChannelType::Stream => {
+                        jobs.spawn(start_socks_server_on_channel(chan, port));
+                    }
+                    ChannelType::Datagram => {
+                        jobs.spawn(start_udp_forwarder_on_channel(chan, port));
+                    }
+                }
             }
             Err(err) => {
                 warn!("Client disconnected: {err}");

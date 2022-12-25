@@ -5,7 +5,7 @@ mod handle_remote;
 mod ws_connect;
 
 use crate::arg::ClientArgs;
-use crate::mux::{DuplexStream, Multiplexor, Role, WebSocket};
+use crate::mux::{ChannelType, DuplexStream, Multiplexor, Role, WebSocket};
 use futures_util::pin_mut;
 use handle_remote::handle_remote;
 use thiserror::Error;
@@ -29,9 +29,10 @@ pub enum Error {
     Mux(#[from] crate::mux::Error),
 }
 
-// There is no extra information needed for the main loop
+// Send the information about which type of channel to establish
+// and how to send the stream to the listener
 /// Type that local listeners send to the main loop to request a connection
-type Command = oneshot::Sender<DuplexStream>;
+type Command = (oneshot::Sender<DuplexStream>, ChannelType);
 
 #[tracing::instrument]
 pub async fn client_main(args: ClientArgs) -> Result<(), Error> {
@@ -96,7 +97,8 @@ pub async fn client_main(args: ClientArgs) -> Result<(), Error> {
     }
 }
 
-/// Called when the main socket is connected.
+/// Called when the main socket is connected. Accepts connection requests from
+/// local listeners, establishes them, and sends them back to the listeners.
 /// If this function returns `Ok`, the client will retry;
 /// if it returns `Err`, the client will exit.
 #[tracing::instrument(skip_all)]
@@ -118,8 +120,8 @@ async fn on_connected(
     info!("Connected to server");
     if keepalive == 0 {
         // Just keep the main thread alive and wait for a command
-        while let Some(sender) = command_rx.recv().await {
-            get_send_chan(&mut mux, sender).await?;
+        while let Some((sender, chan_type)) = command_rx.recv().await {
+            get_send_chan(&mut mux, sender, chan_type).await?;
         }
         Ok(())
     } else {
@@ -127,10 +129,10 @@ async fn on_connected(
             let try_recv_command = command_rx.recv();
             pin_mut!(try_recv_command);
             // Wait for a command or do a keepalive
-            if let Ok(Some(sender)) =
+            if let Ok(Some((sender, chan_type))) =
                 time::timeout(time::Duration::from_secs(keepalive), &mut try_recv_command).await
             {
-                get_send_chan(&mut mux, sender).await?;
+                get_send_chan(&mut mux, sender, chan_type).await?;
             }
             if let Err(e) = mux.ping().await {
                 warn!("Failed to send keepalive: {e}");
@@ -151,9 +153,10 @@ async fn get_send_chan(
         tungstenite::Error,
     >,
     sender: oneshot::Sender<DuplexStream>,
+    chan_type: ChannelType,
 ) -> Result<(), Error> {
     trace!("Connecting to a new port");
-    let (stream, _) = mux.open_channel().await?;
+    let (stream, _) = mux.client_open_channel(chan_type).await?;
     sender.send(stream).unwrap();
     trace!("Send stream to handler");
     Ok(())

@@ -3,6 +3,7 @@
 
 mod backend_proxy;
 mod socks;
+mod udp_forwarder;
 mod websocket;
 
 use crate::arg::ServerArgs;

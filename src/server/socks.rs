@@ -8,6 +8,8 @@ use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tracing::{debug, trace};
+// We return this `Error` so the main loop can get consistent types.
+use super::websocket::Error as WsError;
 
 const SOCKS5_HOST_UNKNOWN: SocksV5Host = SocksV5Host::Ipv4([0, 0, 0, 0]);
 
@@ -39,14 +41,21 @@ pub enum Error {
 /// Start a SOCKS server on the given listener.
 /// Should be the entry point for a new task.
 #[tracing::instrument(skip(chan), level = "debug")]
-pub async fn start_socks_server_on_channel(chan: DuplexStream, port: u16) -> Result<u16, Error> {
+pub async fn start_socks_server_on_channel(chan: DuplexStream, port: u16) -> Result<u16, WsError> {
     debug!("SOCKS connection accepted");
     let (mut reader1, mut writer1) = tokio::io::split(chan);
     let server_socket = handshake(&mut reader1, &mut writer1).await?;
     let (mut reader2, mut writer2) = tokio::io::split(server_socket);
-    pipe_streams(&mut reader1, &mut writer1, &mut reader2, &mut writer2).await?;
+    // For some reason, Rust cannot figure out Result<T, Into<Into<E>>>? That's not very ergonomic.
+    pipe_streams(&mut reader1, &mut writer1, &mut reader2, &mut writer2)
+        .await
+        .map_err(<std::io::Error as Into<Error>>::into)?;
     debug!("SOCKS connection closed");
-    reader1.unsplit(writer1).shutdown().await?;
+    reader1
+        .unsplit(writer1)
+        .shutdown()
+        .await
+        .map_err(<std::io::Error as Into<Error>>::into)?;
     Ok(port)
 }
 
@@ -135,6 +144,7 @@ where
                 0,
             )
             .await?;
+            // TODO? ASSOCIATE
             debug!("Unsupported command: {:?}", cmd);
             Err(Error::Command(cmd))
         }
@@ -143,6 +153,7 @@ where
 
 /// Convert `SocketAddr` to `SocksV5Host`.
 /// Why is this not in the library?
+#[inline]
 fn sockaddr_to_socksv5host(addr: &SocketAddr) -> SocksV5Host {
     match addr {
         SocketAddr::V4(addr) => SocksV5Host::Ipv4(addr.ip().octets()),
@@ -153,6 +164,7 @@ fn sockaddr_to_socksv5host(addr: &SocketAddr) -> SocksV5Host {
 /// Convert `std::io::Error` to `SocksV5RequestStatus`.
 /// Would be nice when io_error_more is stabilized.
 #[cfg(nightly)]
+#[inline]
 fn ioerror_to_socksv5status(e: &std::io::Error) -> socksv5::v5::SocksV5RequestStatus {
     match e.kind() {
         std::io::ErrorKind::NetworkUnreachable => {
@@ -167,6 +179,7 @@ fn ioerror_to_socksv5status(e: &std::io::Error) -> socksv5::v5::SocksV5RequestSt
     }
 }
 #[cfg(not(nightly))]
+#[inline]
 fn ioerror_to_socksv5status(e: &std::io::Error) -> socksv5::v5::SocksV5RequestStatus {
     match e.raw_os_error() {
         // ENETUNREACH

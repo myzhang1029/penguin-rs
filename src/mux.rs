@@ -212,7 +212,7 @@ pub enum Error {
     InvalidControlChannelMessage,
 }
 /// Multiplexor role
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Role {
     /// Client role
     Client,
@@ -220,13 +220,29 @@ pub enum Role {
     Server,
 }
 
+/// Channel type
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ChannelType {
+    /// TCP channel
+    Stream,
+    /// UDP channel
+    Datagram,
+}
+
 /// The actual multiplexor, which is a wrapper around a `StreamMultiplexor`
 /// and a `WebSocket` instance.
-/// When we need a new channel, both ends synchronize on the `ctrl_chan`
+///
+/// It supports distinguishing two types of channels: `Stream` and `Datagram`.
+/// As its name suggests, they are designed to be used for TCP and UDP,
+/// respectively. However, the underlying channels are actually identical,
+/// and it is up to the user to decide how to use them.
+///
+/// When there is need for a new channel, both ends synchronize on the `ctrl_chan`
 /// channel.
 /// ctrl client commands:
 /// - 0: ping; server responds with 0
-/// - 1: open a new channel; server responds with a port number, or 0 if no ports are available.
+/// - 1: open a new `Stream` channel; server responds with a port number, or 0 if no ports are available.
+/// - 2: open a new `Datagram` forwarder; server responds with a port number, or 0 if no ports are available.
 #[derive(Debug)]
 pub struct Multiplexor<I, M, E>
 where
@@ -289,25 +305,27 @@ where
         }
     }
 
-    /// Ask to open a new channel on the client side,
-    /// or offer a new channel on the server side.
-    /// Note that on the server side, this server will block until
-    /// a new channel is requested.
-    pub async fn open_channel(&mut self) -> Result<(DuplexStream, u16), Error> {
-        match self.role {
-            Role::Client => self.client_side_open_channel().await,
-            Role::Server => self.server_side_open_channel().await,
-        }
-    }
-
     /// Ask server to open a new channel
+    /// `chan_type` is the type of channel to open (the client's choice).
+    ///
+    /// Returns a tuple of `(DuplexStream, port)`.
     #[tracing::instrument(skip(self), level = "debug")]
-    async fn client_side_open_channel(&mut self) -> Result<(DuplexStream, u16), Error> {
+    pub async fn client_open_channel(
+        &mut self,
+        chan_type: ChannelType,
+    ) -> Result<(DuplexStream, u16), Error> {
         let ctrl_chan = self
             .ctrl_chan
             .as_mut()
             .ok_or(Error::ControlChannelNotEstablished)?;
-        ctrl_chan.write_u16(1).await?;
+        match chan_type {
+            ChannelType::Stream => {
+                ctrl_chan.write_u16(1).await?;
+            }
+            ChannelType::Datagram => {
+                ctrl_chan.write_u16(2).await?;
+            }
+        }
         // Sync with the server: wait for it to tell us to connect
         let port = ctrl_chan.read_u16().await?;
         if port == 0 {
@@ -321,25 +339,14 @@ where
         }
     }
 
-    /// Server side: indicate that a port has been closed.
+    /// Offer a new channel to the client.
     ///
-    /// # Panics
-    /// Panics if called on the client side.
+    /// Note that, this method will block until a new channel is requested,
+    /// effectively acting as an event loop.
+    ///
+    /// Returns a tuple of `(DuplexStream, port, chan_type)`.
     #[tracing::instrument(skip(self), level = "debug")]
-    pub async fn close_channel(&mut self, port: u16) {
-        if self.role == Role::Client {
-            panic!("close_channel() should only be called on the server side");
-        } else {
-            self.used_ports.remove(&port);
-            unsafe {
-                self.mux.close_bound_port(port).await;
-            }
-        }
-    }
-
-    /// Offer a new channel to the client
-    #[tracing::instrument(skip(self), level = "debug")]
-    async fn server_side_open_channel(&mut self) -> Result<(DuplexStream, u16), Error> {
+    pub async fn server_open_channel(&mut self) -> Result<(DuplexStream, u16, ChannelType), Error> {
         let ctrl_chan = self
             .ctrl_chan
             .as_mut()
@@ -351,26 +358,38 @@ where
                     ctrl_chan.write_u16(0).await?;
                 }
                 1 => {
-                    // Open a new channel
-                    let maybe_port = self.claim_next_usable_port();
-                    // Get past the borrow checker
-                    let ctrl_chan = self.ctrl_chan.as_mut().unwrap();
-                    break if let Some(port) = maybe_port {
-                        let listener = self.mux.bind(port).await?;
-                        debug!("Listening on port {port}");
-                        // Tell the client that we are ready and they can connect to this port
-                        ctrl_chan.write_u16(port).await?;
-                        Ok((listener.accept().await?, port))
-                    } else {
-                        ctrl_chan.write_u16(0).await?;
-                        Err(Error::NoAvailablePorts)
-                    };
+                    let (chan, port) = self.find_port_handshake().await?;
+                    debug!("Listening on port {port}, type=1");
+                    break Ok((chan, port, ChannelType::Stream));
+                }
+                2 => {
+                    let (chan, port) = self.find_port_handshake().await?;
+                    debug!("Listening on port {port}, type=2");
+                    break Ok((chan, port, ChannelType::Datagram));
                 }
                 _ => {
                     error!("Invalid command received on control channel");
                     break Err(Error::InvalidControlChannelMessage);
                 }
             }
+        }
+    }
+
+    /// Server-side helper to handle a new connection.
+    /// Common for both types of channels
+    #[tracing::instrument(skip(self), level = "trace")]
+    async fn find_port_handshake(&mut self) -> Result<(DuplexStream, u16), Error> {
+        // Open a new channel
+        let maybe_port = self.claim_next_usable_port();
+        let ctrl_chan = self.ctrl_chan.as_mut().unwrap();
+        if let Some(port) = maybe_port {
+            let listener = self.mux.bind(port).await?;
+            // Tell the client that we are ready and they can connect to this port
+            ctrl_chan.write_u16(port).await?;
+            Ok((listener.accept().await?, port))
+        } else {
+            ctrl_chan.write_u16(0).await?;
+            Err(Error::NoAvailablePorts)
         }
     }
 
@@ -387,6 +406,22 @@ where
         }
         // Nothing to do on the server side
         Ok(())
+    }
+
+    /// Server side: indicate that a port has been closed.
+    ///
+    /// # Panics
+    /// Panics if called on the client side.
+    #[tracing::instrument(skip(self), level = "debug")]
+    pub async fn close_channel(&mut self, port: u16) {
+        if self.role == Role::Client {
+            panic!("close_channel() should only be called on the server side");
+        } else {
+            self.used_ports.remove(&port);
+            unsafe {
+                self.mux.close_bound_port(port).await;
+            }
+        }
     }
 
     /// Close the multiplexor
