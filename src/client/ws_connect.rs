@@ -13,7 +13,7 @@ use tokio::net::TcpStream;
 use tokio_tungstenite::{
     connect_async_tls_with_config, Connector, MaybeTlsStream, WebSocketStream,
 };
-use tracing::debug;
+use tracing::{debug, warn};
 use tungstenite::{client::IntoClientRequest, handshake::client::Request};
 use url::Url;
 
@@ -117,6 +117,7 @@ fn sanitize_url(url: &str) -> Result<Url, Error> {
     // Provide a default scheme if none is provided.
     let url = Url::parse(url).or_else(|e| {
         if e == url::ParseError::RelativeUrlWithoutBase {
+            warn!("No scheme provided, using HTTP by default");
             Url::parse(&format!("http://{url}"))
         } else {
             Err(e)
@@ -208,6 +209,7 @@ pub async fn handshake(
         Connector::Rustls(config.into())
     } else {
         // No TLS
+        warn!("Using insecure WebSocket connection");
         Connector::Plain
     };
     let (ws_stream, _response) = connect_async_tls_with_config(req, None, Some(connector)).await?;
