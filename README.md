@@ -34,4 +34,28 @@ Other than that, this project offers these functionalities compared to
 
 - Plausible deniability with WebSocket PSK and working `backend`.
 
-- Rust.
+- Higher performance: my crude testing on my machine reveals that `penguin` is
+  approximately 2x faster than `chisel` on my machine.
+```
+$ iperf3 -c 127.0.0.1 # chisel without TLS
+[ ID] Interval           Transfer     Bitrate
+[  5]   0.00-10.00  sec  3.64 GBytes  3.12 Gbits/sec                  sender
+[  5]   0.00-10.01  sec  3.63 GBytes  3.12 Gbits/sec                  receiver
+
+$ iperf3 -c 127.0.0.1 # penguin without TLS
+[ ID] Interval           Transfer     Bitrate
+[  5]   0.00-10.00  sec  8.50 GBytes  7.30 Gbits/sec                  sender
+[  5]   0.00-10.31  sec  8.49 GBytes  7.07 Gbits/sec                  receiver
+
+$ iperf3 -c 127.0.0.1 # chisel with TLS
+[ ID] Interval           Transfer     Bitrate
+[  5]   0.00-10.00  sec  3.26 GBytes  2.80 Gbits/sec                  sender
+[  5]   0.00-10.01  sec  3.26 GBytes  2.80 Gbits/sec                  receiver
+
+$ iperf3 -c 127.0.0.1 # penguin with TLS
+[ ID] Interval           Transfer     Bitrate
+[  5]   0.00-10.00  sec  6.04 GBytes  5.19 Gbits/sec                  sender
+[  5]   0.00-10.44  sec  6.03 GBytes  4.96 Gbits/sec                  receiver
+```
+
+- All the safety Rust offers.
