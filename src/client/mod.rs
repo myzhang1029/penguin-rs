@@ -66,9 +66,10 @@ pub async fn client_main(args: ClientArgs) -> Result<(), Error> {
         .await
         {
             Ok(ws_stream) => {
+                on_connected(ws_stream, &mut cmd_rx, args.keepalive).await?;
+                warn!("Disconnected from server");
                 current_retry_count = 0;
                 current_retry_interval = 200;
-                on_connected(ws_stream, &mut cmd_rx, args.keepalive).await?;
             }
             Err(ws_connect::Error::Tungstenite(tungstenite::error::Error::Io(e))) => {
                 if !retryable_errors(&e) {
