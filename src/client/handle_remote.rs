@@ -4,7 +4,6 @@
 use crate::mux::{pipe_streams, DuplexStream};
 use crate::parse_remote::Remote;
 use crate::parse_remote::{LocalSpec, Protocol, RemoteSpec};
-use async_socks5::SocksListener;
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -68,7 +67,7 @@ pub async fn handle_remote(remote: Remote, command_tx: mpsc::Sender<Command>) ->
 /// Handle a connection.
 #[tracing::instrument(skip(stream, local_rx, local_tx))]
 async fn handle_connection<R, T>(
-    stream: DuplexStream,
+    mut stream: DuplexStream,
     rspec: RemoteSpec,
     proto: Protocol,
     mut local_rx: R,
@@ -93,12 +92,9 @@ where
             RemoteSpec::Inet((rhost, rport)) => (rhost, rport),
             RemoteSpec::Socks => unreachable!("already matched this case above"),
         };
-        let (socksified, _) = SocksListener::bind(stream, (rhost, rport), None)
-            .await?
-            .accept()
-            .await?;
-        let (mut socksified_rx, mut socksified_tx) = tokio::io::split(socksified);
         debug!("Forwarding local to the remote socks5 proxy");
+        async_socks5::connect(&mut stream, (rhost, rport), None).await?;
+        let (mut socksified_rx, mut socksified_tx) = tokio::io::split(stream);
         pipe_streams(
             &mut local_rx,
             &mut local_tx,
