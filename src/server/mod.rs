@@ -25,7 +25,13 @@ pub enum Error {
 
 #[tracing::instrument]
 pub async fn server_main(args: ServerArgs) -> Result<(), Error> {
-    let sockaddr = (args.host.parse::<std::net::IpAddr>()?, args.port);
+    let host = if args.host.starts_with('[') && args.host.ends_with(']') {
+        // Remove brackets from IPv6 addresses
+        &args.host[1..args.host.len() - 1]
+    } else {
+        &args.host
+    };
+    let sockaddr = (host.parse::<std::net::IpAddr>()?, args.port);
 
     // Upgrade to a websocket if the path is `/ws` and the PSK matches
     // (if required)
