@@ -140,6 +140,15 @@ pub struct ClientArgs {
     /// enabled (mutual-TLS).
     #[arg(long, requires = "tls_key")]
     pub(crate) tls_cert: Option<String>,
+    /// For compatibility with `chisel` only. This option is a no-op.
+    #[arg(long = "pid")]
+    pub(crate) _pid: bool,
+    /// For compatibility with `chisel` only. This option is a no-op.
+    #[arg(long = "fingerprint")]
+    pub(crate) _fingerprint: Option<String>,
+    /// For compatibility with `chisel` only. This option is a no-op.
+    #[arg(long = "auth")]
+    pub(crate) _auth: Option<String>,
 }
 
 /// Penguin server arguments.
@@ -157,10 +166,6 @@ pub struct ServerArgs {
     /// plain sight.
     #[arg(long)]
     pub(crate) backend: Option<String>,
-    /// Allow clients to access the internal SOCKS5 proxy. See
-    /// `penguin client --help` for more information.
-    #[arg(long)]
-    pub(crate) socks5: bool,
     /// Try harder to hide from Active Probes (disable /health and
     /// /version endpoints and HTTP headers that could potentially be used
     /// to fingerprint penguin). It is strongly recommended to use --ws-psk
@@ -191,4 +196,25 @@ pub struct ServerArgs {
     /// instead of the system roots. This is commonly used to implement mutual-TLS.
     #[arg(long)]
     pub(crate) tls_ca: Option<String>,
+    /// For compatibility with `chisel` only. This option is a no-op.
+    #[arg(long = "socks5")]
+    pub(crate) _socks5: bool,
+    /// For compatibility with `chisel` only. This option is a no-op.
+    #[arg(long = "pid")]
+    pub(crate) _pid: bool,
+    /// For compatibility with `chisel` only. This option is a no-op.
+    #[arg(long = "reverse")]
+    pub(crate) _reverse: bool,
+    /// For compatibility with `chisel` only. This option is a no-op.
+    #[arg(long = "keepalive")]
+    pub(crate) _keepalive: u64,
+    /// For compatibility with `chisel` only. This option is a no-op.
+    #[arg(long = "auth")]
+    pub(crate) _auth: Option<String>,
+    /// For compatibility with `chisel` only. This option is a no-op.
+    #[arg(long = "authfile")]
+    pub(crate) _authfile: Option<String>,
+    /// For compatibility with `chisel` only. This option is a no-op.
+    #[arg(long = "key")]
+    pub(crate) _key: Option<String>,
 }
