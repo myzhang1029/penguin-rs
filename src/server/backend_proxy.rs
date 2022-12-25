@@ -11,6 +11,7 @@ use warp_reverse_proxy::{
 };
 
 /// Add a correct `Host` header to the proxied request.
+#[allow(clippy::type_complexity)]
 #[tracing::instrument(skip(body))]
 async fn add_host_header(
     proxy_address: String,

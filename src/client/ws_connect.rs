@@ -105,7 +105,6 @@ fn try_load_client_certificate(
             .map(rustls::Certificate)
             .collect();
         let mut reader = std::io::BufReader::new(std::fs::File::open(key)?);
-        // TODO: PKCS?
         let keys = rustls_pemfile::rsa_private_keys(&mut reader)?;
         Ok(Some((certs, rustls::PrivateKey(keys[0].clone()))))
     } else {

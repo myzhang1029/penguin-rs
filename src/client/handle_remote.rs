@@ -87,7 +87,6 @@ where
         Ok(())
     } else if proto == Protocol::Tcp {
         // We want to ask the socks5 proxy to connect to another port.
-        // TODO: This is not how it works. We need to ask the socks5 proxy to connect to another host.
         let (rhost, rport) = match rspec {
             RemoteSpec::Inet((rhost, rport)) => (rhost, rport),
             RemoteSpec::Socks => unreachable!("already matched this case above"),
