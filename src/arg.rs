@@ -206,7 +206,7 @@ pub struct ServerArgs {
     #[arg(long = "reverse")]
     pub(crate) _reverse: bool,
     /// For compatibility with `chisel` only. This option is a no-op.
-    #[arg(long = "keepalive")]
+    #[arg(long = "keepalive", default_value_t = 0)]
     pub(crate) _keepalive: u64,
     /// For compatibility with `chisel` only. This option is a no-op.
     #[arg(long = "auth")]
