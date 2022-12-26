@@ -6,12 +6,54 @@ use crate::mux::{pipe_streams, DuplexStream};
 use crate::parse_remote::{LocalSpec, RemoteSpec};
 use crate::parse_remote::{Protocol, Remote};
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 
 use super::Command;
+
+macro_rules! complete_or_break {
+    ($e:expr) => {
+        match $e {
+            Ok(v) => v,
+            Err(err) => {
+                break err;
+            }
+        }
+    };
+}
+
+/// Do something or continue
+macro_rules! complete_or_continue {
+    ($e:expr) => {
+        match $e {
+            Ok(v) => v,
+            Err(err) => {
+                warn!("{err}");
+                continue;
+            }
+        }
+    };
+}
+
+/// Do something or continue if the error is retryable
+macro_rules! complete_or_continue_if_retryable {
+    ($e:expr) => {
+        match $e {
+            Ok(v) => v,
+            Err(err) => {
+                if super::retryable_errors(&err) {
+                    warn!("{err}");
+                    continue;
+                } else {
+                    error!("Giving up");
+                    return Err(err.into());
+                }
+            }
+        }
+    };
+}
 
 /// Errors
 #[derive(Debug, Error)]
@@ -59,7 +101,7 @@ pub async fn handle_remote(
                 let (tcp_stream, _) = listener.accept().await?;
                 // A new channel is created for each incoming TCP connection.
                 // It's already TCP, anyways.
-                let channel = request_channel(&mut command_tx).await?;
+                let channel = complete_or_continue!(request_channel(&mut command_tx).await);
                 // Don't use `BufWriter` here because it will buffer the handshake
                 // And also make sure we don't nest `BufReader`s
                 let rhost = rhost.clone();
@@ -81,25 +123,41 @@ pub async fn handle_remote(
             tokio::spawn(handle_udp_socket(command_tx, socket, rhost, rport));
             Ok(())
         }
-        (LocalSpec::Stdio, RemoteSpec::Inet((rhost, rport)), _) => {
+        (LocalSpec::Stdio, RemoteSpec::Inet((rhost, rport)), Protocol::Tcp) => {
             let (mut stdin, mut stdout) = (tokio::io::stdin(), tokio::io::stdout());
             // We want `loop` to be able to continue after a connection failure
             loop {
-                let channel = request_channel(&mut command_tx).await?;
+                let channel = complete_or_continue!(request_channel(&mut command_tx).await);
                 let (channel_rx, mut channel_tx) = tokio::io::split(channel);
                 let mut channel_rx = BufReader::new(channel_rx);
-                channel_tcp_handshake(&mut channel_rx, &mut channel_tx, &rhost, rport).await?;
-                match pipe_streams(&mut stdin, &mut stdout, channel_rx, channel_tx).await {
-                    Err(err) => {
-                        warn!("Remote disconnected");
-                        if !super::retryable_errors(&err) {
-                            break Err(err.into());
-                        }
-                        // Else just retry
-                    }
-                    Ok(_) => {
-                        break Ok(());
-                    }
+                complete_or_continue!(
+                    channel_tcp_handshake(&mut channel_rx, &mut channel_tx, &rhost, rport).await
+                );
+                complete_or_continue_if_retryable!(
+                    pipe_streams(&mut stdin, &mut stdout, channel_rx, channel_tx).await
+                );
+            }
+        }
+        (LocalSpec::Stdio, RemoteSpec::Inet((rhost, rport)), Protocol::Udp) => {
+            let mut stdin = BufReader::new(tokio::io::stdin());
+            loop {
+                let channel = complete_or_continue!(request_channel(&mut command_tx).await);
+                let (channel_rx, mut channel_tx) = tokio::io::split(channel);
+                let mut channel_rx = BufReader::new(channel_rx);
+                complete_or_continue!(
+                    channel_udp_handshake(&mut channel_rx, &mut channel_tx, &rhost, rport).await
+                );
+                tokio::spawn(async move {
+                    let mut stdout = tokio::io::stdout();
+                    tokio::io::copy(&mut channel_rx, &mut stdout).await
+                });
+                loop {
+                    let mut line = String::new();
+                    complete_or_continue_if_retryable!(stdin.read_line(&mut line).await);
+                    complete_or_continue_if_retryable!(
+                        channel_tx.write_u32(line.len() as u32).await
+                    );
+                    complete_or_continue_if_retryable!(channel_tx.write_all(line.as_bytes()).await);
                 }
             }
         }
@@ -211,17 +269,6 @@ where
     pipe_streams(&mut tcp_rx, &mut tcp_tx, &mut channel_rx, &mut channel_tx).await?;
     debug!("SOCKS connection closed");
     Ok(())
-}
-
-macro_rules! complete_or_break {
-    ($e:expr) => {
-        match $e {
-            Ok(v) => v,
-            Err(err) => {
-                break err;
-            }
-        }
-    };
 }
 
 /// Handle a UDP socket.
