@@ -4,7 +4,6 @@
 use futures_util::{pin_mut, FutureExt, Sink, Stream};
 pub use penguin_tokio_stream_multiplexor::DuplexStream;
 use penguin_tokio_stream_multiplexor::{StreamMultiplexor, StreamMultiplexorConfig};
-use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -240,8 +239,6 @@ where
     role: Role,
     /// The control channel
     ctrl_chan: Option<DuplexStream>,
-    /// The set of ports that are currently in use. Only used by the server though.
-    used_ports: HashSet<u16>,
 }
 
 impl<I, M, E> Multiplexor<I, M, E>
@@ -258,7 +255,6 @@ where
             mux,
             role,
             ctrl_chan: None,
-            used_ports: HashSet::new(),
         }
     }
 
@@ -270,23 +266,6 @@ where
         };
         self.ctrl_chan = Some(ctrl_chan);
         Ok(())
-    }
-
-    /// Attempt to claim the next usable port
-    fn claim_next_usable_port(&mut self) -> Option<u16> {
-        let mut port = 2;
-        loop {
-            while self.used_ports.contains(&port) {
-                port += 1;
-                if port == u16::MAX {
-                    return None;
-                }
-            }
-            // crude synchronization
-            if self.used_ports.insert(port) {
-                return Some(port);
-            }
-        }
     }
 
     /// Ask to open a new channel on the client side,
@@ -336,19 +315,13 @@ where
                 }
                 1 => {
                     // Open a new channel
-                    let maybe_port = self.claim_next_usable_port();
-                    // Get past the borrow checker
                     let ctrl_chan = self.ctrl_chan.as_mut().unwrap();
-                    break if let Some(port) = maybe_port {
-                        let listener = self.mux.bind(port).await?;
-                        debug!("Listening on port {port}");
-                        // Tell the client that we are ready and they can connect to this port
-                        ctrl_chan.write_u16(port).await?;
-                        Ok((listener.accept().await?, port))
-                    } else {
-                        ctrl_chan.write_u16(0).await?;
-                        Err(Error::NoAvailablePorts)
-                    };
+                    let listener = self.mux.bind(0).await?;
+                    let port = listener.port();
+                    debug!("Listening on port {port}");
+                    // Tell the client that we are ready and they can connect to this port
+                    ctrl_chan.write_u16(port).await?;
+                    break Ok((listener.accept().await?, port));
                 }
                 _ => {
                     error!("Invalid command received on control channel");

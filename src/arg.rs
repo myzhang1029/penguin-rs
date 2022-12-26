@@ -22,7 +22,7 @@ pub enum Commands {
     Client(ClientArgs),
     /// Penguin server
     #[clap(name = "server")]
-    Server(ServerArgs),
+    Server(Box<ServerArgs>),
 }
 
 // Descriptions are mainly directly stripped from myzhang1029/penguin
