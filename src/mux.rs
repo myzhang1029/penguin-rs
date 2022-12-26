@@ -321,22 +321,6 @@ where
         }
     }
 
-    /// Server side: indicate that a port has been closed.
-    ///
-    /// # Panics
-    /// Panics if called on the client side.
-    #[tracing::instrument(skip(self), level = "debug")]
-    pub async fn close_channel(&mut self, port: u16) {
-        if self.role == Role::Client {
-            panic!("close_channel() should only be called on the server side");
-        } else {
-            self.used_ports.remove(&port);
-            unsafe {
-                self.mux.close_bound_port(port).await;
-            }
-        }
-    }
-
     /// Offer a new channel to the client
     #[tracing::instrument(skip(self), level = "debug")]
     async fn server_side_open_channel(&mut self) -> Result<(DuplexStream, u16), Error> {

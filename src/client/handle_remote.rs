@@ -6,7 +6,7 @@ use crate::mux::{pipe_streams, DuplexStream};
 use crate::parse_remote::{LocalSpec, RemoteSpec};
 use crate::parse_remote::{Protocol, Remote};
 use thiserror::Error;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, info, warn};
@@ -61,9 +61,12 @@ pub async fn handle_remote(
                 // A new channel is created for each incoming TCP connection.
                 // It's already TCP, anyways.
                 let channel = request_channel(&mut command_tx).await?;
+                let (channel_rx, channel_tx) = tokio::io::split(channel);
+                let channel_rx = BufReader::new(channel_rx);
+                // Don't use `BufWriter` here because it will buffer the handshake
                 let rhost = rhost.clone();
                 tokio::spawn(async move {
-                    handle_tcp_connection(channel, &rhost, rport, tcp_stream).await
+                    handle_tcp_connection(channel_rx, channel_tx, &rhost, rport, tcp_stream).await
                 });
             }
         }
@@ -79,10 +82,11 @@ pub async fn handle_remote(
             let (mut stdin, mut stdout) = (tokio::io::stdin(), tokio::io::stdout());
             // We want `loop` to be able to continue after a connection failure
             loop {
-                let mut channel = request_channel(&mut command_tx).await?;
-                channel_tcp_handshake(&mut channel, &rhost, rport).await?;
-                let (remote_rx, remote_tx) = tokio::io::split(channel);
-                match pipe_streams(&mut stdin, &mut stdout, remote_rx, remote_tx).await {
+                let channel = request_channel(&mut command_tx).await?;
+                let (channel_rx, mut channel_tx) = tokio::io::split(channel);
+                let mut channel_rx = BufReader::new(channel_rx);
+                channel_tcp_handshake(&mut channel_rx, &mut channel_tx, &rhost, rport).await?;
+                match pipe_streams(&mut stdin, &mut stdout, channel_rx, channel_tx).await {
                     Err(err) => {
                         warn!("Remote disconnected");
                         if !super::retryable_errors(&err) {
@@ -123,6 +127,7 @@ pub async fn handle_remote(
 /// Request a channel from the mux
 /// We use a `&mut` to make sure we have the exclusive borrow.
 /// Just to make my life easier.
+#[inline]
 pub(crate) async fn request_channel(
     command_tx: &mut mpsc::Sender<Command>,
 ) -> Result<DuplexStream, Error> {
@@ -132,19 +137,25 @@ pub(crate) async fn request_channel(
 }
 
 /// Handshaking stuff. See `server/mod.rs`.
-pub(crate) async fn channel_tcp_handshake(
-    channel: &mut DuplexStream,
+#[inline]
+pub(crate) async fn channel_tcp_handshake<R, W>(
+    mut channel_rx: R,
+    mut channel_tx: W,
     rhost: &str,
     rport: u16,
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
     let command = 0x01;
     let rhost_len = u8::try_from(rhost.len())?;
     let mut encoded_rhost = rhost.into();
     let mut data = vec![command, rhost_len];
     data.append(&mut encoded_rhost);
-    channel.write_all(&data).await?;
-    channel.write_u16(rport).await?;
-    if channel.read_u8().await? != 0x03 {
+    channel_tx.write_all(&data).await?;
+    channel_tx.write_u16(rport).await?;
+    if channel_rx.read_u8().await? != 0x03 {
         Err(Error::ServerHandshake)
     } else {
         Ok(())
@@ -152,19 +163,25 @@ pub(crate) async fn channel_tcp_handshake(
 }
 
 /// Handshaking stuff. See `server/mod.rs`.
-pub(crate) async fn channel_udp_handshake(
-    channel: &mut DuplexStream,
+#[inline]
+pub(crate) async fn channel_udp_handshake<R, W>(
+    mut channel_rx: R,
+    mut channel_tx: W,
     rhost: &str,
     rport: u16,
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
     let command = 0x03;
     let rhost_len = u8::try_from(rhost.len())?;
     let mut encoded_rhost = rhost.into();
     let mut data = vec![command, rhost_len];
     data.append(&mut encoded_rhost);
-    channel.write_all(&data).await?;
-    channel.write_u16(rport).await?;
-    if channel.read_u8().await? != 0x03 {
+    channel_tx.write_all(&data).await?;
+    channel_tx.write_u16(rport).await?;
+    if channel_rx.read_u8().await? != 0x03 {
         Err(Error::ServerHandshake)
     } else {
         Ok(())
@@ -172,17 +189,21 @@ pub(crate) async fn channel_udp_handshake(
 }
 
 /// Handle a TCP connection.
-#[tracing::instrument(skip(channel, tcp_stream))]
-async fn handle_tcp_connection(
-    mut channel: DuplexStream,
+#[tracing::instrument(skip(channel_rx, channel_tx, tcp_stream))]
+async fn handle_tcp_connection<R, W>(
+    mut channel_rx: R,
+    mut channel_tx: W,
     rhost: &str,
     rport: u16,
     tcp_stream: TcpStream,
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
     let (mut tcp_rx, mut tcp_tx) = tokio::io::split(tcp_stream);
-    channel_tcp_handshake(&mut channel, rhost, rport).await?;
-    let (mut remote_rx, mut remote_tx) = tokio::io::split(channel);
-    pipe_streams(&mut tcp_rx, &mut tcp_tx, &mut remote_rx, &mut remote_tx).await?;
+    channel_tcp_handshake(&mut channel_rx, &mut channel_tx, rhost, rport).await?;
+    pipe_streams(&mut tcp_rx, &mut tcp_tx, &mut channel_rx, &mut channel_tx).await?;
     debug!("SOCKS connection closed");
     Ok(())
 }
@@ -198,9 +219,9 @@ async fn handle_udp_socket(
     rhost: String,
     rport: u16,
 ) -> Result<(), Error> {
-    let mut channel = request_channel(&mut command_tx).await?;
-    channel_udp_handshake(&mut channel, &rhost, rport).await?;
+    let channel = request_channel(&mut command_tx).await?;
     let (mut channel_rx, mut channel_tx) = tokio::io::split(channel);
+    channel_udp_handshake(&mut channel_rx, &mut channel_tx, &rhost, rport).await?;
     let mut buf = [0u8; 65536];
     loop {
         let (len, addr) = socket.recv_from(&mut buf).await?;

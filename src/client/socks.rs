@@ -6,7 +6,7 @@ use crate::{
     mux::pipe_streams,
 };
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader},
     sync::mpsc,
 };
 use tracing::debug;
@@ -40,14 +40,13 @@ macro_rules! execute_or_pass_error {
 pub(crate) async fn handle_socks_connection<R, W>(
     mut command_tx: mpsc::Sender<Command>,
     reader: R,
-    writer: W,
+    mut writer: W,
 ) -> Result<(), Error>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
     let mut breader = BufReader::new(reader);
-    let mut bwriter = BufWriter::new(writer);
     // Complete the handshake
     let version = breader.read_u8().await?;
     if version != 5 {
@@ -62,11 +61,11 @@ where
         // Send back NO ACCEPTABLE METHODS
         // Note that we are not compliant with RFC 1928 here, as we MUST
         // support GSSAPI and SHOULD support USERNAME/PASSWORD
-        bwriter.write_all(&[0x05, 0xFF]).await?;
+        writer.write_all(&[0x05, 0xFF]).await?;
         return Err(Error::OtherAuth);
     }
     // Send back NO AUTHENTICATION REQUIRED
-    bwriter.write_all(&[0x05, 0x00]).await?;
+    writer.write_all(&[0x05, 0x00]).await?;
     // Read the request
     let version = breader.read_u8().await?;
     if version != 5 {
@@ -77,19 +76,19 @@ where
         breader.read_u8().await,
         0x01,
         "cannot read command",
-        &mut bwriter
+        &mut writer
     );
     let _reserved = execute_or_pass_error!(
         breader.read_u8().await,
         0x01,
         "cannot read reserved",
-        &mut bwriter
+        &mut writer
     );
     let address_type = execute_or_pass_error!(
         breader.read_u8().await,
         0x01,
         "cannot read address type",
-        &mut bwriter
+        &mut writer
     );
     let rhost = match address_type {
         0x01 => {
@@ -99,7 +98,7 @@ where
                 breader.read_exact(&mut addr).await,
                 0x01,
                 "cannot read address",
-                &mut bwriter
+                &mut writer
             );
             std::net::Ipv4Addr::from(addr).to_string()
         }
@@ -111,7 +110,7 @@ where
                 breader.read_exact(&mut addr).await,
                 0x01,
                 "cannot read domain",
-                &mut bwriter
+                &mut writer
             );
             String::from_utf8(addr)?
         }
@@ -122,13 +121,13 @@ where
                 breader.read_exact(&mut addr).await,
                 0x01,
                 "cannot read address",
-                &mut bwriter
+                &mut writer
             );
             std::net::Ipv6Addr::from(addr).to_string()
         }
         _ => {
             debug!("Invalid address type {address_type}");
-            bwriter
+            writer
                 .write_all(&[0x05, 0x08, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
                 .await?;
             return Err(Error::SocksRequest);
@@ -138,31 +137,31 @@ where
         breader.read_u16().await,
         0x01,
         "cannot read port",
-        &mut bwriter
+        &mut writer
     );
     debug!("Got request for {rhost}:{rport}");
     match command {
         0x01 => {
             // CONNECT
             // Establish a connection to the remote host
-            let mut channel = execute_or_pass_error!(
+            let channel = execute_or_pass_error!(
                 request_channel(&mut command_tx).await,
                 0x01,
                 "cannot get channel",
-                &mut bwriter
+                &mut writer
             );
+            let (mut remote_rx, mut remote_tx) = tokio::io::split(channel);
             execute_or_pass_error!(
-                channel_tcp_handshake(&mut channel, &rhost, rport).await,
+                channel_tcp_handshake(&mut remote_rx, &mut remote_tx, &rhost, rport).await,
                 0x01,
                 "cannot handshate on the channel",
-                &mut bwriter
+                &mut writer
             );
             // Send back a successful response
-            bwriter
+            writer
                 .write_all(&[0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
                 .await?;
-            let (remote_rx, remote_tx) = tokio::io::split(channel);
-            pipe_streams(breader, bwriter, remote_rx, remote_tx).await?;
+            pipe_streams(breader, writer, remote_rx, remote_tx).await?;
             Ok(())
         }
         0x02 => {
@@ -173,7 +172,7 @@ where
         }
         _ => {
             debug!("Invalid command {command}");
-            bwriter
+            writer
                 .write_all(&[0x05, 0x07, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
                 .await?;
             Err(Error::SocksRequest)

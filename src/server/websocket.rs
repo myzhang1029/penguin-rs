@@ -33,49 +33,37 @@ pub enum Error {
 /// Should be spawned as a new task. In whatever case, it will return
 /// a `Result` with the port number that was used, and `chan` will be
 /// closed (dropped).
-/// This function saves the port so the main loop knows which port to free
-/// when the connection is closed.
-/// All error types include a `u16` which is the channel's port number that was
-/// used for the connection.
 #[tracing::instrument(skip(chan), level = "info")]
-async fn dispatch_conn(mut chan: DuplexStream, port: u16) -> Result<u16, (Error, u16)> {
-    let command = chan.read_u8().await.map_err(|err| (Error::Io(err), port))?;
-    let len = chan.read_u8().await.map_err(|err| (Error::Io(err), port))?;
+async fn dispatch_conn(mut chan: DuplexStream, port: u16) -> Result<(), Error> {
+    let command = chan.read_u8().await.map_err(Error::Io)?;
+    let len = chan.read_u8().await.map_err(Error::Io)?;
     let mut rhost = vec![0; len as usize];
-    chan.read_exact(&mut rhost)
-        .await
-        .map_err(|err| (Error::Io(err), port))?;
-    let rhost = String::from_utf8(rhost).map_err(|err| (Error::Host(err), port))?;
-    let rport = chan
-        .read_u16()
-        .await
-        .map_err(|err| (Error::Io(err), port))?;
-    chan.write_u8(0x03)
-        .await
-        .map_err(|err| (Error::Io(err), port))?;
+    chan.read_exact(&mut rhost).await.map_err(Error::Io)?;
+    let rhost = String::from_utf8(rhost).map_err(Error::Host)?;
+    let rport = chan.read_u16().await.map_err(Error::Io)?;
+    chan.write_u8(0x03).await.map_err(Error::Io)?;
     match command {
         1 => {
             // TCP
             info!("TCP connect to {rhost}:{rport}");
             start_tcp_forwarder_on_channel(chan, &rhost, rport)
                 .await
-                .map_err(|err| (Error::TcpForwarder(err), port))?;
-            Ok(port)
+                .map_err(Error::TcpForwarder)?;
+            Ok(())
         }
         3 => {
             // UDP
             info!("UDP forward to {rhost}:{rport}");
             start_udp_forwarder_on_channel(chan, &rhost, rport)
                 .await
-                .map_err(|err| (Error::UdpForwarder(err), port))?;
-            Ok(port)
+                .map_err(Error::UdpForwarder)?;
+            Ok(())
         }
-        _ => Err((Error::Command(command), port)),
+        _ => Err(Error::Command(command)),
     }
 }
 
-/// Multiplex the WebSocket connection, create a SOCKS proxy over it,
-/// and handle the forwarding requests.
+/// Multiplex the WebSocket connection and handle the forwarding requests.
 #[tracing::instrument(skip(websocket), level = "debug")]
 async fn handle_websocket(websocket: WebSocket) -> Result<(), super::Error> {
     let mws = MuxWebSocket::new(websocket);
@@ -87,7 +75,7 @@ async fn handle_websocket(websocket: WebSocket) -> Result<(), super::Error> {
     loop {
         match mux.open_channel().await {
             Ok((chan, port)) => {
-                debug!("SOCKS listener on port {port} started");
+                debug!("Listener on port {port} started");
                 jobs.spawn(dispatch_conn(chan, port));
             }
             Err(err) => {
@@ -97,23 +85,11 @@ async fn handle_websocket(websocket: WebSocket) -> Result<(), super::Error> {
             }
         }
         // Check if any of the jobs have finished
-        if let Ok(Some(r)) =
+        if let Ok(Some(Err(err))) =
             tokio::time::timeout(tokio::time::Duration::from_millis(1), jobs.join_next()).await
         {
-            match r {
-                Ok(Ok(port)) => {
-                    debug!("SOCKS listener on port {port} finished");
-                    mux.close_channel(port).await;
-                }
-                Ok(Err((err, port))) => {
-                    error!("SOCKS listener failed: {err}");
-                    mux.close_channel(port).await;
-                }
-                Err(err) => {
-                    if err.is_panic() {
-                        panic!("Panic in a SOCKS listener: {err}");
-                    }
-                }
+            if err.is_panic() {
+                panic!("Panic in a SOCKS listener: {err}");
             }
         }
     }
