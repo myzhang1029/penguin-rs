@@ -1,22 +1,21 @@
 //! Run a remote connection.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use crate::mux::{pipe_streams, ChannelType, DuplexStream};
-use crate::parse_remote::Remote;
-use crate::parse_remote::{LocalSpec, Protocol, RemoteSpec};
+use crate::client::socks::handle_socks_connection;
+use crate::mux::{pipe_streams, DuplexStream};
+use crate::parse_remote::{LocalSpec, RemoteSpec};
+use crate::parse_remote::{Protocol, Remote};
 use thiserror::Error;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter, AsyncBufReadExt};
-use tokio::net::TcpListener;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::Command;
 
 /// Errors
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("socks5 proxy failed: {0}")]
-    Socks(#[from] async_socks5::Error),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
@@ -25,149 +24,188 @@ pub enum Error {
     ReceiveStream(#[from] oneshot::error::RecvError),
     #[error("main loop cannot send stream")]
     SendStream(#[from] mpsc::error::SendError<Command>),
+    #[error("remote host longer than 255 octets")]
+    RHostTooLong(#[from] std::num::TryFromIntError),
+    #[error("server did not complete the handshake")]
+    ServerHandshake,
+
+    // These are for the socks server
+    #[error("only supports SOCKSv5")]
+    Socksv4,
+    #[error("invalid domain name: {0}")]
+    DomainName(#[from] std::string::FromUtf8Error),
+    #[error("only supports NOAUTH")]
+    OtherAuth,
+    #[error("cannot read socks request")]
+    SocksRequest,
 }
 
-/// Construct a remote based on the description.
-/// For UDP, there is a brief handshake to exchange the destination,
-/// similar to SOCKS5. Then, the sockets are connected to each other.
+/// Construct a TCP remote based on the description. These are simple because
+/// a new channel can be created for each new connection and they do not need
+/// to persist afther the connection.
+/// This should be spawned as tasks and they will remain as long as `client`
+/// is alive. Individual connection tasks are spawned as connections appear.
 #[tracing::instrument(skip(command_tx))]
-pub async fn handle_remote(remote: Remote, command_tx: mpsc::Sender<Command>) -> Result<(), Error> {
+pub async fn handle_remote(
+    remote: Remote,
+    mut command_tx: mpsc::Sender<Command>,
+) -> Result<(), Error> {
     debug!("Opening remote {remote}");
-    match (remote.local_addr, remote.protocol) {
-        (LocalSpec::Inet((lhost, lport)), Protocol::Tcp) => {
+    // And protocol is guaranteed to be TCP
+    match (remote.local_addr, remote.remote_addr, remote.protocol) {
+        (LocalSpec::Inet((lhost, lport)), RemoteSpec::Inet((rhost, rport)), Protocol::Tcp) => {
             let listener = TcpListener::bind((lhost, lport)).await?;
             info!("Listening on port {lport}");
             loop {
                 let (tcp_stream, _) = listener.accept().await?;
-                let (tx, rx) = oneshot::channel();
-                command_tx.send((tx, ChannelType::Stream)).await?;
-                let stream = rx.await?;
-                let (tcp_rx, tcp_tx) = tokio::io::split(tcp_stream);
-                let rspec = remote.remote_addr.clone();
-                tokio::spawn(
-                    async move { handle_tcp_connection(stream, rspec, tcp_rx, tcp_tx).await },
-                );
+                // A new channel is created for each incoming TCP connection.
+                // It's already TCP, anyways.
+                let channel = request_channel(&mut command_tx).await?;
+                let rhost = rhost.clone();
+                tokio::spawn(async move {
+                    handle_tcp_connection(channel, &rhost, rport, tcp_stream).await
+                });
             }
         }
-        (LocalSpec::Inet((lhost, lport)), Protocol::Udp) => {
-            let socket = tokio::net::UdpSocket::bind((lhost, lport)).await?;
-            let (rhost, rport) = if let RemoteSpec::Inet((rhost, rport)) = remote.remote_addr {
-                (rhost, rport)
-            } else {
-                unreachable!("Should have been caught by the parser");
-            };
+        (LocalSpec::Inet((lhost, lport)), RemoteSpec::Inet((rhost, rport)), Protocol::Udp) => {
+            let socket = UdpSocket::bind((lhost, lport)).await?;
+            info!("Bound on port {lport}");
+            let command_tx = command_tx.clone();
+            let rhost = rhost.clone();
+            tokio::spawn(handle_udp_socket(command_tx, socket, rhost, rport));
+            Ok(())
+        }
+        (LocalSpec::Stdio, RemoteSpec::Inet((rhost, rport)), _) => {
+            let (mut stdin, mut stdout) = (tokio::io::stdin(), tokio::io::stdout());
+            // We want `loop` to be able to continue after a connection failure
+            loop {
+                let mut channel = request_channel(&mut command_tx).await?;
+                channel_tcp_handshake(&mut channel, &rhost, rport).await?;
+                let (remote_rx, remote_tx) = tokio::io::split(channel);
+                match pipe_streams(&mut stdin, &mut stdout, remote_rx, remote_tx).await {
+                    Err(err) => {
+                        warn!("Remote disconnected");
+                        if !super::retryable_errors(&err) {
+                            break Err(err.into());
+                        }
+                        // Else just retry
+                    }
+                    Ok(_) => {
+                        break Ok(());
+                    }
+                }
+            }
+        }
+        (LocalSpec::Inet((lhost, lport)), RemoteSpec::Socks, _) => {
+            // The parser guarantees that the protocol is TCP
+            let listener = TcpListener::bind((lhost, lport)).await?;
             info!("Listening on port {lport}");
             loop {
-                let (tx, rx) = oneshot::channel();
-                command_tx.send((tx, ChannelType::Datagram)).await?;
-                let mut stream = rx.await?;
-                let mut rhost_len = rhost.len();
-                // Send the destination address length.
-                // If the length is greater than 255, we send 255 and
-                // the server should keep reading until it is not 255.
-                while rhost_len > 0xff {
-                    stream.write_u8(0xff).await?;
-                    rhost_len -= 255;
-                }
-                // XXX: Everything is a hack.
-                stream.write_u8(rhost_len as u8).await?;
-                // Send the destination address.
-                stream.write_all(rhost.as_bytes()).await?;
-                // Send the destination port.
-                stream.write_u16(rport).await?;
-                let mut buf = vec![0; 1024];
-                let (len, addr) = socket.recv_from(&mut buf).await?;
-                stream.write_u64(len as u64).await?;
-                stream.write_all(&buf[..len]).await?;
-                let len = stream.read_u64().await? as usize;
-                stream.read_exact(&mut buf[..len]).await?;
-                socket.send_to(&buf[..len], addr).await?;
+                let (tcp_stream, _) = listener.accept().await?;
+                let (tcp_rx, tcp_tx) = tokio::io::split(tcp_stream);
+                handle_socks_connection(command_tx.clone(), tcp_rx, tcp_tx).await?;
             }
         }
-        (LocalSpec::Stdio, Protocol::Tcp) => {
-            let (tx, rx) = oneshot::channel();
-            command_tx.send((tx, ChannelType::Stream)).await?;
-            let stream = rx.await?;
-            let rspec = remote.remote_addr.clone();
-            handle_tcp_connection(stream, rspec, tokio::io::stdin(), tokio::io::stdout()).await
-        }
-        (LocalSpec::Stdio, Protocol::Udp) => {
-            // XXX: What does this even mean?
-            let (rhost, rport) = if let RemoteSpec::Inet((rhost, rport)) = remote.remote_addr {
-                (rhost, rport)
-            } else {
-                unreachable!("Should have been caught by the parser");
-            };
-            let (tx, rx) = oneshot::channel();
-            command_tx.send((tx, ChannelType::Datagram)).await?;
-            let mut stream = rx.await?;
-            let stdin_reader = BufReader::new(tokio::io::stdin());
-            let mut stdin_lines = stdin_reader.lines();
-            let mut stdout_writer = BufWriter::new(tokio::io::stdout());
-            while let Some(line) = stdin_lines.next_line().await? {
-                let mut rhost_len = rhost.len();
-                // Send the destination address length.
-                // If the length is greater than 255, we send 255 and
-                // the server should keep reading until it is not 255.
-                while rhost_len > 0xff {
-                    stream.write_u8(0xff).await?;
-                    rhost_len -= 255;
-                }
-                // XXX: Everything is a hack.
-                stream.write_u8(rhost_len as u8).await?;
-                // Send the destination address.
-                stream.write_all(rhost.as_bytes()).await?;
-                // Send the destination port.
-                stream.write_u16(rport).await?;
-                let len = line.len();
-                stream.write_u64(len as u64).await?;
-                stream.write_all(line.as_bytes()).await?;
-                let len = stream.read_u64().await? as usize;
-                let mut buf = vec![0; len];
-                stream.read_exact(&mut buf).await?;
-                stdout_writer.write_all(&buf).await?;
-            }
-            Ok(())
+        (LocalSpec::Stdio, RemoteSpec::Socks, _) => {
+            // The parser guarantees that the protocol is TCP
+            Ok(
+                handle_socks_connection(
+                    command_tx.clone(),
+                    tokio::io::stdin(),
+                    tokio::io::stdout(),
+                )
+                .await?,
+            )
         }
     }
 }
 
-/// Handle a TCP connection.
-#[tracing::instrument(skip(stream, local_rx, local_tx))]
-async fn handle_tcp_connection<R, T>(
-    mut stream: DuplexStream,
-    rspec: RemoteSpec,
-    mut local_rx: R,
-    mut local_tx: T,
-) -> Result<(), Error>
-where
-    R: AsyncReadExt + Unpin + Send + 'static,
-    T: AsyncWriteExt + Unpin + Send + 'static,
-{
-    // I could have used a giant match here, but I think this is more readable.
-    if rspec == RemoteSpec::Socks {
-        debug!("Forwarding local to the internal socks5 proxy");
-        let (mut rx, mut tx) = tokio::io::split(stream);
-        pipe_streams(&mut local_rx, &mut local_tx, &mut rx, &mut tx).await?;
-        debug!("SOCKS connection closed");
-        Ok(())
+/// Request a channel from the mux
+/// We use a `&mut` to make sure we have the exclusive borrow.
+/// Just to make my life easier.
+pub(crate) async fn request_channel(
+    command_tx: &mut mpsc::Sender<Command>,
+) -> Result<DuplexStream, Error> {
+    let (tx, rx) = oneshot::channel();
+    command_tx.send(tx).await?;
+    Ok(rx.await?)
+}
+
+/// Handshaking stuff. See `server/mod.rs`.
+pub(crate) async fn channel_tcp_handshake(
+    channel: &mut DuplexStream,
+    rhost: &str,
+    rport: u16,
+) -> Result<(), Error> {
+    let command = 0x01;
+    let rhost_len = u8::try_from(rhost.len())?;
+    let mut encoded_rhost = rhost.into();
+    let mut data = vec![command, rhost_len];
+    data.append(&mut encoded_rhost);
+    channel.write_all(&data).await?;
+    channel.write_u16(rport).await?;
+    if channel.read_u8().await? != 0x03 {
+        Err(Error::ServerHandshake)
     } else {
-        // We want to ask the socks5 proxy to connect to another port.
-        let (rhost, rport) = match rspec {
-            RemoteSpec::Inet((rhost, rport)) => (rhost, rport),
-            RemoteSpec::Socks => unreachable!("already matched this case above"),
-        };
-        debug!("Forwarding local to the remote socks5 proxy");
-        async_socks5::connect(&mut stream, (rhost, rport), None).await?;
-        let (mut socksified_rx, mut socksified_tx) = tokio::io::split(stream);
-        pipe_streams(
-            &mut local_rx,
-            &mut local_tx,
-            &mut socksified_rx,
-            &mut socksified_tx,
-        )
-        .await?;
-        debug!("SOCKS connection closed");
         Ok(())
+    }
+}
+
+/// Handshaking stuff. See `server/mod.rs`.
+pub(crate) async fn channel_udp_handshake(
+    channel: &mut DuplexStream,
+    rhost: &str,
+    rport: u16,
+) -> Result<(), Error> {
+    let command = 0x03;
+    let rhost_len = u8::try_from(rhost.len())?;
+    let mut encoded_rhost = rhost.into();
+    let mut data = vec![command, rhost_len];
+    data.append(&mut encoded_rhost);
+    channel.write_all(&data).await?;
+    channel.write_u16(rport).await?;
+    if channel.read_u8().await? != 0x03 {
+        Err(Error::ServerHandshake)
+    } else {
+        Ok(())
+    }
+}
+
+/// Handle a TCP connection.
+#[tracing::instrument(skip(channel, tcp_stream))]
+async fn handle_tcp_connection(
+    mut channel: DuplexStream,
+    rhost: &str,
+    rport: u16,
+    tcp_stream: TcpStream,
+) -> Result<(), Error> {
+    let (mut tcp_rx, mut tcp_tx) = tokio::io::split(tcp_stream);
+    channel_tcp_handshake(&mut channel, rhost, rport).await?;
+    let (mut remote_rx, mut remote_tx) = tokio::io::split(channel);
+    pipe_streams(&mut tcp_rx, &mut tcp_tx, &mut remote_rx, &mut remote_tx).await?;
+    debug!("SOCKS connection closed");
+    Ok(())
+}
+
+/// Handle a UDP socket.
+// TODO: We need a better way to handle UDP
+// I am thinking of a pool of channels that are used for UDP
+// connections. Probably organized as `HashMap<(rhost, rport), channel>`.
+#[tracing::instrument(skip(command_tx, socket))]
+async fn handle_udp_socket(
+    mut command_tx: mpsc::Sender<Command>,
+    socket: UdpSocket,
+    rhost: String,
+    rport: u16,
+) -> Result<(), Error> {
+    let mut channel = request_channel(&mut command_tx).await?;
+    channel_udp_handshake(&mut channel, &rhost, rport).await?;
+    let (mut channel_rx, mut channel_tx) = tokio::io::split(channel);
+    let mut buf = [0u8; 65536];
+    loop {
+        let (len, addr) = socket.recv_from(&mut buf).await?;
+        channel_tx.write_all(&buf[..len]).await?;
+        let len = channel_rx.read(&mut buf).await?;
+        socket.send_to(&buf[..len], &addr).await?;
     }
 }

@@ -1,8 +1,26 @@
 //! Penguin server.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
+//! Architecture:
+//! The system is similar to a traditional SOCKS5 proxy, but the protocol
+//! allows for UDP to be transmitted over the same WebSocket connection.
+//! It is essentially a SOCKS5 forwarder over a WebSocket.
+//!
+//! - The client and the server communicate over a WebSocket.
+//! - (`mux`) The WebSocket is converted to a `AsyncRead + AsyncWrite` stream.
+//!   and multiplexed to allow multiple simultaneous connections.
+//!   Upon handshake, the client sends the type, destination address, and port
+//!   in a way similar to SOCKS5:
+//!   - 1 byte: command (1 for TCP, 3 for UDP)
+//!   - variable: 1 + (0..256) bytes: length + (domain name or IP)
+//!   - 2 bytes: port in network byte order
+//!   Then, the server responds with a u8 (0x03) on success. On failure, the
+//!   channel is closed.
+//! - (`tcp_forwarder`) The multiplexed channel is converted to a TCP stream.
+//! - (`udp_forwarder`) The multiplexed channel is converted to UDP datagrams.
+
 mod backend_proxy;
-mod socks;
+mod tcp_forwarder;
 mod udp_forwarder;
 mod websocket;
 
