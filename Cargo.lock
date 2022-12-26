@@ -23,28 +23,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "async-socks5"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77f634add2445eb2c1f785642a67ca1073fedd71e73dc3ca69435ef9b9bdedc7"
-dependencies = [
- "async-trait",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "async-trait"
-version = "0.1.60"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "677d1d8ab452a3936018a687b20e6f7cf5363d713b732b8884001317b0e48aa3"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "atty"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1309,7 +1287,6 @@ name = "rusty-penguin"
 version = "0.1.2"
 dependencies = [
  "async-channel",
- "async-socks5",
  "bincode",
  "bytes",
  "clap 4.0.32",
@@ -1325,7 +1302,6 @@ dependencies = [
  "rustls-native-certs",
  "rustls-pemfile 1.0.1",
  "serde",
- "socksv5",
  "tempfile",
  "thiserror",
  "tokio",
@@ -1524,17 +1500,6 @@ checksum = "02e2d2db9033d13a1567121ddd7a095ee144db4e1ca1b1bda3419bc0da294ebd"
 dependencies = [
  "libc",
  "winapi",
-]
-
-[[package]]
-name = "socksv5"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aacc0d3f4727eeea5226189bf99d225b3f496d1379305c492f2af06adfeb8a51"
-dependencies = [
- "byteorder",
- "thiserror",
- "tokio",
 ]
 
 [[package]]
