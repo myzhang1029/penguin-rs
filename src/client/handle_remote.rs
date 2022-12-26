@@ -239,8 +239,8 @@ async fn handle_udp_socket(
         channel_udp_handshake(&mut channel_rx, &mut channel_tx, &rhost, rport).await?;
         let mut buf = [0u8; 65536];
         let e = loop {
-            // XXX: Note that we block on reading from the channel.
-            // Timeout is handled on the other side.
+            // XXX: Note that we block on reading from the channel. This means that
+            // only one client can use the channel at a time.
             let (len, addr) = socket.recv_from(&mut buf).await?;
             complete_or_break!(channel_tx.write_u32(len as u32).await);
             complete_or_break!(channel_tx.write_all(&buf[..len]).await);

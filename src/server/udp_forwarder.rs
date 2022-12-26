@@ -7,9 +7,6 @@ use tokio::{
 };
 use tracing::debug;
 
-/// Timeout for UDP reads.
-const UDP_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(30);
-
 /// Start a UDP forwarder server on the given listener.
 /// Should be the entry point for a new task.
 #[tracing::instrument(skip(chan_rx, chan_tx), level = "debug")]
@@ -25,7 +22,7 @@ where
 {
     let rsocket = UdpSocket::bind("0.0.0.0:0").await?;
     let arc_socket = std::sync::Arc::new(rsocket);
-    let mut reader_job = {
+    let reader_job = {
         let socket = arc_socket.clone();
         // The final `Ok` is for type inference.
         #[allow(unreachable_code)]
@@ -62,11 +59,6 @@ where
             }
         }
     };
-    // Wait for the reader job to drain.
-    if let Ok(r) = tokio::time::timeout(UDP_TIMEOUT, &mut reader_job).await {
-        r??;
-    }
-    // Now terminate it.
     reader_job.abort();
     result
 }

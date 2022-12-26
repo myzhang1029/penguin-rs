@@ -44,3 +44,73 @@ async fn main() {
         std::process::exit(1);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{client::ws_connect::ServerUrl, parse_remote::Remote};
+    use std::str::FromStr;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::{TcpListener, TcpStream},
+    };
+
+    #[tokio::test]
+    async fn test_it_works() {
+        let server_args = arg::ServerArgs {
+            host: "127.0.0.1".to_string(),
+            port: 30554,
+            backend: None,
+            obfs: false,
+            not_found_resp: "404".to_string(),
+            ws_psk: None,
+            tls_ca: None,
+            tls_cert: None,
+            tls_key: None,
+            _pid: false,
+            _socks5: false,
+            _reverse: false,
+            _auth: None,
+            _authfile: None,
+            _keepalive: 0,
+            _key: None,
+        };
+        let client_args = arg::ClientArgs {
+            server: ServerUrl::from_str("ws://127.0.0.1:30554/ws").unwrap(),
+            remote: vec![Remote::from_str("127.0.0.1:21628:127.0.0.1:10807").unwrap()],
+            ws_psk: None,
+            keepalive: 0,
+            max_retry_count: 10,
+            max_retry_interval: 10,
+            proxy: None,
+            header: vec![],
+            tls_ca: None,
+            tls_cert: None,
+            tls_key: None,
+            tls_skip_verify: false,
+            hostname: Some("localhost".to_string()),
+            _pid: false,
+            _fingerprint: None,
+            _auth: None,
+        };
+        let input_bytes: Vec<u8> = (0..(1024 * 1024)).map(|_| rand::random::<u8>()).collect();
+        let input_len = input_bytes.len();
+        let second_task = tokio::spawn(async move {
+            let listener = TcpListener::bind("127.0.0.1:10807").await.unwrap();
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut output_bytes = vec![0u8; input_len];
+            stream.read_exact(&mut output_bytes).await.unwrap();
+            output_bytes
+        });
+
+        let client_task = tokio::spawn(crate::client::client_main(client_args));
+        let server_task = tokio::spawn(crate::server::server_main(server_args));
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        let mut sock = TcpStream::connect("127.0.0.1:21628").await.unwrap();
+        sock.write_all(&input_bytes).await.unwrap();
+        let output_bytes = second_task.await.unwrap();
+        assert_eq!(input_bytes, output_bytes);
+        server_task.abort();
+        client_task.abort();
+    }
+}

@@ -167,10 +167,6 @@ pub struct ServerArgs {
     /// plain sight.
     #[arg(long)]
     pub(crate) backend: Option<String>,
-    /// Allow clients to access the internal SOCKS5 proxy. See
-    /// penguin client --help for more information.
-    #[arg(long = "socks5")]
-    pub(crate) socks5: bool,
     /// Try harder to hide from Active Probes (disable /health and
     /// /version endpoints and HTTP headers that could potentially be used
     /// to fingerprint penguin). It is strongly recommended to use --ws-psk
@@ -204,6 +200,9 @@ pub struct ServerArgs {
     /// For compatibility with `chisel` only. This option is a no-op.
     #[arg(long = "pid")]
     pub(crate) _pid: bool,
+    /// For compatibility with `chisel` only. This option is a no-op.
+    #[arg(long = "socks5")]
+    pub(crate) _socks5: bool,
     /// For compatibility with `chisel` only. This option is a no-op.
     #[arg(long = "reverse")]
     pub(crate) _reverse: bool,
