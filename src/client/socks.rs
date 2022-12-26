@@ -164,12 +164,7 @@ where
             pipe_streams(breader, writer, remote_rx, remote_tx).await?;
             Ok(())
         }
-        0x02 => {
-            todo!()
-        }
-        0x03 => {
-            todo!()
-        }
+        // TODO: UDP ASSOCIATE and BIND
         _ => {
             debug!("Invalid command {command}");
             writer

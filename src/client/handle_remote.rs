@@ -7,7 +7,7 @@ use crate::parse_remote::{LocalSpec, RemoteSpec};
 use crate::parse_remote::{Protocol, Remote};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
-use tokio::net::{TcpListener, TcpStream, UdpSocket};
+use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, info, warn};
 
@@ -60,12 +60,15 @@ pub async fn handle_remote(
                 // A new channel is created for each incoming TCP connection.
                 // It's already TCP, anyways.
                 let channel = request_channel(&mut command_tx).await?;
-                let (channel_rx, channel_tx) = tokio::io::split(channel);
-                let channel_rx = BufReader::new(channel_rx);
                 // Don't use `BufWriter` here because it will buffer the handshake
                 let rhost = rhost.clone();
                 tokio::spawn(async move {
-                    handle_tcp_connection(channel_rx, channel_tx, &rhost, rport, tcp_stream).await
+                    let (tcp_rx, tcp_tx) = tokio::io::split(tcp_stream);
+                    let tcp_rx = BufReader::new(tcp_rx);
+                    let (channel_rx, channel_tx) = tokio::io::split(channel);
+                    let channel_rx = BufReader::new(channel_rx);
+                    handle_tcp_connection(channel_rx, channel_tx, &rhost, rport, tcp_rx, tcp_tx)
+                        .await
                 });
             }
         }
@@ -188,19 +191,21 @@ where
 }
 
 /// Handle a TCP connection.
-#[tracing::instrument(skip(channel_rx, channel_tx, tcp_stream))]
-async fn handle_tcp_connection<R, W>(
-    mut channel_rx: R,
-    mut channel_tx: W,
+#[tracing::instrument(skip(channel_rx, channel_tx, tcp_rx, tcp_tx))]
+async fn handle_tcp_connection<ReadChan, WriteChan, ReadTcp, WriteTcp>(
+    mut channel_rx: ReadChan,
+    mut channel_tx: WriteChan,
     rhost: &str,
     rport: u16,
-    tcp_stream: TcpStream,
+    mut tcp_rx: ReadTcp,
+    mut tcp_tx: WriteTcp,
 ) -> Result<(), Error>
 where
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin,
+    ReadChan: AsyncRead + Unpin,
+    ReadTcp: AsyncRead + Unpin,
+    WriteChan: AsyncWrite + Unpin,
+    WriteTcp: AsyncWrite + Unpin,
 {
-    let (mut tcp_rx, mut tcp_tx) = tokio::io::split(tcp_stream);
     channel_tcp_handshake(&mut channel_rx, &mut channel_tx, rhost, rport).await?;
     pipe_streams(&mut tcp_rx, &mut tcp_tx, &mut channel_rx, &mut channel_tx).await?;
     debug!("SOCKS connection closed");
@@ -208,9 +213,6 @@ where
 }
 
 /// Handle a UDP socket.
-// TODO: We need a better way to handle UDP
-// I am thinking of a pool of channels that are used for UDP
-// connections. Probably organized as `HashMap<(rhost, rport), channel>`.
 #[tracing::instrument(skip(command_tx, socket))]
 async fn handle_udp_socket(
     mut command_tx: mpsc::Sender<Command>,
