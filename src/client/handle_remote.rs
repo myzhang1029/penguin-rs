@@ -51,7 +51,6 @@ pub async fn handle_remote(
     mut command_tx: mpsc::Sender<Command>,
 ) -> Result<(), Error> {
     debug!("Opening remote {remote}");
-    // And protocol is guaranteed to be TCP
     match (remote.local_addr, remote.remote_addr, remote.protocol) {
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Inet((rhost, rport)), Protocol::Tcp) => {
             let listener = TcpListener::bind((lhost, lport)).await?;
@@ -107,7 +106,7 @@ pub async fn handle_remote(
             loop {
                 let (tcp_stream, _) = listener.accept().await?;
                 let (tcp_rx, tcp_tx) = tokio::io::split(tcp_stream);
-                handle_socks_connection(command_tx.clone(), tcp_rx, tcp_tx).await?;
+                tokio::spawn(handle_socks_connection(command_tx.clone(), tcp_rx, tcp_tx));
             }
         }
         (LocalSpec::Stdio, RemoteSpec::Socks, _) => {
