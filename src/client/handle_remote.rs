@@ -9,7 +9,7 @@ use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use super::Command;
 
@@ -61,6 +61,7 @@ pub async fn handle_remote(
                 // It's already TCP, anyways.
                 let channel = request_channel(&mut command_tx).await?;
                 // Don't use `BufWriter` here because it will buffer the handshake
+                // And also make sure we don't nest `BufReader`s
                 let rhost = rhost.clone();
                 tokio::spawn(async move {
                     let (tcp_rx, tcp_tx) = tokio::io::split(tcp_stream);
@@ -212,6 +213,17 @@ where
     Ok(())
 }
 
+macro_rules! complete_or_break {
+    ($e:expr) => {
+        match $e {
+            Ok(v) => v,
+            Err(err) => {
+                break err;
+            }
+        }
+    };
+}
+
 /// Handle a UDP socket.
 #[tracing::instrument(skip(command_tx, socket))]
 async fn handle_udp_socket(
@@ -220,14 +232,26 @@ async fn handle_udp_socket(
     rhost: String,
     rport: u16,
 ) -> Result<(), Error> {
-    let channel = request_channel(&mut command_tx).await?;
-    let (mut channel_rx, mut channel_tx) = tokio::io::split(channel);
-    channel_udp_handshake(&mut channel_rx, &mut channel_tx, &rhost, rport).await?;
-    let mut buf = [0u8; 65536];
+    // Outer loop to handle channel reconnects
     loop {
-        let (len, addr) = socket.recv_from(&mut buf).await?;
-        channel_tx.write_all(&buf[..len]).await?;
-        let len = channel_rx.read(&mut buf).await?;
-        socket.send_to(&buf[..len], &addr).await?;
+        let channel = request_channel(&mut command_tx).await?;
+        let (mut channel_rx, mut channel_tx) = tokio::io::split(channel);
+        channel_udp_handshake(&mut channel_rx, &mut channel_tx, &rhost, rport).await?;
+        let mut buf = [0u8; 65536];
+        let e = loop {
+            // XXX: Note that we block on reading from the channel.
+            // Timeout is handled on the other side.
+            let (len, addr) = socket.recv_from(&mut buf).await?;
+            complete_or_break!(channel_tx.write_u32(len as u32).await);
+            complete_or_break!(channel_tx.write_all(&buf[..len]).await);
+            let len = complete_or_break!(channel_rx.read(&mut buf).await);
+            socket.send_to(&buf[..len], &addr).await?;
+        };
+        if super::retryable_errors(&e) {
+            continue;
+        } else {
+            error!("UDP socket error: {e}");
+            break Err(e.into());
+        }
     }
 }

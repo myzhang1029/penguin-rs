@@ -164,6 +164,7 @@ async fn get_send_chan(
 /// Returns true if we should retry the connection.
 fn retryable_errors(e: &std::io::Error) -> bool {
     e.kind() == std::io::ErrorKind::AddrNotAvailable
+        || e.kind() == std::io::ErrorKind::BrokenPipe
         || e.kind() == std::io::ErrorKind::ConnectionReset
         || e.kind() == std::io::ErrorKind::ConnectionRefused
 }

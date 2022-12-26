@@ -7,7 +7,7 @@ use crate::mux::{Multiplexor, Role, WebSocket as MuxWebSocket};
 use crate::proto_version::PROTOCOL_VERSION;
 use penguin_tokio_stream_multiplexor::DuplexStream;
 use thiserror::Error;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::task::JoinSet;
 use tracing::{debug, error, info, warn};
 use warp::{ws::WebSocket, Filter, Rejection, Reply};
@@ -34,19 +34,21 @@ pub enum Error {
 /// a `Result` with the port number that was used, and `chan` will be
 /// closed (dropped).
 #[tracing::instrument(skip(chan), level = "info")]
-async fn dispatch_conn(mut chan: DuplexStream, port: u16) -> Result<(), Error> {
-    let command = chan.read_u8().await.map_err(Error::Io)?;
-    let len = chan.read_u8().await.map_err(Error::Io)?;
+async fn dispatch_conn(chan: DuplexStream, port: u16) -> Result<(), Error> {
+    let (chan_rx, mut chan_tx) = tokio::io::split(chan);
+    let mut chan_rx = BufReader::new(chan_rx);
+    let command = chan_rx.read_u8().await.map_err(Error::Io)?;
+    let len = chan_rx.read_u8().await.map_err(Error::Io)?;
     let mut rhost = vec![0; len as usize];
-    chan.read_exact(&mut rhost).await.map_err(Error::Io)?;
+    chan_rx.read_exact(&mut rhost).await.map_err(Error::Io)?;
     let rhost = String::from_utf8(rhost).map_err(Error::Host)?;
-    let rport = chan.read_u16().await.map_err(Error::Io)?;
-    chan.write_u8(0x03).await.map_err(Error::Io)?;
+    let rport = chan_rx.read_u16().await.map_err(Error::Io)?;
+    chan_tx.write_u8(0x03).await.map_err(Error::Io)?;
     match command {
         1 => {
             // TCP
             info!("TCP connect to {rhost}:{rport}");
-            start_tcp_forwarder_on_channel(chan, &rhost, rport)
+            start_tcp_forwarder_on_channel(chan_rx, chan_tx, &rhost, rport)
                 .await
                 .map_err(Error::TcpForwarder)?;
             Ok(())
@@ -54,7 +56,7 @@ async fn dispatch_conn(mut chan: DuplexStream, port: u16) -> Result<(), Error> {
         3 => {
             // UDP
             info!("UDP forward to {rhost}:{rport}");
-            start_udp_forwarder_on_channel(chan, &rhost, rport)
+            start_udp_forwarder_on_channel(chan_rx, chan_tx, &rhost, rport)
                 .await
                 .map_err(Error::UdpForwarder)?;
             Ok(())
