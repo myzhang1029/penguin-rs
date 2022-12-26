@@ -1,28 +1,19 @@
 //! Run a remote connection.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use crate::client::socks::handle_socks_connection;
+use super::handle_remote_socks::handle_socks_connection;
+use super::handle_remote_tcp::{channel_tcp_handshake, handle_tcp_connection};
+use super::handle_remote_udp::{channel_udp_handshake, handle_udp_socket};
 use crate::mux::{pipe_streams, DuplexStream};
 use crate::parse_remote::{LocalSpec, RemoteSpec};
 use crate::parse_remote::{Protocol, Remote};
 use thiserror::Error;
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 
 use super::Command;
-
-macro_rules! complete_or_break {
-    ($e:expr) => {
-        match $e {
-            Ok(v) => v,
-            Err(err) => {
-                break err;
-            }
-        }
-    };
-}
 
 /// Do something or continue
 macro_rules! complete_or_continue {
@@ -195,110 +186,4 @@ pub(crate) async fn request_channel(
     let (tx, rx) = oneshot::channel();
     command_tx.send(tx).await?;
     Ok(rx.await?)
-}
-
-/// Handshaking stuff. See `server/mod.rs`.
-#[inline]
-pub(crate) async fn channel_tcp_handshake<R, W>(
-    mut channel_rx: R,
-    mut channel_tx: W,
-    rhost: &str,
-    rport: u16,
-) -> Result<(), Error>
-where
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin,
-{
-    let command = 0x01;
-    let rhost_len = u8::try_from(rhost.len())?;
-    let mut encoded_rhost = rhost.into();
-    let mut data = vec![command, rhost_len];
-    data.append(&mut encoded_rhost);
-    channel_tx.write_all(&data).await?;
-    channel_tx.write_u16(rport).await?;
-    if channel_rx.read_u8().await? != 0x03 {
-        Err(Error::ServerHandshake)
-    } else {
-        Ok(())
-    }
-}
-
-/// Handshaking stuff. See `server/mod.rs`.
-#[inline]
-pub(crate) async fn channel_udp_handshake<R, W>(
-    mut channel_rx: R,
-    mut channel_tx: W,
-    rhost: &str,
-    rport: u16,
-) -> Result<(), Error>
-where
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin,
-{
-    let command = 0x03;
-    let rhost_len = u8::try_from(rhost.len())?;
-    let mut encoded_rhost = rhost.into();
-    let mut data = vec![command, rhost_len];
-    data.append(&mut encoded_rhost);
-    channel_tx.write_all(&data).await?;
-    channel_tx.write_u16(rport).await?;
-    if channel_rx.read_u8().await? != 0x03 {
-        Err(Error::ServerHandshake)
-    } else {
-        Ok(())
-    }
-}
-
-/// Handle a TCP connection.
-#[tracing::instrument(skip(channel_rx, channel_tx, tcp_rx, tcp_tx))]
-async fn handle_tcp_connection<ReadChan, WriteChan, ReadTcp, WriteTcp>(
-    mut channel_rx: ReadChan,
-    mut channel_tx: WriteChan,
-    rhost: &str,
-    rport: u16,
-    mut tcp_rx: ReadTcp,
-    mut tcp_tx: WriteTcp,
-) -> Result<(), Error>
-where
-    ReadChan: AsyncRead + Unpin,
-    ReadTcp: AsyncRead + Unpin,
-    WriteChan: AsyncWrite + Unpin,
-    WriteTcp: AsyncWrite + Unpin,
-{
-    channel_tcp_handshake(&mut channel_rx, &mut channel_tx, rhost, rport).await?;
-    pipe_streams(&mut tcp_rx, &mut tcp_tx, &mut channel_rx, &mut channel_tx).await?;
-    debug!("SOCKS connection closed");
-    Ok(())
-}
-
-/// Handle a UDP socket.
-#[tracing::instrument(skip(command_tx, socket))]
-async fn handle_udp_socket(
-    mut command_tx: mpsc::Sender<Command>,
-    socket: UdpSocket,
-    rhost: String,
-    rport: u16,
-) -> Result<(), Error> {
-    // Outer loop to handle channel reconnects
-    loop {
-        let channel = request_channel(&mut command_tx).await?;
-        let (mut channel_rx, mut channel_tx) = tokio::io::split(channel);
-        channel_udp_handshake(&mut channel_rx, &mut channel_tx, &rhost, rport).await?;
-        let mut buf = [0u8; 65536];
-        let e = loop {
-            // XXX: Note that we block on reading from the channel. This means that
-            // only one client can use the channel at a time.
-            let (len, addr) = socket.recv_from(&mut buf).await?;
-            complete_or_break!(channel_tx.write_u32(len as u32).await);
-            complete_or_break!(channel_tx.write_all(&buf[..len]).await);
-            let len = complete_or_break!(channel_rx.read(&mut buf).await);
-            socket.send_to(&buf[..len], &addr).await?;
-        };
-        if super::retryable_errors(&e) {
-            continue;
-        } else {
-            error!("UDP socket error: {e}");
-            break Err(e.into());
-        }
-    }
 }

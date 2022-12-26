@@ -2,7 +2,9 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 mod handle_remote;
-mod socks;
+mod handle_remote_socks;
+mod handle_remote_tcp;
+mod handle_remote_udp;
 pub(crate) mod ws_connect;
 
 use crate::arg::ClientArgs;

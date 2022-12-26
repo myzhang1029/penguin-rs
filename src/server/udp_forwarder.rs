@@ -9,6 +9,8 @@ use tracing::debug;
 
 /// Start a UDP forwarder server on the given listener.
 /// Should be the entry point for a new task.
+/// I'm pretty sure this `Future` won't linger around after the other end of
+/// the channel is closed.
 #[tracing::instrument(skip(chan_rx, chan_tx), level = "debug")]
 pub async fn start_udp_forwarder_on_channel<R, W>(
     mut chan_rx: R,

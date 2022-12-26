@@ -1,10 +1,9 @@
 //! SOCKS 5 server.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use crate::{
-    client::handle_remote::{channel_tcp_handshake, request_channel, Error},
-    mux::pipe_streams,
-};
+use super::handle_remote::{request_channel, Error};
+use super::handle_remote_tcp::channel_tcp_handshake;
+use crate::mux::pipe_streams;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader},
     sync::mpsc,
