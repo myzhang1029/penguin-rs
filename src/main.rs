@@ -29,7 +29,7 @@ async fn main_real() -> Result<(), Error> {
 
     match cli_args.subcommand {
         arg::Commands::Client(args) => client::client_main(args).await?,
-        arg::Commands::Server(args) => server::server_main(args).await?,
+        arg::Commands::Server(args) => server::server_main(*args).await?,
     }
     Ok(())
 }

@@ -109,25 +109,6 @@ impl Display for Remote {
     }
 }
 
-impl clap::builder::TypedValueParser for Remote {
-    type Value = Self;
-
-    /// Parse a remote specification for clap.
-    #[tracing::instrument(skip(self, _cmd, _arg), level = "trace")]
-    fn parse_ref(
-        &self,
-        _cmd: &clap::Command,
-        _arg: Option<&clap::Arg>,
-        value: &std::ffi::OsStr,
-    ) -> Result<Self, clap::error::Error> {
-        let string_value = value
-            .to_str()
-            .ok_or_else(|| clap::Error::new(clap::error::ErrorKind::InvalidUtf8))?;
-        Self::from_str(string_value)
-            .map_err(|_err| clap::Error::new(clap::error::ErrorKind::ValueValidation))
-    }
-}
-
 impl FromStr for Remote {
     type Err = Error;
 

@@ -1,11 +1,13 @@
 //! Penguin server WebSocket listener.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use super::socks::start_socks_server_on_channel;
+use super::tcp_forwarder::start_tcp_forwarder_on_channel;
 use super::udp_forwarder::start_udp_forwarder_on_channel;
-use crate::mux::{ChannelType, Multiplexor, Role, WebSocket as MuxWebSocket};
+use crate::mux::{Multiplexor, Role, WebSocket as MuxWebSocket};
 use crate::proto_version::PROTOCOL_VERSION;
+use penguin_tokio_stream_multiplexor::DuplexStream;
 use thiserror::Error;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::task::JoinSet;
 use tracing::{debug, error, info, warn};
 use warp::{ws::WebSocket, Filter, Rejection, Reply};
@@ -14,14 +16,55 @@ use warp::{ws::WebSocket, Filter, Rejection, Reply};
 #[derive(Error, Debug)]
 pub enum Error {
     #[error(transparent)]
-    SocksServer(#[from] super::socks::Error),
+    TcpForwarder(std::io::Error),
     #[error(transparent)]
-    UdpForwarder(#[from] super::udp_forwarder::Error),
+    UdpForwarder(std::io::Error),
+    #[error(transparent)]
+    Io(std::io::Error),
+    #[error("invalid host: {0}")]
+    Host(std::string::FromUtf8Error),
+    #[error("invalid command: {0}")]
+    Command(u8),
 }
 
-/// Multiplex the WebSocket connection, create a SOCKS proxy over it,
-/// and handle the forwarding requests.
-#[tracing::instrument(skip(websocket))]
+/// Dispatch the WebSocket connection to the appropriate handler.
+/// See `mod.rs` for our protocol.
+///
+/// Should be spawned as a new task. In whatever case, it will return
+/// a `Result` with the port number that was used, and `chan` will be
+/// closed (dropped).
+#[tracing::instrument(skip(chan), level = "info")]
+async fn dispatch_conn(mut chan: DuplexStream, port: u16) -> Result<(), Error> {
+    let command = chan.read_u8().await.map_err(Error::Io)?;
+    let len = chan.read_u8().await.map_err(Error::Io)?;
+    let mut rhost = vec![0; len as usize];
+    chan.read_exact(&mut rhost).await.map_err(Error::Io)?;
+    let rhost = String::from_utf8(rhost).map_err(Error::Host)?;
+    let rport = chan.read_u16().await.map_err(Error::Io)?;
+    chan.write_u8(0x03).await.map_err(Error::Io)?;
+    match command {
+        1 => {
+            // TCP
+            info!("TCP connect to {rhost}:{rport}");
+            start_tcp_forwarder_on_channel(chan, &rhost, rport)
+                .await
+                .map_err(Error::TcpForwarder)?;
+            Ok(())
+        }
+        3 => {
+            // UDP
+            info!("UDP forward to {rhost}:{rport}");
+            start_udp_forwarder_on_channel(chan, &rhost, rport)
+                .await
+                .map_err(Error::UdpForwarder)?;
+            Ok(())
+        }
+        _ => Err(Error::Command(command)),
+    }
+}
+
+/// Multiplex the WebSocket connection and handle the forwarding requests.
+#[tracing::instrument(skip(websocket), level = "debug")]
 async fn handle_websocket(websocket: WebSocket) -> Result<(), super::Error> {
     let mws = MuxWebSocket::new(websocket);
     let mut mux = Multiplexor::new(mws, Role::Server);
@@ -30,18 +73,10 @@ async fn handle_websocket(websocket: WebSocket) -> Result<(), super::Error> {
     debug!("WebSocket connection established");
     let mut jobs = JoinSet::new();
     loop {
-        match mux.server_open_channel().await {
-            Ok((chan, port, chan_type)) => {
-                // `start_socks_server_on_channel` saves the port so we know
-                // which port to free when the channel is closed.
-                match chan_type {
-                    ChannelType::Stream => {
-                        jobs.spawn(start_socks_server_on_channel(chan, port));
-                    }
-                    ChannelType::Datagram => {
-                        jobs.spawn(start_udp_forwarder_on_channel(chan, port));
-                    }
-                }
+        match mux.open_channel().await {
+            Ok((chan, port)) => {
+                debug!("Listener on port {port} started");
+                jobs.spawn(dispatch_conn(chan, port));
             }
             Err(err) => {
                 warn!("Client disconnected: {err}");
@@ -50,22 +85,11 @@ async fn handle_websocket(websocket: WebSocket) -> Result<(), super::Error> {
             }
         }
         // Check if any of the jobs have finished
-        if let Ok(Some(r)) =
+        if let Ok(Some(Err(err))) =
             tokio::time::timeout(tokio::time::Duration::from_millis(1), jobs.join_next()).await
         {
-            match r {
-                Ok(Ok(port)) => {
-                    debug!("SOCKS listener on port {port} finished");
-                    mux.close_channel(port).await;
-                }
-                Ok(Err(err)) => {
-                    error!("SOCKS listener failed: {err}");
-                }
-                Err(err) => {
-                    if err.is_panic() {
-                        error!("Panic in a SOCKS listener: {err}");
-                    }
-                }
+            if err.is_panic() {
+                panic!("Panic in a SOCKS listener: {err}");
             }
         }
     }
