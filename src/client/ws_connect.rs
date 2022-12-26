@@ -7,7 +7,11 @@ use rustls::{
     client::{ServerCertVerified, ServerCertVerifier},
     ClientConfig, RootCertStore,
 };
-use std::sync::Arc;
+use std::{
+    ops::{Deref, DerefMut},
+    str::FromStr,
+    sync::Arc,
+};
 use thiserror::Error;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{
@@ -146,21 +150,20 @@ fn sanitize_url(url: &str) -> Result<Url, Error> {
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(level = "debug", skip(extra_headers))]
 pub async fn handshake(
-    server_url: &str,
+    url: ServerUrl,
     ws_psk: Option<&str>,
     override_hostname: Option<&str>,
-    extra_headers: Vec<String>,
+    extra_headers: Vec<Header>,
     tls_ca: Option<&str>,
     tls_key: Option<&str>,
     tls_cert: Option<&str>,
     tls_insecure: bool,
 ) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Error> {
-    let url = sanitize_url(server_url)?;
     // We already sanitized https URLs to wss
     let is_tls = url.scheme() == "wss";
 
     // Use a request to allow additional headers
-    let mut req: Request = url.into_client_request()?;
+    let mut req: Request = url.0.into_client_request()?;
     let req_headers = req.headers_mut();
     // Add protocol version
     req_headers.insert(
@@ -176,14 +179,8 @@ pub async fn handshake(
         req_headers.insert("host", HeaderValue::from_str(hostname)?);
     }
     // Now add custom headers
-    for header in &extra_headers {
-        let (name, value) = header
-            .split_once(':')
-            .ok_or(Error::InvalidHeaderFormat(header.to_string()))?;
-        req_headers.insert(
-            HeaderName::from_bytes(name.as_bytes())?,
-            HeaderValue::from_str(value.trim())?,
-        );
+    for header in extra_headers {
+        req_headers.insert(header.name, header.value);
     }
 
     let connector = if is_tls {
@@ -218,32 +215,58 @@ pub async fn handshake(
     Ok(ws_stream)
 }
 
+/// Server URL
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ServerUrl(pub Url);
+
+impl FromStr for ServerUrl {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let url = sanitize_url(s)?;
+        Ok(ServerUrl(url))
+    }
+}
+
+impl Deref for ServerUrl {
+    type Target = Url;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for ServerUrl {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+/// HTTP Header
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Header {
+    pub(crate) name: HeaderName,
+    pub(crate) value: HeaderValue,
+}
+
+impl FromStr for Header {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (name, value) = s
+            .split_once(':')
+            .ok_or(Error::InvalidHeaderFormat(s.to_string()))?;
+        let name = HeaderName::from_str(name)?;
+        let value = HeaderValue::from_str(value.trim())?;
+        Ok(Header { name, value })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use rcgen::generate_simple_self_signed;
     use tempfile::tempdir;
-
-    #[test]
-    fn test_sanitize_url() {
-        assert_eq!(
-            sanitize_url("wss://example.com").unwrap().as_str(),
-            "wss://example.com/"
-        );
-        assert_eq!(
-            sanitize_url("ws://example.com").unwrap().as_str(),
-            "ws://example.com/"
-        );
-        assert_eq!(
-            sanitize_url("https://example.com").unwrap().as_str(),
-            "wss://example.com/"
-        );
-        assert_eq!(
-            sanitize_url("http://example.com").unwrap().as_str(),
-            "ws://example.com/"
-        );
-        assert!(sanitize_url("ftp://example.com").is_err());
-    }
 
     #[test]
     fn test_generate_rustls_rootcertstore() {
@@ -259,5 +282,51 @@ mod tests {
         let custom_root = generate_rustls_rootcertstore(Some(ca_path.to_str().unwrap()));
         assert!(custom_root.is_ok());
         assert_eq!(custom_root.unwrap().len(), 1);
+    }
+
+    #[test]
+    // Also testing `sanitize_url`
+    fn test_serverurl_fromstr() {
+        assert_eq!(
+            ServerUrl::from_str("example.com").unwrap().as_str(),
+            "ws://example.com/"
+        );
+        assert_eq!(
+            ServerUrl::from_str("wss://example.com").unwrap().as_str(),
+            "wss://example.com/"
+        );
+        assert_eq!(
+            ServerUrl::from_str("ws://example.com").unwrap().as_str(),
+            "ws://example.com/"
+        );
+        assert_eq!(
+            ServerUrl::from_str("https://example.com").unwrap().as_str(),
+            "wss://example.com/"
+        );
+        assert_eq!(
+            ServerUrl::from_str("http://example.com").unwrap().as_str(),
+            "ws://example.com/"
+        );
+        assert!(ServerUrl::from_str("ftp://example.com").is_err());
+    }
+
+    #[test]
+    fn test_header_parser() {
+        let header = Header::from_str("X-Test: test").unwrap();
+        assert_eq!(header.name.as_str().to_lowercase(), "X-Test".to_lowercase());
+        assert!(header.value.to_str().is_ok());
+        assert_eq!(header.value.to_str().unwrap(), "test");
+        assert!(Header::from_str("X-Test").is_err());
+        // HTTP forbids empty header values, but we allow it
+        //assert!(Header::from_str("X-Test:").is_err());
+        assert!(Header::from_str(": test").is_err());
+        let header = Header::from_str("X-Test: test: test").unwrap();
+        assert_eq!(header.name.as_str().to_lowercase(), "X-Test".to_lowercase());
+        assert!(header.value.to_str().is_ok());
+        assert_eq!(header.value.to_str().unwrap(), "test: test");
+        let header = Header::from_str("X-Test:test").unwrap();
+        assert_eq!(header.name.as_str().to_lowercase(), "X-Test".to_lowercase());
+        assert!(header.value.to_str().is_ok());
+        assert_eq!(header.value.to_str().unwrap(), "test");
     }
 }

@@ -3,7 +3,7 @@
 
 mod handle_remote;
 mod socks;
-mod ws_connect;
+pub(crate) mod ws_connect;
 
 use crate::arg::ClientArgs;
 use crate::mux::{DuplexStream, Multiplexor, Role, WebSocket};
@@ -55,7 +55,7 @@ pub async fn client_main(args: ClientArgs) -> Result<(), Error> {
     // Main loop with retry
     loop {
         match ws_connect::handshake(
-            &args.server,
+            args.server.clone(),
             args.ws_psk.as_deref(),
             args.hostname.as_deref(),
             args.header.clone(),

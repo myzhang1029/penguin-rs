@@ -1,6 +1,7 @@
 //! Command line arguments parsing.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
+use crate::client::ws_connect::{Header, ServerUrl};
 use crate::parse_remote::Remote;
 use clap::{arg, command, Args, Parser, Subcommand};
 
@@ -29,7 +30,7 @@ pub enum Commands {
 #[derive(Args, Debug)]
 pub struct ClientArgs {
     /// URL to the penguin server.
-    pub(crate) server: String,
+    pub(crate) server: ServerUrl,
     /// Remote connections tunneled through the server, each of
     /// which come in the form:
     ///
@@ -114,7 +115,7 @@ pub struct ClientArgs {
     /// Can be used multiple times.
     /// (e.g --header "Foo: Bar" --header "Hello: World")
     #[arg(short = 'H', long)]
-    pub(crate) header: Vec<String>,
+    pub(crate) header: Vec<Header>,
     /// Optionally set the 'Host' header (defaults to the host
     /// found in the server url).
     #[arg(long)]
@@ -218,4 +219,91 @@ pub struct ServerArgs {
     /// For compatibility with `chisel` only. This option is a no-op.
     #[arg(long = "key")]
     pub(crate) _key: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use crate::parse_remote::{LocalSpec, Protocol, RemoteSpec};
+
+    use super::*;
+
+    #[test]
+    fn test_client_args_minimal() {
+        let args =
+            PenguinCli::parse_from(&["penguin", "client", "127.0.0.1:9999/endpoint", "1234"]);
+        assert!(matches!(args.subcommand, Commands::Client(_)));
+        if let Commands::Client(args) = args.subcommand {
+            assert_eq!(
+                args.server,
+                ServerUrl::from_str("127.0.0.1:9999/endpoint").unwrap()
+            );
+            assert_eq!(
+                args.remote,
+                [Remote {
+                    local_addr: LocalSpec::Inet(("0.0.0.0".to_string(), 1234)),
+                    remote_addr: RemoteSpec::Inet(("127.0.0.1".to_string(), 1234)),
+                    protocol: Protocol::Tcp,
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn test_client_args_full() {
+        let args = PenguinCli::parse_from(&[
+            "penguin",
+            "client",
+            "wss://127.0.0.1:9999/endpoint",
+            "stdio:localhost:53/udp",
+            "192.168.1.1:8080:localhost:80/tcp",
+            "--ws-psk",
+            "avocado",
+            "--keepalive",
+            "10",
+            "--max-retry-count",
+            "400",
+            "--max-retry-interval",
+            "1000",
+            "--proxy",
+            "socks5://abc:123@localhost:1080",
+            "--header",
+            "X-Test: test",
+            "--hostname",
+            "example.com",
+        ]);
+        assert!(matches!(args.subcommand, Commands::Client(_)));
+        if let Commands::Client(args) = args.subcommand {
+            assert_eq!(
+                args.server,
+                ServerUrl::from_str("wss://127.0.0.1:9999/endpoint").unwrap()
+            );
+            assert_eq!(
+                args.remote,
+                [
+                    Remote {
+                        local_addr: LocalSpec::Stdio,
+                        remote_addr: RemoteSpec::Inet(("localhost".to_string(), 53)),
+                        protocol: Protocol::Udp,
+                    },
+                    Remote {
+                        local_addr: LocalSpec::Inet(("192.168.1.1".to_string(), 8080)),
+                        remote_addr: RemoteSpec::Inet(("localhost".to_string(), 80)),
+                        protocol: Protocol::Tcp,
+                    },
+                ]
+            );
+            assert_eq!(args.ws_psk, Some("avocado".to_string()));
+            assert_eq!(args.keepalive, 10);
+            assert_eq!(args.max_retry_count, 400);
+            assert_eq!(args.max_retry_interval, 1000);
+            assert_eq!(
+                args.proxy,
+                Some("socks5://abc:123@localhost:1080".to_string())
+            );
+            assert_eq!(args.header, [Header::from_str("X-Test:test").unwrap()]);
+            assert_eq!(args.hostname, Some("example.com".to_string()));
+        }
+    }
 }
