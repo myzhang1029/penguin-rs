@@ -50,6 +50,6 @@ where
 {
     channel_tcp_handshake(&mut channel_rx, &mut channel_tx, rhost, rport).await?;
     pipe_streams(&mut tcp_rx, &mut tcp_tx, &mut channel_rx, &mut channel_tx).await?;
-    debug!("SOCKS connection closed");
+    debug!("TCP connection closed");
     Ok(())
 }

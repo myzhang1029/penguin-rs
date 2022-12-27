@@ -9,13 +9,12 @@ pub(crate) mod ws_connect;
 
 use crate::arg::ClientArgs;
 use crate::mux::{DuplexStream, Multiplexor, Role, WebSocket};
-use futures_util::pin_mut;
 use handle_remote::handle_remote;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
 use tokio::time;
-use tracing::{info, trace, warn};
+use tracing::{error, info, trace, warn};
 
 /// Errors
 #[derive(Debug, Error)]
@@ -30,6 +29,8 @@ pub enum Error {
     MaxRetryCountReached,
     #[error(transparent)]
     Mux(#[from] crate::mux::Error),
+    #[error("cannot put sender back to the queue: {0}")]
+    CommandPutBack(#[from] mpsc::error::SendError<Command>),
 }
 
 // Send the information about how to send the stream to the listener
@@ -46,7 +47,7 @@ pub async fn client_main(args: ClientArgs) -> Result<(), Error> {
     // Initial retry interval is 200ms
     let mut current_retry_interval: u64 = 200;
     // Channel for listeners to send commands to the main loop
-    let (cmd_tx, mut cmd_rx) = mpsc::channel::<Command>(32);
+    let (mut cmd_tx, mut cmd_rx) = mpsc::channel::<Command>(32);
     let mut jobs = JoinSet::new();
     // Spawn listeners. See `handle_remote.rs` for the implementation considerations.
     for remote in args.remote {
@@ -69,10 +70,12 @@ pub async fn client_main(args: ClientArgs) -> Result<(), Error> {
         .await
         {
             Ok(ws_stream) => {
-                on_connected(ws_stream, &mut cmd_rx, args.keepalive).await?;
+                on_connected(ws_stream, &mut cmd_rx, &mut cmd_tx, args.keepalive).await?;
                 warn!("Disconnected from server");
+                // Since we once connected, reset the retry count
                 current_retry_count = 0;
                 current_retry_interval = 200;
+                // Now retry
             }
             Err(ws_connect::Error::Tungstenite(tungstenite::error::Error::Io(e))) => {
                 if !retryable_errors(&e) {
@@ -103,50 +106,62 @@ pub async fn client_main(args: ClientArgs) -> Result<(), Error> {
 /// local listeners, establishes them, and sends them back to the listeners.
 /// If this function returns `Ok`, the client will retry;
 /// if it returns `Err`, the client will exit.
+///
+/// We want a copy of `command_tx` because we want to put the sender back if we
+/// fail to get a new channel for the remote.
 #[tracing::instrument(skip_all)]
 async fn on_connected(
     ws_stream: tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
     command_rx: &mut mpsc::Receiver<Command>,
+    command_tx: &mut mpsc::Sender<Command>,
     keepalive: u64,
 ) -> Result<(), Error> {
     let ws = WebSocket::new(ws_stream);
     let mut mux = Multiplexor::new(ws, Role::Client);
-    if let Err(e) = mux.establish_control_channel().await {
-        if retryable_errors(&e) {
-            return Ok(());
-        }
-        return Err(e.into());
-    };
+    mux.establish_control_channel()
+        .await
+        .or_else(maybe_retryable)?;
     info!("Connected to server");
     if keepalive == 0 {
         // Just keep the main thread alive and wait for a command
         while let Some(sender) = command_rx.recv().await {
-            get_send_chan(&mut mux, sender).await?;
-        }
-        Ok(())
-    } else {
-        loop {
-            let try_recv_command = command_rx.recv();
-            pin_mut!(try_recv_command);
-            // Wait for a command or do a keepalive
-            if let Ok(Some(sender)) =
-                time::timeout(time::Duration::from_secs(keepalive), &mut try_recv_command).await
-            {
-                get_send_chan(&mut mux, sender).await?;
+            if !get_send_chan_or_put_back(&mut mux, sender, command_tx).await? {
+                break;
             }
-            if let Err(e) = mux.ping().await {
-                warn!("Failed to send keepalive: {e}");
-                return Ok(());
+        }
+    } else {
+        let mut keepalive_interval = time::interval(time::Duration::from_secs(keepalive));
+        loop {
+            tokio::select! {
+                Some(sender) = command_rx.recv() => {
+                    if !get_send_chan_or_put_back(&mut mux, sender, command_tx).await? {
+                        break;
+                    }
+                }
+                // If there are too many `get_send_chan_or_put_back` requests, we may
+                // not be able to send keepalive packets in time, but that's fine because
+                // the connection won't be closed if we are using it.
+                _ = keepalive_interval.tick() => {
+                    if let Err(e) = mux.ping().await {
+                        warn!("Failed to send keepalive: {e}");
+                        break;
+                    }
+                }
             }
         }
     }
+    Ok(())
 }
 
 /// Get a new channel from the multiplexor and send it to the handler.
+/// If we fail, put the sender back onto the `mpsc`.
+/// This carries the semantics that `Err(_)` means we should not retry.
+/// Returns `true` if we got a new channel, `false` if we put the sender back
+/// (and we should probably go back to the main loop and reconnect).
 #[tracing::instrument(skip_all, level = "trace")]
-async fn get_send_chan(
+async fn get_send_chan_or_put_back(
     mux: &mut Multiplexor<
         tokio_tungstenite::WebSocketStream<
             tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
@@ -155,12 +170,37 @@ async fn get_send_chan(
         tungstenite::Error,
     >,
     sender: oneshot::Sender<DuplexStream>,
-) -> Result<(), Error> {
+    command_tx: &mut mpsc::Sender<Command>,
+) -> Result<bool, Error> {
     trace!("Connecting to a new port");
-    let (stream, _) = mux.open_channel().await?;
-    sender.send(stream).unwrap();
-    trace!("Send stream to handler");
-    Ok(())
+    match mux.open_channel().await {
+        Ok((stream, _)) => {
+            trace!("Got a new channel");
+            sender.send(stream).unwrap();
+            trace!("Sent stream to handler");
+            Ok(true)
+        }
+        Err(crate::mux::Error::Io(e)) => {
+            if retryable_errors(&e) {
+                warn!("Connection error: {e}");
+                command_tx.send(sender).await?;
+                Ok(false)
+            } else {
+                error!("Connection error: {e}");
+                Err(e.into())
+            }
+        }
+        Err(crate::mux::Error::ControlChannelNotEstablished) => {
+            // Not important, we'll retry
+            warn!("Control channel not established");
+            command_tx.send(sender).await?;
+            Ok(false)
+        }
+        Err(e) => {
+            error!("{e}");
+            Err(e.into())
+        }
+    }
 }
 
 /// Returns true if we should retry the connection.
@@ -169,4 +209,13 @@ fn retryable_errors(e: &std::io::Error) -> bool {
         || e.kind() == std::io::ErrorKind::BrokenPipe
         || e.kind() == std::io::ErrorKind::ConnectionReset
         || e.kind() == std::io::ErrorKind::ConnectionRefused
+}
+
+/// Converts `std::io::Error` to `Ok(())` if it's retryable, `Err(_)` otherwise.
+fn maybe_retryable(e: std::io::Error) -> Result<(), Error> {
+    if retryable_errors(&e) {
+        Ok(())
+    } else {
+        Err(e.into())
+    }
 }

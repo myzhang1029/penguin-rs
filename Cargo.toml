@@ -67,3 +67,6 @@ default = ["rustls-native-roots"]
 # rustls-native-roots at the same time, but there must be at least one. 
 rustls-webpki-roots = ["webpki-roots", "tokio-tungstenite/rustls-tls-webpki-roots", "tungstenite/rustls-tls-webpki-roots"]
 rustls-native-roots = ["rustls-native-certs", "tokio-tungstenite/rustls-tls-native-roots", "tungstenite/rustls-tls-native-roots"]
+
+[profile.release]
+debug = true

@@ -177,6 +177,7 @@ pub async fn handle_remote(remote: Remote, command_tx: mpsc::Sender<Command>) ->
 
 /// Request a channel from the mux
 #[inline]
+#[tracing::instrument(skip(command_tx), level = "debug")]
 pub(crate) async fn request_channel(
     command_tx: &mpsc::Sender<Command>,
 ) -> Result<DuplexStream, Error> {
