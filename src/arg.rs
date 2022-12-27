@@ -286,11 +286,11 @@ impl Deref for ServerUrl {
 #[derive(Debug, Error)]
 pub enum HeaderError {
     #[error("invalid header value or hostname: {0}")]
-    InvalidHeaderValue(#[from] http::header::InvalidHeaderValue),
+    Value(#[from] http::header::InvalidHeaderValue),
     #[error("invalid header name: {0}")]
-    InvalidHeaderName(#[from] http::header::InvalidHeaderName),
+    Name(#[from] http::header::InvalidHeaderName),
     #[error("invalid header: {0}")]
-    InvalidHeaderFormat(String),
+    Format(String),
 }
 
 /// HTTP Header
@@ -306,7 +306,7 @@ impl FromStr for Header {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (name, value) = s
             .split_once(':')
-            .ok_or(Self::Err::InvalidHeaderFormat(s.to_string()))?;
+            .ok_or_else(|| Self::Err::Format(s.to_string()))?;
         let name = HeaderName::from_str(name)?;
         let value = HeaderValue::from_str(value.trim())?;
         Ok(Header { name, value })
