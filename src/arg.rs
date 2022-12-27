@@ -1,9 +1,13 @@
 //! Command line arguments parsing.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use crate::client::ws_connect::{Header, ServerUrl};
 use crate::parse_remote::Remote;
 use clap::{arg, command, Args, Parser, Subcommand};
+use http::{header::HeaderName, HeaderValue};
+use std::{ops::Deref, str::FromStr};
+use thiserror::Error;
+use tracing::warn;
+use url::Url;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -11,8 +15,10 @@ use clap::{arg, command, Args, Parser, Subcommand};
 pub struct PenguinCli {
     #[clap(subcommand)]
     pub(crate) subcommand: Commands,
-    #[arg(short, long)]
+    #[arg(short, long, conflicts_with = "quiet")]
     pub(crate) verbose: bool,
+    #[arg(short, long, conflicts_with = "verbose")]
+    pub(crate) quiet: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -89,7 +95,7 @@ pub struct ClientArgs {
     /// this key but the client does not present the correct key, the upgrade
     /// to WebSocket silently fails.
     #[arg(long)]
-    pub(crate) ws_psk: Option<String>,
+    pub(crate) ws_psk: Option<HeaderValue>,
     /// An optional keepalive interval. Since the underlying
     /// transport is HTTP, in many instances we'll be traversing through
     /// proxies, often these proxies will close idle connections. You must
@@ -119,7 +125,7 @@ pub struct ClientArgs {
     /// Optionally set the 'Host' header (defaults to the host
     /// found in the server url).
     #[arg(long)]
-    pub(crate) hostname: Option<String>,
+    pub(crate) hostname: Option<HeaderValue>,
     /// An optional root certificate bundle used to verify the
     /// penguin server. Only valid when connecting to the server with
     /// "https" or "wss". By default, the operating system CAs will be used.
@@ -220,6 +226,93 @@ pub struct ServerArgs {
     pub(crate) _key: Option<String>,
 }
 
+/// Server URL parsing errors
+#[derive(Debug, Error)]
+pub enum ServerUrlError {
+    #[error("failed to parse URL: {0}")]
+    UrlParse(#[from] url::ParseError),
+    #[error("incorrect scheme: {0}")]
+    IncorrectScheme(String),
+}
+
+/// Server URL
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ServerUrl(pub Url);
+
+impl FromStr for ServerUrl {
+    type Err = ServerUrlError;
+
+    /// Sanitize the URL for WebSocket.
+    fn from_str(url: &str) -> Result<Self, Self::Err> {
+        // Provide a default scheme if none is provided.
+        let url = Url::parse(url).or_else(|e| {
+            if e == url::ParseError::RelativeUrlWithoutBase {
+                warn!("No scheme provided, using HTTP by default");
+                Url::parse(&format!("http://{url}"))
+            } else {
+                Err(e)
+            }
+        })?;
+        // Convert to a `Url`.
+        let url = match url.scheme() {
+            "wss" | "ws" => url,
+            "https" => {
+                let mut url = url;
+                url.set_scheme("wss").unwrap();
+                url
+            }
+            "http" => {
+                let mut url = url;
+                url.set_scheme("ws").unwrap();
+                url
+            }
+            scheme => {
+                return Err(Self::Err::IncorrectScheme(scheme.to_string()));
+            }
+        };
+        Ok(ServerUrl(url))
+    }
+}
+
+impl Deref for ServerUrl {
+    type Target = Url;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+/// HTTP Header parsing errors
+#[derive(Debug, Error)]
+pub enum HeaderError {
+    #[error("invalid header value or hostname: {0}")]
+    InvalidHeaderValue(#[from] http::header::InvalidHeaderValue),
+    #[error("invalid header name: {0}")]
+    InvalidHeaderName(#[from] http::header::InvalidHeaderName),
+    #[error("invalid header: {0}")]
+    InvalidHeaderFormat(String),
+}
+
+/// HTTP Header
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Header {
+    pub(crate) name: HeaderName,
+    pub(crate) value: HeaderValue,
+}
+
+impl FromStr for Header {
+    type Err = HeaderError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (name, value) = s
+            .split_once(':')
+            .ok_or(Self::Err::InvalidHeaderFormat(s.to_string()))?;
+        let name = HeaderName::from_str(name)?;
+        let value = HeaderValue::from_str(value.trim())?;
+        Ok(Header { name, value })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -227,6 +320,51 @@ mod tests {
     use crate::parse_remote::{LocalSpec, Protocol, RemoteSpec};
 
     use super::*;
+
+    #[test]
+    fn test_serverurl_fromstr() {
+        assert_eq!(
+            ServerUrl::from_str("example.com").unwrap().as_str(),
+            "ws://example.com/"
+        );
+        assert_eq!(
+            ServerUrl::from_str("wss://example.com").unwrap().as_str(),
+            "wss://example.com/"
+        );
+        assert_eq!(
+            ServerUrl::from_str("ws://example.com").unwrap().as_str(),
+            "ws://example.com/"
+        );
+        assert_eq!(
+            ServerUrl::from_str("https://example.com").unwrap().as_str(),
+            "wss://example.com/"
+        );
+        assert_eq!(
+            ServerUrl::from_str("http://example.com").unwrap().as_str(),
+            "ws://example.com/"
+        );
+        assert!(ServerUrl::from_str("ftp://example.com").is_err());
+    }
+
+    #[test]
+    fn test_header_parser() {
+        let header = Header::from_str("X-Test: test").unwrap();
+        assert_eq!(header.name.as_str().to_lowercase(), "X-Test".to_lowercase());
+        assert!(header.value.to_str().is_ok());
+        assert_eq!(header.value.to_str().unwrap(), "test");
+        assert!(Header::from_str("X-Test").is_err());
+        // HTTP forbids empty header values, but we allow it
+        //assert!(Header::from_str("X-Test:").is_err());
+        assert!(Header::from_str(": test").is_err());
+        let header = Header::from_str("X-Test: test: test").unwrap();
+        assert_eq!(header.name.as_str().to_lowercase(), "X-Test".to_lowercase());
+        assert!(header.value.to_str().is_ok());
+        assert_eq!(header.value.to_str().unwrap(), "test: test");
+        let header = Header::from_str("X-Test:test").unwrap();
+        assert_eq!(header.name.as_str().to_lowercase(), "X-Test".to_lowercase());
+        assert!(header.value.to_str().is_ok());
+        assert_eq!(header.value.to_str().unwrap(), "test");
+    }
 
     #[test]
     fn test_client_args_minimal() {
@@ -293,7 +431,7 @@ mod tests {
                     },
                 ]
             );
-            assert_eq!(args.ws_psk, Some("avocado".to_string()));
+            assert_eq!(args.ws_psk, Some(HeaderValue::from_static("avocado")));
             assert_eq!(args.keepalive, 10);
             assert_eq!(args.max_retry_count, 400);
             assert_eq!(args.max_retry_interval, 1000);
@@ -302,7 +440,7 @@ mod tests {
                 Some("socks5://abc:123@localhost:1080".to_string())
             );
             assert_eq!(args.header, [Header::from_str("X-Test:test").unwrap()]);
-            assert_eq!(args.hostname, Some("example.com".to_string()));
+            assert_eq!(args.hostname, Some(HeaderValue::from_static("example.com")));
         }
     }
 }

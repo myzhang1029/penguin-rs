@@ -1,33 +1,14 @@
 //! Penguin server.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-//! Architecture:
-//! The system is similar to a traditional SOCKS5 proxy, but the protocol
-//! allows for UDP to be transmitted over the same WebSocket connection.
-//! It is essentially a SOCKS5 forwarder over a WebSocket.
-//!
-//! - The client and the server communicate over a WebSocket.
-//! - (`mux`) The WebSocket is converted to a `AsyncRead + AsyncWrite` stream.
-//!   and multiplexed to allow multiple simultaneous connections.
-//!   Upon handshake, the client sends the type, destination address, and port
-//!   in a way similar to SOCKS5:
-//!   - 1 byte: command (1 for TCP, 3 for UDP)
-//!   - variable: 1 + (0..256) bytes: length + (domain name or IP)
-//!   - 2 bytes: port in network byte order
-//!   Then, the server responds with a u8 (0x03) on success. On failure, the
-//!   channel is closed.
-//! - (`tcp_forwarder`) The multiplexed channel is converted to a TCP stream.
-//! - (`udp_forwarder`) The multiplexed channel is converted to UDP datagrams.
-
 mod backend_proxy;
-mod tcp_forwarder;
-mod udp_forwarder;
+mod forwarder;
 mod websocket;
 
 use crate::arg::ServerArgs;
 use backend_proxy::check_pass_proxy;
 use thiserror::Error;
-use tracing::trace;
+use tracing::{debug, trace};
 use warp::Filter;
 use websocket::ws_filter;
 
@@ -42,7 +23,7 @@ pub enum Error {
     Io(#[from] std::io::Error),
 }
 
-#[tracing::instrument]
+#[tracing::instrument(level = "trace")]
 pub async fn server_main(args: ServerArgs) -> Result<(), Error> {
     let host = if args.host.starts_with('[') && args.host.ends_with(']') {
         // Remove brackets from IPv6 addresses
@@ -63,7 +44,7 @@ pub async fn server_main(args: ServerArgs) -> Result<(), Error> {
         .and(warp::path::end())
         .and_then(move || async move {
             if args.obfs {
-                trace!("Rejecting health check because obfuscating");
+                debug!("rejecting health check because obfuscating");
                 Err(warp::reject::not_found())
             } else {
                 Ok("OK")
@@ -74,7 +55,7 @@ pub async fn server_main(args: ServerArgs) -> Result<(), Error> {
         .and(warp::path::end())
         .and_then(move || async move {
             if args.obfs {
-                trace!("Rejecting version check because obfuscating");
+                debug!("rejecting version check because obfuscating");
                 Err(warp::reject::not_found())
             } else {
                 Ok(env!("CARGO_PKG_VERSION"))
@@ -103,8 +84,8 @@ pub async fn server_main(args: ServerArgs) -> Result<(), Error> {
             .key_path(tls_key);
         // If a client CA is provided, enable client auth
         if let Some(client_tls_ca) = args.tls_ca {
-            trace!("Enabling client auth");
-            tls_server.client_auth_optional_path(client_tls_ca)
+            trace!("enabling client auth");
+            tls_server.client_auth_required_path(client_tls_ca)
         } else {
             tls_server
         }

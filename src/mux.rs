@@ -4,7 +4,6 @@
 use futures_util::{pin_mut, FutureExt, Sink, Stream};
 pub use penguin_tokio_stream_multiplexor::DuplexStream;
 use penguin_tokio_stream_multiplexor::{StreamMultiplexor, StreamMultiplexorConfig};
-use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use thiserror::Error;
@@ -128,32 +127,6 @@ where
     }
 }
 
-impl<Inner, Msg, Err> Deref for WebSocket<Inner, Msg, Err>
-where
-    Msg: WebSocketMessage,
-    Err: AsyncIoError,
-    Inner:
-        Stream<Item = Result<Msg, Err>> + Sink<Msg, Error = Err> + Unpin + Send + Sized + 'static,
-{
-    type Target = Inner;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
-impl<Inner, Msg, Err> DerefMut for WebSocket<Inner, Msg, Err>
-where
-    Msg: WebSocketMessage,
-    Err: AsyncIoError,
-    Inner:
-        Stream<Item = Result<Msg, Err>> + Sink<Msg, Error = Err> + Unpin + Send + Sized + 'static,
-{
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
-    }
-}
-
 impl<Inner, Msg, Err> AsyncWrite for WebSocket<Inner, Msg, Err>
 where
     Msg: WebSocketMessage,
@@ -272,7 +245,7 @@ where
     /// or offer a new channel on the server side.
     /// Note that on the server side, this server will block until
     /// a new channel is requested.
-    pub async fn open_channel(&mut self) -> Result<(DuplexStream, u16), Error> {
+    pub async fn open_channel(&mut self) -> Result<DuplexStream, Error> {
         match self.role {
             Role::Client => self.client_side_open_channel().await,
             Role::Server => self.server_side_open_channel().await,
@@ -281,7 +254,7 @@ where
 
     /// Ask server to open a new channel
     #[tracing::instrument(skip(self), level = "debug")]
-    async fn client_side_open_channel(&mut self) -> Result<(DuplexStream, u16), Error> {
+    async fn client_side_open_channel(&mut self) -> Result<DuplexStream, Error> {
         let ctrl_chan = self
             .ctrl_chan
             .as_mut()
@@ -293,16 +266,16 @@ where
             error!("Server returned no available ports");
             Err(Error::NoAvailablePorts)
         } else {
-            debug!("Connecting to port {port}");
+            debug!("connecting to port {port}");
             // A psuedo sleep for the server to accept()
             tokio::task::yield_now().await;
-            Ok((self.mux.connect(port).await?, port))
+            Ok(self.mux.connect(port).await?)
         }
     }
 
     /// Offer a new channel to the client
     #[tracing::instrument(skip(self), level = "debug")]
-    async fn server_side_open_channel(&mut self) -> Result<(DuplexStream, u16), Error> {
+    async fn server_side_open_channel(&mut self) -> Result<DuplexStream, Error> {
         let ctrl_chan = self
             .ctrl_chan
             .as_mut()
@@ -318,10 +291,10 @@ where
                     let ctrl_chan = self.ctrl_chan.as_mut().unwrap();
                     let listener = self.mux.bind(0).await?;
                     let port = listener.port();
-                    debug!("Listening on port {port}");
+                    debug!("listening on port {port}");
                     // Tell the client that we are ready and they can connect to this port
                     ctrl_chan.write_u16(port).await?;
-                    break Ok((listener.accept().await?, port));
+                    break Ok(listener.accept().await?);
                 }
                 _ => {
                     error!("Invalid command received on control channel");
@@ -347,7 +320,7 @@ where
     }
 
     /// Close the multiplexor
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self), level = "debug")]
     pub async fn shutdown(&mut self) -> std::io::Result<()> {
         if let Some(mut ctrl_chan) = self.ctrl_chan.take() {
             ctrl_chan.shutdown().await?;
@@ -356,31 +329,7 @@ where
     }
 }
 
-impl<I, M, E> Deref for Multiplexor<I, M, E>
-where
-    E: AsyncIoError,
-    M: WebSocketMessage,
-    I: Stream<Item = Result<M, E>> + Sink<M, Error = E> + Unpin + Send + Sized + 'static,
-{
-    type Target = StreamMultiplexor<WebSocket<I, M, E>>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.mux
-    }
-}
-
-impl<I, M, E> DerefMut for Multiplexor<I, M, E>
-where
-    E: AsyncIoError,
-    M: WebSocketMessage,
-    I: Stream<Item = Result<M, E>> + Sink<M, Error = E> + Unpin + Send + Sized + 'static,
-{
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.mux
-    }
-}
-
-#[tracing::instrument(skip_all)]
+#[tracing::instrument(skip_all, level = "debug")]
 pub async fn pipe_streams<R1, W1, R2, W2>(
     mut reader1: R1,
     mut writer1: W1,

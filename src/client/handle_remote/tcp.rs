@@ -1,12 +1,12 @@
 //! Run a remote TCP connection.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use super::handle_remote::Error;
+use super::Error;
 use crate::mux::pipe_streams;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tracing::debug;
 
-/// Handshaking stuff. See `server/mod.rs`.
+/// Handshaking stuff. See `server/forwarder/mod.rs`.
 #[inline]
 pub(crate) async fn channel_tcp_handshake<R, W>(
     mut channel_rx: R,
@@ -33,7 +33,7 @@ where
 }
 
 /// Handle a TCP connection.
-#[tracing::instrument(skip(channel_rx, channel_tx, tcp_rx, tcp_tx))]
+#[tracing::instrument(skip(channel_rx, channel_tx, tcp_rx, tcp_tx), level = "debug")]
 pub(crate) async fn handle_tcp_connection<ReadChan, WriteChan, ReadTcp, WriteTcp>(
     mut channel_rx: ReadChan,
     mut channel_tx: WriteChan,

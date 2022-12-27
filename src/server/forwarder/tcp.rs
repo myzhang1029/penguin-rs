@@ -8,8 +8,14 @@ use tokio::{
 };
 
 /// Start a TCP forwarding server on the given listener.
+///
+/// This forwarder is trivial: it just pipes the TCP stream to and from the
+/// channel.
+///
+/// # Errors
+/// It carries the errors from the underlying TCP or channel IO functions.
 #[tracing::instrument(skip(chan_rx, chan_tx), level = "debug")]
-pub async fn start_tcp_forwarder_on_channel<R, W>(
+pub async fn start_forwarder_on_channel<R, W>(
     chan_rx: R,
     chan_tx: W,
     rhost: &str,

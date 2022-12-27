@@ -2,7 +2,6 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use std::{fmt::Display, str::FromStr};
-
 use thiserror::Error;
 
 #[derive(Debug, Clone, Hash, Ord, PartialOrd, Eq, PartialEq)]

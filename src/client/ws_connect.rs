@@ -2,16 +2,12 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use crate::proto_version::PROTOCOL_VERSION;
-use http::header::{HeaderName, HeaderValue};
+use http::header::HeaderValue;
 use rustls::{
     client::{ServerCertVerified, ServerCertVerifier},
     ClientConfig, RootCertStore,
 };
-use std::{
-    ops::{Deref, DerefMut},
-    str::FromStr,
-    sync::Arc,
-};
+use std::sync::Arc;
 use thiserror::Error;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{
@@ -19,7 +15,6 @@ use tokio_tungstenite::{
 };
 use tracing::{debug, warn};
 use tungstenite::{client::IntoClientRequest, handshake::client::Request};
-use url::Url;
 
 /// Error type for WebSocket connection.
 #[derive(Error, Debug)]
@@ -32,16 +27,6 @@ pub enum Error {
     Rustls(#[from] rustls::Error),
     #[error("tungstenite error: {0}")]
     Tungstenite(#[from] tungstenite::error::Error),
-    #[error("failed to parse URL: {0}")]
-    UrlParse(#[from] url::ParseError),
-    #[error("incorrect scheme: {0}")]
-    IncorrectScheme(String),
-    #[error("invalid header value or hostname: {0}")]
-    InvalidHeaderValue(#[from] http::header::InvalidHeaderValue),
-    #[error("invalid header name: {0}")]
-    InvalidHeaderName(#[from] http::header::InvalidHeaderName),
-    #[error("invalid header: {0}")]
-    InvalidHeaderFormat(String),
 }
 
 pub struct TlsEmptyVerifier {}
@@ -116,44 +101,13 @@ fn try_load_client_certificate(
     }
 }
 
-/// Sanitize the URL for WebSocket.
-fn sanitize_url(url: &str) -> Result<Url, Error> {
-    // Provide a default scheme if none is provided.
-    let url = Url::parse(url).or_else(|e| {
-        if e == url::ParseError::RelativeUrlWithoutBase {
-            warn!("No scheme provided, using HTTP by default");
-            Url::parse(&format!("http://{url}"))
-        } else {
-            Err(e)
-        }
-    })?;
-    // Convert to a `Url`.
-    let url = match url.scheme() {
-        "wss" | "ws" => url,
-        "https" => {
-            let mut url = url;
-            url.set_scheme("wss").unwrap();
-            url
-        }
-        "http" => {
-            let mut url = url;
-            url.set_scheme("ws").unwrap();
-            url
-        }
-        scheme => {
-            return Err(Error::IncorrectScheme(scheme.to_string()));
-        }
-    };
-    Ok(url)
-}
-
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(level = "debug", skip(extra_headers))]
 pub async fn handshake(
-    url: ServerUrl,
-    ws_psk: Option<&str>,
-    override_hostname: Option<&str>,
-    extra_headers: Vec<Header>,
+    url: crate::arg::ServerUrl,
+    ws_psk: Option<HeaderValue>,
+    override_hostname: Option<HeaderValue>,
+    extra_headers: Vec<crate::arg::Header>,
     tls_ca: Option<&str>,
     tls_key: Option<&str>,
     tls_cert: Option<&str>,
@@ -168,15 +122,15 @@ pub async fn handshake(
     // Add protocol version
     req_headers.insert(
         "sec-websocket-protocol",
-        HeaderValue::from_str(PROTOCOL_VERSION)?,
+        HeaderValue::from_static(PROTOCOL_VERSION),
     );
     // Add PSK
     if let Some(ws_psk) = ws_psk {
-        req_headers.insert("x-penguin-psk", HeaderValue::from_str(ws_psk)?);
+        req_headers.insert("x-penguin-psk", ws_psk);
     }
     // Add potentially custom hostname
     if let Some(hostname) = override_hostname {
-        req_headers.insert("host", HeaderValue::from_str(hostname)?);
+        req_headers.insert("host", hostname);
     }
     // Now add custom headers
     for header in extra_headers {
@@ -215,53 +169,6 @@ pub async fn handshake(
     Ok(ws_stream)
 }
 
-/// Server URL
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ServerUrl(pub Url);
-
-impl FromStr for ServerUrl {
-    type Err = Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let url = sanitize_url(s)?;
-        Ok(ServerUrl(url))
-    }
-}
-
-impl Deref for ServerUrl {
-    type Target = Url;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for ServerUrl {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-/// HTTP Header
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Header {
-    pub(crate) name: HeaderName,
-    pub(crate) value: HeaderValue,
-}
-
-impl FromStr for Header {
-    type Err = Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (name, value) = s
-            .split_once(':')
-            .ok_or(Error::InvalidHeaderFormat(s.to_string()))?;
-        let name = HeaderName::from_str(name)?;
-        let value = HeaderValue::from_str(value.trim())?;
-        Ok(Header { name, value })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -282,51 +189,5 @@ mod tests {
         let custom_root = generate_rustls_rootcertstore(Some(ca_path.to_str().unwrap()));
         assert!(custom_root.is_ok());
         assert_eq!(custom_root.unwrap().len(), 1);
-    }
-
-    #[test]
-    // Also testing `sanitize_url`
-    fn test_serverurl_fromstr() {
-        assert_eq!(
-            ServerUrl::from_str("example.com").unwrap().as_str(),
-            "ws://example.com/"
-        );
-        assert_eq!(
-            ServerUrl::from_str("wss://example.com").unwrap().as_str(),
-            "wss://example.com/"
-        );
-        assert_eq!(
-            ServerUrl::from_str("ws://example.com").unwrap().as_str(),
-            "ws://example.com/"
-        );
-        assert_eq!(
-            ServerUrl::from_str("https://example.com").unwrap().as_str(),
-            "wss://example.com/"
-        );
-        assert_eq!(
-            ServerUrl::from_str("http://example.com").unwrap().as_str(),
-            "ws://example.com/"
-        );
-        assert!(ServerUrl::from_str("ftp://example.com").is_err());
-    }
-
-    #[test]
-    fn test_header_parser() {
-        let header = Header::from_str("X-Test: test").unwrap();
-        assert_eq!(header.name.as_str().to_lowercase(), "X-Test".to_lowercase());
-        assert!(header.value.to_str().is_ok());
-        assert_eq!(header.value.to_str().unwrap(), "test");
-        assert!(Header::from_str("X-Test").is_err());
-        // HTTP forbids empty header values, but we allow it
-        //assert!(Header::from_str("X-Test:").is_err());
-        assert!(Header::from_str(": test").is_err());
-        let header = Header::from_str("X-Test: test: test").unwrap();
-        assert_eq!(header.name.as_str().to_lowercase(), "X-Test".to_lowercase());
-        assert!(header.value.to_str().is_ok());
-        assert_eq!(header.value.to_str().unwrap(), "test: test");
-        let header = Header::from_str("X-Test:test").unwrap();
-        assert_eq!(header.name.as_str().to_lowercase(), "X-Test".to_lowercase());
-        assert!(header.value.to_str().is_ok());
-        assert_eq!(header.value.to_str().unwrap(), "test");
     }
 }

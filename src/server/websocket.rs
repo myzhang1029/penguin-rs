@@ -1,69 +1,12 @@
 //! Penguin server WebSocket listener.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use super::tcp_forwarder::start_tcp_forwarder_on_channel;
-use super::udp_forwarder::start_udp_forwarder_on_channel;
+use super::forwarder::dispatch_conn;
 use crate::mux::{Multiplexor, Role, WebSocket as MuxWebSocket};
 use crate::proto_version::PROTOCOL_VERSION;
-use penguin_tokio_stream_multiplexor::DuplexStream;
-use thiserror::Error;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::task::JoinSet;
 use tracing::{debug, error, info, warn};
 use warp::{ws::WebSocket, Filter, Rejection, Reply};
-
-/// Error type for WebSocket connection.
-#[derive(Error, Debug)]
-pub enum Error {
-    #[error(transparent)]
-    TcpForwarder(std::io::Error),
-    #[error(transparent)]
-    UdpForwarder(std::io::Error),
-    #[error(transparent)]
-    Io(std::io::Error),
-    #[error("invalid host: {0}")]
-    Host(std::string::FromUtf8Error),
-    #[error("invalid command: {0}")]
-    Command(u8),
-}
-
-/// Dispatch the WebSocket connection to the appropriate handler.
-/// See `mod.rs` for our protocol.
-///
-/// Should be spawned as a new task. In whatever case, it will return
-/// a `Result` with the port number that was used, and `chan` will be
-/// closed (dropped).
-#[tracing::instrument(skip(chan), level = "info")]
-async fn dispatch_conn(chan: DuplexStream, port: u16) -> Result<(), Error> {
-    let (chan_rx, mut chan_tx) = tokio::io::split(chan);
-    let mut chan_rx = BufReader::new(chan_rx);
-    let command = chan_rx.read_u8().await.map_err(Error::Io)?;
-    let len = chan_rx.read_u8().await.map_err(Error::Io)?;
-    let mut rhost = vec![0; len as usize];
-    chan_rx.read_exact(&mut rhost).await.map_err(Error::Io)?;
-    let rhost = String::from_utf8(rhost).map_err(Error::Host)?;
-    let rport = chan_rx.read_u16().await.map_err(Error::Io)?;
-    chan_tx.write_u8(0x03).await.map_err(Error::Io)?;
-    match command {
-        1 => {
-            // TCP
-            info!("TCP connect to {rhost}:{rport}");
-            start_tcp_forwarder_on_channel(chan_rx, chan_tx, &rhost, rport)
-                .await
-                .map_err(Error::TcpForwarder)?;
-            Ok(())
-        }
-        3 => {
-            // UDP
-            info!("UDP forward to {rhost}:{rport}");
-            start_udp_forwarder_on_channel(chan_rx, chan_tx, &rhost, rport)
-                .await
-                .map_err(Error::UdpForwarder)?;
-            Ok(())
-        }
-        _ => Err(Error::Command(command)),
-    }
-}
 
 /// Multiplex the WebSocket connection and handle the forwarding requests.
 #[tracing::instrument(skip(websocket), level = "debug")]
@@ -76,9 +19,8 @@ async fn handle_websocket(websocket: WebSocket) -> Result<(), super::Error> {
     let mut jobs = JoinSet::new();
     loop {
         match mux.open_channel().await {
-            Ok((chan, port)) => {
-                debug!("Listener on port {port} started");
-                jobs.spawn(dispatch_conn(chan, port));
+            Ok(chan) => {
+                jobs.spawn(dispatch_conn(chan));
             }
             Err(err) => {
                 warn!("Client disconnected: {err}");
@@ -100,7 +42,6 @@ async fn handle_websocket(websocket: WebSocket) -> Result<(), super::Error> {
 }
 
 /// Check the PSK and protocol version and upgrade to a websocket if the PSK matches (if required).
-#[tracing::instrument]
 pub fn ws_filter(
     predefined_ws_psk: Option<String>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {

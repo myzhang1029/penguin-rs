@@ -1,8 +1,10 @@
 //! Run a remote UDP connection.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use super::handle_remote::{request_channel, Error};
+use crate::client::retryable_errors;
+
 use super::Command;
+use super::{request_channel, Error};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
@@ -19,7 +21,7 @@ macro_rules! complete_or_break {
     };
 }
 
-/// Handshaking stuff. See `server/mod.rs`.
+/// Handshaking stuff. See `server/forwarder/mod.rs`.
 #[inline]
 pub(crate) async fn channel_udp_handshake<R, W>(
     mut channel_rx: R,
@@ -74,7 +76,7 @@ pub(crate) async fn handle_udp_socket(
             complete_or_break!(channel_rx.read_exact(&mut buf[..len]).await);
             socket.send_to(&buf[..len], &addr).await?;
         };
-        if super::retryable_errors(&e) {
+        if retryable_errors(&e) {
             continue;
         } else {
             error!("UDP socket error: {e}");

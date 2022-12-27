@@ -2,9 +2,6 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 mod handle_remote;
-mod handle_remote_socks;
-mod handle_remote_tcp;
-mod handle_remote_udp;
 pub(crate) mod ws_connect;
 
 use crate::arg::ClientArgs;
@@ -37,7 +34,7 @@ pub enum Error {
 /// Type that local listeners send to the main loop to request a connection
 type Command = oneshot::Sender<DuplexStream>;
 
-#[tracing::instrument]
+#[tracing::instrument(level = "trace")]
 pub async fn client_main(args: ClientArgs) -> Result<(), Error> {
     // TODO: Temporary, remove when implemented
     if args.proxy.is_some() {
@@ -55,12 +52,12 @@ pub async fn client_main(args: ClientArgs) -> Result<(), Error> {
         let cmd_tx = cmd_tx.clone();
         jobs.spawn(handle_remote(remote, cmd_tx));
     }
-    // Main loop with retry
+    // Retry loop
     loop {
         match ws_connect::handshake(
             args.server.clone(),
-            args.ws_psk.as_deref(),
-            args.hostname.as_deref(),
+            args.ws_psk.clone(),
+            args.hostname.clone(),
             args.header.clone(),
             args.tls_ca.as_deref(),
             args.tls_key.as_deref(),
@@ -109,7 +106,7 @@ pub async fn client_main(args: ClientArgs) -> Result<(), Error> {
 ///
 /// We want a copy of `command_tx` because we want to put the sender back if we
 /// fail to get a new channel for the remote.
-#[tracing::instrument(skip_all)]
+#[tracing::instrument(skip_all, level = "debug")]
 async fn on_connected(
     ws_stream: tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
@@ -172,12 +169,12 @@ async fn get_send_chan_or_put_back(
     sender: oneshot::Sender<DuplexStream>,
     command_tx: &mut mpsc::Sender<Command>,
 ) -> Result<bool, Error> {
-    trace!("Connecting to a new port");
+    trace!("connecting to a new port");
     match mux.open_channel().await {
-        Ok((stream, _)) => {
-            trace!("Got a new channel");
+        Ok(stream) => {
+            trace!("got a new channel");
             sender.send(stream).unwrap();
-            trace!("Sent stream to handler");
+            trace!("sent stream to handler");
             Ok(true)
         }
         Err(crate::mux::Error::Io(e)) => {

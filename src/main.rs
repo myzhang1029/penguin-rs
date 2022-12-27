@@ -11,6 +11,7 @@ mod server;
 use clap::Parser;
 use thiserror::Error;
 use tracing::{error, trace};
+use tracing_subscriber::{filter, fmt, prelude::*, reload};
 
 /// Errors
 #[derive(Debug, Error)]
@@ -22,11 +23,28 @@ pub enum Error {
 }
 
 /// Real entry point
-#[tracing::instrument]
 async fn main_real() -> Result<(), Error> {
+    let fmt_layer = fmt::Layer::default()
+        .compact()
+        .with_thread_ids(true)
+        .with_timer(fmt::time::time())
+        .with_writer(std::io::stderr);
+    let (level_layer, reload_handle) = reload::Layer::new(filter::LevelFilter::INFO);
+    tracing_subscriber::registry()
+        .with(level_layer)
+        .with(fmt_layer)
+        .init();
     let cli_args = arg::PenguinCli::parse();
-    trace!("Parsed: {:?}", cli_args);
-
+    trace!("cli_args = {cli_args:?}");
+    if cli_args.verbose {
+        reload_handle
+            .reload(filter::LevelFilter::DEBUG)
+            .expect("Resetting log level failed");
+    } else if cli_args.quiet {
+        reload_handle
+            .reload(filter::LevelFilter::WARN)
+            .expect("Resetting log level failed");
+    }
     match cli_args.subcommand {
         arg::Commands::Client(args) => client::client_main(args).await?,
         arg::Commands::Server(args) => server::server_main(*args).await?,
@@ -35,12 +53,9 @@ async fn main_real() -> Result<(), Error> {
 }
 
 #[tokio::main]
-#[tracing::instrument]
 async fn main() {
-    //env_logger::init();
-    env_logger::builder().format_timestamp_nanos().init();
     if let Err(e) = main_real().await {
-        error!("Error: {e}");
+        error!("Giving up: {e}");
         std::process::exit(1);
     }
 }
@@ -48,7 +63,7 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{client::ws_connect::ServerUrl, parse_remote::Remote};
+    use crate::{arg::ServerUrl, parse_remote::Remote};
     use std::str::FromStr;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -88,7 +103,7 @@ mod tests {
             tls_cert: None,
             tls_key: None,
             tls_skip_verify: false,
-            hostname: Some("localhost".to_string()),
+            hostname: Some(http::HeaderValue::from_static("localhost")),
             _pid: false,
             _fingerprint: None,
             _auth: None,

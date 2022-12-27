@@ -8,11 +8,22 @@ use tokio::{
 use tracing::debug;
 
 /// Start a UDP forwarder server on the given listener.
-/// Should be the entry point for a new task.
+///
 /// I'm pretty sure this `Future` won't linger around after the other end of
 /// the channel is closed.
+///
+/// This forwarder expects to receive a 32-bit length prefix before each UDP
+/// datagram, and then the datagram itself. It will then forward the datagram
+/// to the remote host.
+/// When it receives datagrams from the remote host, it will send them to the
+/// channel with the same 32-bit length prefix.
+/// The entire system effectively acts as a full-cone NAT.
+/// A length of 0 can be used to indicate EOF.
+///
+/// # Errors
+/// It carries the errors from the underlying UDP or channel IO functions.
 #[tracing::instrument(skip(chan_rx, chan_tx), level = "debug")]
-pub async fn start_udp_forwarder_on_channel<R, W>(
+pub async fn start_forwarder_on_channel<R, W>(
     mut chan_rx: R,
     mut chan_tx: W,
     rhost: &str,
@@ -56,6 +67,7 @@ where
             }
             Err(e) => {
                 if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                    // I guess this is normal?
                     break Ok(());
                 }
                 break Err(e);

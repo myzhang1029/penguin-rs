@@ -1,18 +1,26 @@
 //! Run a remote connection.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
+//!
+//! These are persistent tasks that run for the lifetime of the client.
+//! Whenever a new connection is made, it tries to create a new channel
+//! from the main loop and then spawns a new task to handle the connection.
 
-use super::handle_remote_socks::handle_socks_connection;
-use super::handle_remote_tcp::{channel_tcp_handshake, handle_tcp_connection};
-use super::handle_remote_udp::{channel_udp_handshake, handle_udp_socket};
+mod socks5;
+mod tcp;
+mod udp;
+
 use super::Command;
 use crate::mux::{pipe_streams, DuplexStream};
 use crate::parse_remote::{LocalSpec, RemoteSpec};
 use crate::parse_remote::{Protocol, Remote};
+use socks5::handle_socks_connection;
+use tcp::{channel_tcp_handshake, handle_tcp_connection};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
+use udp::{channel_udp_handshake, handle_udp_socket};
 
 /// Do something or continue
 macro_rules! complete_or_continue {
@@ -20,7 +28,7 @@ macro_rules! complete_or_continue {
         match $e {
             Ok(v) => v,
             Err(err) => {
-                warn!("{err}");
+                warn!("Remote error: {err}");
                 continue;
             }
         }
@@ -34,7 +42,7 @@ macro_rules! complete_or_continue_if_retryable {
             Ok(v) => v,
             Err(err) => {
                 if super::retryable_errors(&err) {
-                    warn!("{err}");
+                    warn!("Remote error: {err}");
                     continue;
                 } else {
                     error!("Giving up");
@@ -77,9 +85,9 @@ pub enum Error {
 /// to persist afther the connection.
 /// This should be spawned as tasks and they will remain as long as `client`
 /// is alive. Individual connection tasks are spawned as connections appear.
-#[tracing::instrument(skip(command_tx))]
+#[tracing::instrument(skip(command_tx), level = "debug")]
 pub async fn handle_remote(remote: Remote, command_tx: mpsc::Sender<Command>) -> Result<(), Error> {
-    debug!("Opening remote {remote}");
+    debug!("opening remote {remote}");
     match (remote.local_addr, remote.remote_addr, remote.protocol) {
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Inet((rhost, rport)), Protocol::Tcp) => {
             let listener = TcpListener::bind((lhost, lport)).await?;

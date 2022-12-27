@@ -4,10 +4,10 @@
 use std::net::IpAddr;
 use std::sync::Arc;
 
-use super::handle_remote::{request_channel, Error};
-use super::handle_remote_tcp::channel_tcp_handshake;
-use super::handle_remote_udp::channel_udp_handshake;
+use super::tcp::channel_tcp_handshake;
+use super::udp::channel_udp_handshake;
 use super::Command;
+use super::{request_channel, Error};
 use crate::mux::pipe_streams;
 use tokio::net::UdpSocket;
 use tokio::{
@@ -39,7 +39,7 @@ macro_rules! execute_or_pass_error {
 /// Handle a SOCKS5 connection.
 /// Based on socksv5's example.
 /// We need to be able to request additional channels, so we need `command_tx`
-#[tracing::instrument(skip_all, level = "trace")]
+#[tracing::instrument(skip_all, level = "debug")]
 pub(crate) async fn handle_socks_connection<R, W>(
     command_tx: mpsc::Sender<Command>,
     reader: R,
@@ -54,14 +54,14 @@ where
     // Complete the handshake
     let version = breader.read_u8().await?;
     if version != 5 {
-        debug!("Client is not SOCKSv5");
+        debug!("client is not SOCKSv5");
         return Err(Error::Socksv4);
     }
     let nmethods = breader.read_u8().await?;
     let mut methods = vec![0; nmethods as usize];
     breader.read_exact(&mut methods).await?;
     if !methods.contains(&0x00) {
-        debug!("Client does not support NOAUTH");
+        debug!("client does not support NOAUTH");
         // Send back NO ACCEPTABLE METHODS
         // Note that we are not compliant with RFC 1928 here, as we MUST
         // support GSSAPI and SHOULD support USERNAME/PASSWORD
@@ -73,7 +73,7 @@ where
     // Read the request
     let version = breader.read_u8().await?;
     if version != 5 {
-        debug!("Client is not SOCKSv5");
+        debug!("client is not SOCKSv5");
         return Err(Error::Socksv4);
     }
     let command = execute_or_pass_error!(
@@ -130,7 +130,7 @@ where
             std::net::Ipv6Addr::from(addr).to_string()
         }
         _ => {
-            debug!("Invalid address type {address_type}");
+            debug!("invalid address type {address_type}");
             writer
                 .write_all(&[0x05, 0x08, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
                 .await?;
@@ -143,7 +143,7 @@ where
         "cannot read port",
         &mut writer
     );
-    debug!("Got request {command} for {rhost}:{rport}");
+    debug!("got request {command} for {rhost}:{rport}");
     match command {
         0x01 => {
             // CONNECT
@@ -163,7 +163,7 @@ where
             handle_associate(&command_tx, breader, writer, rhost, rport, local_addr).await
         }
         _ => {
-            warn!("Invalid command {command}");
+            warn!("invalid command {command}");
             writer
                 .write_all(&[0x05, 0x07, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
                 .await?;
@@ -309,14 +309,14 @@ async fn udp_relay(
                 warn!("Dropping datagram to invalid destination {dst}:{dport}");
                 continue;
             }
-            debug!("Relaying UDP datagram from {src}:{sport} to {dst}:{dport}");
+            debug!("relaying UDP datagram from {src}:{sport} to {dst}:{dport}");
             channel_tx.write_u32(len as u32).await?;
             channel_tx.write_all(data).await?;
-            trace!("Sent to channel ({len} bytes)");
+            trace!("sent to channel ({len} bytes)");
             channel_tx.flush().await?;
             let len = channel_rx.read_u32().await? as usize;
             channel_rx.read_exact(&mut buf[..len]).await?;
-            trace!("Received from channel ({len} bytes)");
+            trace!("received from channel ({len} bytes)");
             // Write the header
             let (target_addr, target_atyp) = match src {
                 IpAddr::V4(ip) => (ip.octets().to_vec(), 0x01),
