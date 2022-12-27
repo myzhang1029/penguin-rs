@@ -40,23 +40,23 @@ Other than that, this project offers these functionalities compared to
 ```
 $ iperf3 -c 127.0.0.1 # chisel without TLS
 [ ID] Interval           Transfer     Bitrate
-[  5]   0.00-10.00  sec  3.64 GBytes  3.12 Gbits/sec                  sender
-[  5]   0.00-10.01  sec  3.63 GBytes  3.12 Gbits/sec                  receiver
+[  5]   0.00-10.00  sec  6.62 GBytes  5.68 Gbits/sec                  sender
+[  5]   0.00-10.00  sec  6.61 GBytes  5.68 Gbits/sec                  receiver
 
 $ iperf3 -c 127.0.0.1 # penguin without TLS
 [ ID] Interval           Transfer     Bitrate
-[  5]   0.00-10.00  sec  8.50 GBytes  7.30 Gbits/sec                  sender
-[  5]   0.00-10.31  sec  8.49 GBytes  7.07 Gbits/sec                  receiver
+[  5]   0.00-10.00  sec  13.9 GBytes  12.0 Gbits/sec                  sender
+[  5]   0.00-10.18  sec  13.9 GBytes  11.7 Gbits/sec                  receiver
 
 $ iperf3 -c 127.0.0.1 # chisel with TLS
 [ ID] Interval           Transfer     Bitrate
-[  5]   0.00-10.00  sec  3.26 GBytes  2.80 Gbits/sec                  sender
-[  5]   0.00-10.01  sec  3.26 GBytes  2.80 Gbits/sec                  receiver
+[  5]   0.00-10.00  sec  5.59 GBytes  4.80 Gbits/sec                  sender
+[  5]   0.00-10.00  sec  5.58 GBytes  4.80 Gbits/sec                  receiver
 
 $ iperf3 -c 127.0.0.1 # penguin with TLS
 [ ID] Interval           Transfer     Bitrate
-[  5]   0.00-10.00  sec  6.04 GBytes  5.19 Gbits/sec                  sender
-[  5]   0.00-10.44  sec  6.03 GBytes  4.96 Gbits/sec                  receiver
+[  5]   0.00-10.00  sec  8.50 GBytes  7.30 Gbits/sec                  sender
+[  5]   0.00-10.29  sec  8.49 GBytes  7.09 Gbits/sec                  receiver
 ```
 
 - All the safety Rust offers.
