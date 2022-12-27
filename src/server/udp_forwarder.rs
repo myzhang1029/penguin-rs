@@ -32,7 +32,8 @@ where
             let mut buf = [0u8; 65507];
             loop {
                 let (len, _) = socket.recv_from(&mut buf).await?;
-                debug!("UDP forwarder: read {} bytes from remote", len);
+                debug!("read {len} bytes from remote, sending to channel");
+                chan_tx.write_u32(len as u32).await?;
                 chan_tx.write_all(&buf[..len]).await?;
             }
             Ok::<(), std::io::Error>(())
@@ -42,7 +43,7 @@ where
         match chan_rx.read_u32().await {
             Ok(len) => {
                 let len = len as usize;
-                debug!("UDP forwarder: read {} bytes from channel", len);
+                debug!("read {len} bytes from channel, forwarding to {rhost}:{rport}");
                 let mut buf = vec![0u8; len];
                 if let Err(e) = chan_rx.read_exact(&mut buf).await {
                     // use `break` so we can await the reader job
@@ -61,6 +62,7 @@ where
             }
         }
     };
+    debug!("aborting reader job");
     reader_job.abort();
     result
 }

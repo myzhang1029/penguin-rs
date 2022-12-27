@@ -5,7 +5,7 @@
 
 [package]
 name = "rusty-penguin"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Zhang Maiyun <me@myzhangll.xyz>"]
 edition = "2021"
 description = "A fast TCP/UDP tunnel, transported over HTTP WebSockets"

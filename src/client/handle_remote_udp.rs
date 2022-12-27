@@ -46,16 +46,20 @@ where
 }
 
 /// Handle a UDP socket.
+/// The format of the datagram on the channel is:
+/// - 4 bytes: length of the payload (big endian)
+///   4 bytes is to future-proof us against IPv6 jumbo frames.
+/// - `length` bytes: the payload
 #[tracing::instrument(skip(command_tx, socket))]
 pub(crate) async fn handle_udp_socket(
-    mut command_tx: mpsc::Sender<Command>,
+    command_tx: mpsc::Sender<Command>,
     socket: UdpSocket,
     rhost: String,
     rport: u16,
 ) -> Result<(), Error> {
     // Outer loop to handle channel reconnects
     loop {
-        let channel = request_channel(&mut command_tx).await?;
+        let channel = request_channel(&command_tx).await?;
         let (mut channel_rx, mut channel_tx) = tokio::io::split(channel);
         channel_udp_handshake(&mut channel_rx, &mut channel_tx, &rhost, rport).await?;
         let mut buf = [0u8; 65536];
@@ -65,7 +69,9 @@ pub(crate) async fn handle_udp_socket(
             let (len, addr) = socket.recv_from(&mut buf).await?;
             complete_or_break!(channel_tx.write_u32(len as u32).await);
             complete_or_break!(channel_tx.write_all(&buf[..len]).await);
-            let len = complete_or_break!(channel_rx.read(&mut buf).await);
+            let len = complete_or_break!(channel_rx.read_u32().await);
+            let len = len as usize;
+            complete_or_break!(channel_rx.read_exact(&mut buf[..len]).await);
             socket.send_to(&buf[..len], &addr).await?;
         };
         if super::retryable_errors(&e) {

@@ -4,6 +4,7 @@
 use super::handle_remote_socks::handle_socks_connection;
 use super::handle_remote_tcp::{channel_tcp_handshake, handle_tcp_connection};
 use super::handle_remote_udp::{channel_udp_handshake, handle_udp_socket};
+use super::Command;
 use crate::mux::{pipe_streams, DuplexStream};
 use crate::parse_remote::{LocalSpec, RemoteSpec};
 use crate::parse_remote::{Protocol, Remote};
@@ -12,8 +13,6 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
-
-use super::Command;
 
 /// Do something or continue
 macro_rules! complete_or_continue {
@@ -79,10 +78,7 @@ pub enum Error {
 /// This should be spawned as tasks and they will remain as long as `client`
 /// is alive. Individual connection tasks are spawned as connections appear.
 #[tracing::instrument(skip(command_tx))]
-pub async fn handle_remote(
-    remote: Remote,
-    mut command_tx: mpsc::Sender<Command>,
-) -> Result<(), Error> {
+pub async fn handle_remote(remote: Remote, command_tx: mpsc::Sender<Command>) -> Result<(), Error> {
     debug!("Opening remote {remote}");
     match (remote.local_addr, remote.remote_addr, remote.protocol) {
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Inet((rhost, rport)), Protocol::Tcp) => {
@@ -92,7 +88,7 @@ pub async fn handle_remote(
                 let (tcp_stream, _) = listener.accept().await?;
                 // A new channel is created for each incoming TCP connection.
                 // It's already TCP, anyways.
-                let channel = complete_or_continue!(request_channel(&mut command_tx).await);
+                let channel = complete_or_continue!(request_channel(&command_tx).await);
                 // Don't use `BufWriter` here because it will buffer the handshake
                 // And also make sure we don't nest `BufReader`s
                 let rhost = rhost.clone();
@@ -118,7 +114,7 @@ pub async fn handle_remote(
             let (mut stdin, mut stdout) = (tokio::io::stdin(), tokio::io::stdout());
             // We want `loop` to be able to continue after a connection failure
             loop {
-                let channel = complete_or_continue!(request_channel(&mut command_tx).await);
+                let channel = complete_or_continue!(request_channel(&command_tx).await);
                 let (channel_rx, mut channel_tx) = tokio::io::split(channel);
                 let mut channel_rx = BufReader::new(channel_rx);
                 complete_or_continue!(
@@ -132,7 +128,7 @@ pub async fn handle_remote(
         (LocalSpec::Stdio, RemoteSpec::Inet((rhost, rport)), Protocol::Udp) => {
             let mut stdin = BufReader::new(tokio::io::stdin());
             loop {
-                let channel = complete_or_continue!(request_channel(&mut command_tx).await);
+                let channel = complete_or_continue!(request_channel(&command_tx).await);
                 let (channel_rx, mut channel_tx) = tokio::io::split(channel);
                 let mut channel_rx = BufReader::new(channel_rx);
                 complete_or_continue!(
@@ -154,34 +150,35 @@ pub async fn handle_remote(
         }
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Socks, _) => {
             // The parser guarantees that the protocol is TCP
-            let listener = TcpListener::bind((lhost, lport)).await?;
+            let listener = TcpListener::bind((lhost.clone(), lport)).await?;
             info!("Listening on port {lport}");
             loop {
                 let (tcp_stream, _) = listener.accept().await?;
                 let (tcp_rx, tcp_tx) = tokio::io::split(tcp_stream);
-                tokio::spawn(handle_socks_connection(command_tx.clone(), tcp_rx, tcp_tx));
+                let command_tx = command_tx.clone();
+                let lhost = lhost.clone();
+                tokio::spawn(async move {
+                    handle_socks_connection(command_tx, tcp_rx, tcp_tx, lhost).await
+                });
             }
         }
         (LocalSpec::Stdio, RemoteSpec::Socks, _) => {
             // The parser guarantees that the protocol is TCP
-            Ok(
-                handle_socks_connection(
-                    command_tx.clone(),
-                    tokio::io::stdin(),
-                    tokio::io::stdout(),
-                )
-                .await?,
+            Ok(handle_socks_connection(
+                command_tx,
+                tokio::io::stdin(),
+                tokio::io::stdout(),
+                String::from("localhost"),
             )
+            .await?)
         }
     }
 }
 
 /// Request a channel from the mux
-/// We use a `&mut` to make sure we have the exclusive borrow.
-/// Just to make my life easier.
 #[inline]
 pub(crate) async fn request_channel(
-    command_tx: &mut mpsc::Sender<Command>,
+    command_tx: &mpsc::Sender<Command>,
 ) -> Result<DuplexStream, Error> {
     let (tx, rx) = oneshot::channel();
     command_tx.send(tx).await?;
