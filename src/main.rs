@@ -23,14 +23,33 @@ pub enum Error {
     Server(#[from] server::Error),
 }
 
+#[cfg(not(feature = "more-verbose"))]
+const QUIET_LOG_LEVEL: filter::LevelFilter = filter::LevelFilter::WARN;
+#[cfg(not(feature = "more-verbose"))]
+const DEFAULT_LOG_LEVEL: filter::LevelFilter = filter::LevelFilter::INFO;
+#[cfg(not(feature = "more-verbose"))]
+const VERBOSE_LOG_LEVEL: filter::LevelFilter = filter::LevelFilter::DEBUG;
+#[cfg(feature = "more-verbose")]
+const QUIET_LOG_LEVEL: filter::LevelFilter = filter::LevelFilter::INFO;
+#[cfg(feature = "more-verbose")]
+const DEFAULT_LOG_LEVEL: filter::LevelFilter = filter::LevelFilter::DEBUG;
+#[cfg(feature = "more-verbose")]
+const VERBOSE_LOG_LEVEL: filter::LevelFilter = filter::LevelFilter::TRACE;
+
 /// Real entry point
 async fn main_real() -> Result<(), Error> {
+    #[cfg(feature = "more-verbose")]
+    let fmt_layer = fmt::Layer::default()
+        .with_thread_ids(true)
+        .with_timer(fmt::time::time())
+        .with_writer(std::io::stderr);
+    #[cfg(not(feature = "more-verbose"))]
     let fmt_layer = fmt::Layer::default()
         .compact()
         .with_thread_ids(true)
         .with_timer(fmt::time::time())
         .with_writer(std::io::stderr);
-    let (level_layer, reload_handle) = reload::Layer::new(filter::LevelFilter::INFO);
+    let (level_layer, reload_handle) = reload::Layer::new(DEFAULT_LOG_LEVEL);
     tracing_subscriber::registry()
         .with(level_layer)
         .with(fmt_layer)
@@ -39,11 +58,11 @@ async fn main_real() -> Result<(), Error> {
     trace!("cli_args = {cli_args:?}");
     if cli_args.verbose {
         reload_handle
-            .reload(filter::LevelFilter::DEBUG)
+            .reload(VERBOSE_LOG_LEVEL)
             .expect("Resetting log level failed");
     } else if cli_args.quiet {
         reload_handle
-            .reload(filter::LevelFilter::WARN)
+            .reload(QUIET_LOG_LEVEL)
             .expect("Resetting log level failed");
     }
     match cli_args.subcommand {
