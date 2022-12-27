@@ -18,22 +18,24 @@ async fn handle_websocket(websocket: WebSocket) -> Result<(), super::Error> {
     debug!("WebSocket connection established");
     let mut jobs = JoinSet::new();
     loop {
-        match mux.open_channel().await {
-            Ok(chan) => {
-                jobs.spawn(dispatch_conn(chan));
+        tokio::select! {
+            // Check if any of the jobs have finished and panicked
+            Some(Err(err)) = jobs.join_next() => {
+                if err.is_panic() {
+                    panic!("Panic in a SOCKS listener: {err}");
+                }
             }
-            Err(err) => {
-                warn!("Client disconnected: {err}");
-                mux.shutdown().await?;
-                break;
-            }
-        }
-        // Check if any of the jobs have finished
-        if let Ok(Some(Err(err))) =
-            tokio::time::timeout(tokio::time::Duration::from_millis(1), jobs.join_next()).await
-        {
-            if err.is_panic() {
-                panic!("Panic in a SOCKS listener: {err}");
+            result = mux.open_channel() => {
+                match result {
+                    Ok(chan) => {
+                        jobs.spawn(dispatch_conn(chan));
+                    }
+                    Err(err) => {
+                        warn!("Client disconnected: {err}");
+                        mux.shutdown().await?;
+                        break;
+                    }
+                }
             }
         }
     }
