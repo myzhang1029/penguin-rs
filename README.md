@@ -35,6 +35,8 @@ Other than that, this project offers these functionalities compared to
 
 - Plausible deniability with WebSocket PSK and working `backend`.
 
+- TLS certificate hot-reload with `SIGUSR1`.
+
 - Higher performance: my crude testing on my machine reveals that `penguin` is
   approximately 2x faster than `chisel` on my machine.
 ```

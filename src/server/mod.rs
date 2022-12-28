@@ -4,6 +4,8 @@
 mod forwarder;
 mod websocket;
 
+use std::sync::Arc;
+
 use crate::arg::{BackendUrl, ServerArgs};
 use crate::proto_version::PROTOCOL_VERSION;
 use axum::extract::WebSocketUpgrade;
@@ -18,9 +20,10 @@ use axum::{
 use axum_server::tls_rustls::RustlsConfig;
 use http::{HeaderMap, HeaderValue};
 use hyper::{client::HttpConnector, Body as HyperBody, Client as HyperClient};
+use rustls::ServerConfig;
 use thiserror::Error;
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 use websocket::handle_websocket;
 
 /// Server Errors
@@ -29,9 +32,21 @@ pub enum Error {
     /// Invalid listening host
     #[error("invalid listening host: {0}")]
     InvalidHost(#[from] std::net::AddrParseError),
+    /// Private key not supported
+    #[error("private key not supported")]
+    PrivateKeyNotSupported,
+    /// Client certificate store is empty
+    #[error("client certificate store is empty")]
+    EmptyClientCertStore,
+    /// General TLS error
+    #[error("rustls error: {0}")]
+    Tls(#[from] rustls::Error),
     /// IO error
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+    /// Hyper error
+    #[error("HTTP server error: {0}")]
+    Hyper(#[from] hyper::Error),
 }
 
 /// Required state
@@ -79,22 +94,87 @@ pub async fn server_main(args: ServerArgs) -> Result<(), Error> {
 
     if let Some(tls_key) = &args.tls_key {
         trace!("Enabling TLS");
-        let config = RustlsConfig::from_pem_file(args.tls_cert.as_deref().unwrap(), tls_key)
-            // TODO: client CA
-            .await
-            .unwrap();
-        // TODO: pass config for possible reload
+        info!("Listening on wss://{}:{}/ws", args.host, args.port);
+        let config = make_rustls_server_config(
+            args.tls_cert.as_deref().unwrap(),
+            tls_key,
+            args.tls_ca.as_deref(),
+        )
+        .await?;
+        let config = RustlsConfig::from_config(Arc::new(config));
+
+        #[cfg(unix)]
+        tokio::spawn(reload_cert_on_signal(
+            config.clone(),
+            args.tls_cert.unwrap(),
+            tls_key.clone(),
+            args.tls_ca.clone(),
+        ));
         axum_server::bind_rustls(sockaddr, config)
             .serve(app.into_make_service())
-            .await
-            .unwrap();
+            .await?;
     } else {
+        info!("Listening on ws://{}:{}/ws", args.host, args.port);
         axum::Server::bind(&sockaddr)
             .serve(app.into_make_service())
-            .await
-            .unwrap();
+            .await?;
     }
     Ok(())
+}
+
+/// `axum` example: `rustls_reload.rs`
+#[cfg(unix)]
+async fn reload_cert_on_signal(
+    config: RustlsConfig,
+    cert_path: String,
+    key_path: String,
+    client_ca_path: Option<String>,
+) -> Result<(), Error> {
+    let mut sigusr1 =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined1())?;
+    loop {
+        sigusr1.recv().await;
+        info!("Reloading TLS certificate");
+        let server_config =
+            make_rustls_server_config(&cert_path, &key_path, client_ca_path.as_deref()).await?;
+        config.reload_from_config(Arc::new(server_config));
+    }
+}
+
+async fn make_rustls_server_config(
+    cert_path: &str,
+    key_path: &str,
+    client_ca_path: Option<&str>,
+) -> Result<ServerConfig, Error> {
+    use rustls_pemfile::Item;
+    // Load certificate chain
+    let certs = tokio::fs::read(cert_path).await?;
+    let certs = rustls_pemfile::certs(&mut certs.as_ref())?;
+    let certs = certs.into_iter().map(rustls::Certificate).collect();
+    // Load private key
+    let key = tokio::fs::read(key_path).await?;
+    let key = match rustls_pemfile::read_one(&mut key.as_ref())? {
+        Some(Item::RSAKey(key)) | Some(Item::PKCS8Key(key)) | Some(Item::ECKey(key)) => key,
+        _ => return Err(Error::PrivateKeyNotSupported),
+    };
+    let key = rustls::PrivateKey(key);
+    // Build config
+    let config = ServerConfig::builder().with_safe_defaults();
+    let mut config = if let Some(client_ca_path) = client_ca_path {
+        let mut store = rustls::RootCertStore::empty();
+        let client_ca = tokio::fs::read(client_ca_path).await?;
+        let client_ca = rustls_pemfile::certs(&mut client_ca.as_ref())?;
+        let (new, _) = store.add_parsable_certificates(&client_ca);
+        if new == 0 {
+            return Err(Error::EmptyClientCertStore);
+        }
+        config.with_client_cert_verifier(rustls::server::AllowAnyAuthenticatedClient::new(store))
+    } else {
+        config.with_no_client_auth()
+    }
+    .with_single_cert(certs, key)?;
+    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    Ok(config)
 }
 
 /// Reverse proxy and 404
@@ -126,7 +206,7 @@ async fn backend_or_404_handler(
 
 /// 404 handler
 async fn not_found_handler(State(state): State<ServerState>) -> Response {
-    (StatusCode::NOT_FOUND, state.not_found_resp.clone()).into_response()
+    (StatusCode::NOT_FOUND, state.not_found_resp).into_response()
 }
 
 /// Check the PSK and protocol version and upgrade to a websocket if the PSK matches (if required).

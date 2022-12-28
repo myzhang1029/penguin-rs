@@ -281,7 +281,7 @@ impl FromStr for ServerUrl {
             .path_and_query(
                 url_parts
                     .path_and_query
-                    .unwrap_or(PathAndQuery::from_static("/")),
+                    .unwrap_or_else(|| PathAndQuery::from_static("/")),
             )
             .build()?;
         Ok(ServerUrl(url))
@@ -329,7 +329,7 @@ impl FromStr for BackendUrl {
             return Err(BackendUrlError::InvalidScheme(scheme.to_string()));
         }
         Ok(BackendUrl {
-            scheme: scheme,
+            scheme,
             authority: url_parts
                 .authority
                 .ok_or(BackendUrlError::MissingAuthority)?,
