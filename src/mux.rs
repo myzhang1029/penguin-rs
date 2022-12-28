@@ -1,6 +1,7 @@
 //! Client- and server-side connection multiplexing and processing
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
+use axum::extract::ws::Message as ServerMessage;
 use futures_util::{pin_mut, FutureExt, Sink, Stream};
 pub use penguin_tokio_stream_multiplexor::DuplexStream;
 use penguin_tokio_stream_multiplexor::{StreamMultiplexor, StreamMultiplexorConfig};
@@ -10,7 +11,6 @@ use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tracing::{debug, error};
 use tungstenite::Message as ClientMessage;
-use warp::ws::Message as ServerMessage;
 
 /// Generic representation of a `WebSocket` message
 pub trait WebSocketMessage: Unpin + Send + Sync + 'static {
@@ -30,11 +30,11 @@ impl WebSocketMessage for ClientMessage {
 
 impl WebSocketMessage for ServerMessage {
     fn from_data(data: Vec<u8>) -> Self {
-        Self::binary(data)
+        Self::Binary(data)
     }
 
     fn into_data(self) -> Vec<u8> {
-        self.into_bytes()
+        self.into_data()
     }
 }
 

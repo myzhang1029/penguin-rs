@@ -114,7 +114,7 @@ pub async fn handshake(
     tls_insecure: bool,
 ) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Error> {
     // We already sanitized https URLs to wss
-    let is_tls = url.scheme() == "wss";
+    let is_tls = url.scheme().unwrap().as_str() == "wss";
 
     // Use a request to allow additional headers
     let mut req: Request = url.0.into_client_request()?;
