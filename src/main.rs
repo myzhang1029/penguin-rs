@@ -8,6 +8,7 @@ mod mux;
 mod parse_remote;
 mod proto_version;
 mod server;
+mod tls;
 
 use clap::Parser;
 use thiserror::Error;

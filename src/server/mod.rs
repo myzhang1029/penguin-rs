@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use crate::arg::{BackendUrl, ServerArgs};
 use crate::proto_version::PROTOCOL_VERSION;
+use crate::tls::make_rustls_server_config;
 use axum::extract::WebSocketUpgrade;
 use axum::{
     body::Body,
@@ -20,7 +21,6 @@ use axum::{
 use axum_server::tls_rustls::RustlsConfig;
 use http::{HeaderMap, HeaderValue};
 use hyper::{client::HttpConnector, Body as HyperBody, Client as HyperClient};
-use rustls::ServerConfig;
 use thiserror::Error;
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 use tracing::{debug, error, info, trace, warn};
@@ -32,15 +32,9 @@ pub enum Error {
     /// Invalid listening host
     #[error("invalid listening host: {0}")]
     InvalidHost(#[from] std::net::AddrParseError),
-    /// Private key not supported
-    #[error("private key not supported")]
-    PrivateKeyNotSupported,
-    /// Client certificate store is empty
-    #[error("client certificate store is empty")]
-    EmptyClientCertStore,
-    /// General TLS error
-    #[error("rustls error: {0}")]
-    Tls(#[from] rustls::Error),
+    /// TLS error
+    #[error(transparent)]
+    Tls(#[from] crate::tls::Error),
     /// IO error
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
@@ -139,42 +133,6 @@ async fn reload_cert_on_signal(
             make_rustls_server_config(&cert_path, &key_path, client_ca_path.as_deref()).await?;
         config.reload_from_config(Arc::new(server_config));
     }
-}
-
-async fn make_rustls_server_config(
-    cert_path: &str,
-    key_path: &str,
-    client_ca_path: Option<&str>,
-) -> Result<ServerConfig, Error> {
-    use rustls_pemfile::Item;
-    // Load certificate chain
-    let certs = tokio::fs::read(cert_path).await?;
-    let certs = rustls_pemfile::certs(&mut certs.as_ref())?;
-    let certs = certs.into_iter().map(rustls::Certificate).collect();
-    // Load private key
-    let key = tokio::fs::read(key_path).await?;
-    let key = match rustls_pemfile::read_one(&mut key.as_ref())? {
-        Some(Item::RSAKey(key)) | Some(Item::PKCS8Key(key)) | Some(Item::ECKey(key)) => key,
-        _ => return Err(Error::PrivateKeyNotSupported),
-    };
-    let key = rustls::PrivateKey(key);
-    // Build config
-    let config = ServerConfig::builder().with_safe_defaults();
-    let mut config = if let Some(client_ca_path) = client_ca_path {
-        let mut store = rustls::RootCertStore::empty();
-        let client_ca = tokio::fs::read(client_ca_path).await?;
-        let client_ca = rustls_pemfile::certs(&mut client_ca.as_ref())?;
-        let (new, _) = store.add_parsable_certificates(&client_ca);
-        if new == 0 {
-            return Err(Error::EmptyClientCertStore);
-        }
-        config.with_client_cert_verifier(rustls::server::AllowAnyAuthenticatedClient::new(store))
-    } else {
-        config.with_no_client_auth()
-    }
-    .with_single_cert(certs, key)?;
-    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-    Ok(config)
 }
 
 /// Reverse proxy and 404
