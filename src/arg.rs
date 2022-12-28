@@ -3,11 +3,13 @@
 
 use crate::parse_remote::Remote;
 use clap::{arg, command, Args, Parser, Subcommand};
-use http::{header::HeaderName, HeaderValue};
+use http::{
+    header::HeaderName,
+    uri::{Authority, PathAndQuery, Scheme},
+    HeaderValue, Uri,
+};
 use std::{ops::Deref, str::FromStr};
 use thiserror::Error;
-use tracing::warn;
-use url::Url;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -172,7 +174,7 @@ pub struct ServerArgs {
     /// penguin receives a normal HTTP request. Useful for hiding penguin in
     /// plain sight.
     #[arg(long)]
-    pub(crate) backend: Option<String>,
+    pub(crate) backend: Option<BackendUrl>,
     /// Try harder to hide from Active Probes (disable /health and
     /// /version endpoints and HTTP headers that could potentially be used
     /// to fingerprint penguin). It is strongly recommended to use --ws-psk
@@ -186,7 +188,7 @@ pub struct ServerArgs {
     /// option is supplied but the client does not present the correct key
     /// in the HTTP header X-Penguin-PSK, the upgrade to WebSocket silently fails.
     #[arg(long)]
-    pub(crate) ws_psk: Option<String>,
+    pub(crate) ws_psk: Option<HeaderValue>,
     /// Enables TLS and provides optional path to a PEM-encoded
     /// TLS private key. When this flag is set, you must also set --tls-cert,
     /// and you cannot set --tls-domain.
@@ -229,56 +231,123 @@ pub struct ServerArgs {
 /// Server URL parsing errors
 #[derive(Debug, Error)]
 pub enum ServerUrlError {
-    #[error("failed to parse URL: {0}")]
-    UrlParse(#[from] url::ParseError),
-    #[error("incorrect scheme: {0}")]
+    #[error("failed to parse server URL: {0}")]
+    UrlParse(#[from] http::uri::InvalidUri),
+    #[error("incorrect scheme in server URL: {0}")]
     IncorrectScheme(String),
+    #[error("missing host in server URL")]
+    MissingHost,
+    #[error("cannot build server URL: {0}")]
+    BuildUrl(#[from] http::Error),
 }
 
 /// Server URL
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ServerUrl(pub Url);
+pub struct ServerUrl(pub Uri);
 
 impl FromStr for ServerUrl {
     type Err = ServerUrlError;
 
-    /// Sanitize the URL for WebSocket.
+    /// Sanitize the URL for WebSocket
     fn from_str(url: &str) -> Result<Self, Self::Err> {
-        // Provide a default scheme if none is provided.
-        let url = Url::parse(url).or_else(|e| {
-            if e == url::ParseError::RelativeUrlWithoutBase {
-                warn!("No scheme provided, using HTTP by default");
-                Url::parse(&format!("http://{url}"))
-            } else {
-                Err(e)
-            }
-        })?;
-        // Convert to a `Url`.
-        let url = match url.scheme() {
-            "wss" | "ws" => url,
-            "https" => {
-                let mut url = url;
-                url.set_scheme("wss").unwrap();
-                url
-            }
-            "http" => {
-                let mut url = url;
-                url.set_scheme("ws").unwrap();
-                url
-            }
-            scheme => {
-                return Err(Self::Err::IncorrectScheme(scheme.to_string()));
+        let url_parts = match Uri::from_str(url) {
+            Ok(url) => url.into_parts(),
+            Err(e) => {
+                // Try harder to provide a default scheme if none is provided
+                // `Uri`'s parser will not accept a URL without a scheme
+                // unless it only contains authority
+                if !url.starts_with("http://")
+                    && !url.starts_with("https://")
+                    && !url.starts_with("ws://")
+                    && !url.starts_with("wss://")
+                {
+                    let url = format!("ws://{}", url);
+                    Uri::from_str(&url)?.into_parts()
+                } else {
+                    return Err(e.into());
+                }
             }
         };
+        let old_scheme = url_parts.scheme.unwrap_or(http::uri::Scheme::HTTP);
+        let new_scheme = match old_scheme.as_ref() {
+            "http" | "ws" => Ok("ws"),
+            "https" | "wss" => Ok("wss"),
+            _ => Err(ServerUrlError::IncorrectScheme(old_scheme.to_string())),
+        }?;
+        // Convert to a `Uri`.
+        let url = Uri::builder()
+            .scheme(new_scheme)
+            .authority(url_parts.authority.ok_or(Self::Err::MissingHost)?)
+            .path_and_query(
+                url_parts
+                    .path_and_query
+                    .unwrap_or_else(|| PathAndQuery::from_static("/")),
+            )
+            .build()?;
         Ok(ServerUrl(url))
     }
 }
 
 impl Deref for ServerUrl {
-    type Target = Url;
+    type Target = Uri;
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+/// Backend URL parsing errors
+#[derive(Debug, Error)]
+pub enum BackendUrlError {
+    #[error("failed to parse backend URL: {0}")]
+    UrlParse(#[from] http::uri::InvalidUri),
+    #[error("missing authority in backend URL")]
+    MissingAuthority,
+    #[error("invalid backend scheme: {0}")]
+    InvalidScheme(String),
+}
+
+/// Backend URL
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackendUrl {
+    pub scheme: Scheme,
+    pub authority: Authority,
+    pub path: PathAndQuery,
+}
+
+impl FromStr for BackendUrl {
+    type Err = BackendUrlError;
+
+    /// Sanitize the backend URL
+    fn from_str(url: &str) -> Result<Self, Self::Err> {
+        // We don't try as hard to parse the URL as we do for the server URL
+        // because the backend URL is on the server side, so we don't need to
+        // be as forgiving.
+        let url_parts = Uri::from_str(url)?.into_parts();
+        let scheme = url_parts.scheme.unwrap_or(Scheme::HTTP);
+        if scheme != Scheme::HTTP && scheme != Scheme::HTTPS {
+            return Err(BackendUrlError::InvalidScheme(scheme.to_string()));
+        }
+        Ok(BackendUrl {
+            scheme,
+            authority: url_parts
+                .authority
+                .ok_or(BackendUrlError::MissingAuthority)?,
+            path: url_parts
+                .path_and_query
+                .unwrap_or_else(|| PathAndQuery::from_static("/")),
+        })
+    }
+}
+
+impl ToString for BackendUrl {
+    fn to_string(&self) -> String {
+        let mut url = String::new();
+        url.push_str(self.scheme.as_str());
+        url.push_str("://");
+        url.push_str(self.authority.as_str());
+        url.push_str(self.path.as_str());
+        url
     }
 }
 
@@ -324,26 +393,64 @@ mod tests {
     #[test]
     fn test_serverurl_fromstr() {
         assert_eq!(
-            ServerUrl::from_str("example.com").unwrap().as_str(),
+            ServerUrl::from_str("example.com").unwrap().to_string(),
             "ws://example.com/"
         );
         assert_eq!(
-            ServerUrl::from_str("wss://example.com").unwrap().as_str(),
+            ServerUrl::from_str("wss://example.com")
+                .unwrap()
+                .to_string(),
             "wss://example.com/"
         );
         assert_eq!(
-            ServerUrl::from_str("ws://example.com").unwrap().as_str(),
+            ServerUrl::from_str("ws://example.com").unwrap().to_string(),
             "ws://example.com/"
         );
         assert_eq!(
-            ServerUrl::from_str("https://example.com").unwrap().as_str(),
+            ServerUrl::from_str("https://example.com")
+                .unwrap()
+                .to_string(),
             "wss://example.com/"
         );
         assert_eq!(
-            ServerUrl::from_str("http://example.com").unwrap().as_str(),
+            ServerUrl::from_str("http://example.com")
+                .unwrap()
+                .to_string(),
             "ws://example.com/"
         );
         assert!(ServerUrl::from_str("ftp://example.com").is_err());
+    }
+
+    #[test]
+    fn test_backendurl_fromstr() {
+        assert_eq!(
+            BackendUrl::from_str("https://example.com")
+                .unwrap()
+                .to_string(),
+            "https://example.com/"
+        );
+        assert_eq!(
+            BackendUrl::from_str("http://example.com")
+                .unwrap()
+                .to_string(),
+            "http://example.com/"
+        );
+        assert_eq!(
+            BackendUrl::from_str("https://example.com/foo").unwrap(),
+            BackendUrl {
+                scheme: Scheme::HTTPS,
+                authority: Authority::from_static("example.com"),
+                path: PathAndQuery::from_static("/foo"),
+            }
+        );
+        assert_eq!(
+            BackendUrl::from_str("http://example.com/foo?bar")
+                .unwrap()
+                .to_string(),
+            "http://example.com/foo?bar"
+        );
+        assert!(BackendUrl::from_str("ftp://example.com").is_err());
+        assert!(BackendUrl::from_str("http://").is_err());
     }
 
     #[test]
@@ -372,10 +479,12 @@ mod tests {
             PenguinCli::parse_from(&["penguin", "client", "127.0.0.1:9999/endpoint", "1234"]);
         assert!(matches!(args.subcommand, Commands::Client(_)));
         if let Commands::Client(args) = args.subcommand {
-            assert_eq!(
-                args.server,
-                ServerUrl::from_str("127.0.0.1:9999/endpoint").unwrap()
-            );
+            let server_uri = args.server.0;
+            // Make sure the server URI is interpreted correctly
+            assert_eq!(server_uri.scheme_str(), Some("ws"));
+            assert_eq!(server_uri.host(), Some("127.0.0.1"));
+            assert_eq!(server_uri.port_u16(), Some(9999));
+            assert_eq!(server_uri.path(), "/endpoint");
             assert_eq!(
                 args.remote,
                 [Remote {

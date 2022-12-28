@@ -1,6 +1,8 @@
 //! Client- and server-side connection multiplexing and processing
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
+use axum::extract::ws::Message as ServerMessage;
+use bytes::Buf;
 use futures_util::{pin_mut, FutureExt, Sink, Stream};
 pub use penguin_tokio_stream_multiplexor::DuplexStream;
 use penguin_tokio_stream_multiplexor::{StreamMultiplexor, StreamMultiplexorConfig};
@@ -10,7 +12,6 @@ use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tracing::{debug, error};
 use tungstenite::Message as ClientMessage;
-use warp::ws::Message as ServerMessage;
 
 /// Generic representation of a `WebSocket` message
 pub trait WebSocketMessage: Unpin + Send + Sync + 'static {
@@ -30,11 +31,11 @@ impl WebSocketMessage for ClientMessage {
 
 impl WebSocketMessage for ServerMessage {
     fn from_data(data: Vec<u8>) -> Self {
-        Self::binary(data)
+        Self::Binary(data)
     }
 
     fn into_data(self) -> Vec<u8> {
-        self.into_bytes()
+        self.into_data()
     }
 }
 
@@ -58,7 +59,7 @@ where
         Stream<Item = Result<Msg, Err>> + Sink<Msg, Error = Err> + Unpin + Send + Sized + 'static,
 {
     inner: Inner,
-    buffer: Option<Vec<u8>>,
+    buffer: bytes::BytesMut,
 }
 
 impl<Inner, Msg, Err> WebSocket<Inner, Msg, Err>
@@ -72,7 +73,7 @@ where
     pub fn new(ws: Inner) -> Self {
         Self {
             inner: ws,
-            buffer: None,
+            buffer: bytes::BytesMut::with_capacity(1024),
         }
     }
 }
@@ -89,40 +90,31 @@ where
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<Result<(), std::io::Error>> {
-        /// Fill `buf` from `data` and save the remaining data back in `data`
-        fn fill_save_extra(buf: &mut ReadBuf<'_>, data: &mut Vec<u8>) {
-            let buf_remaining = buf.remaining();
-            if buf_remaining < data.len() {
-                let remaining_data = data.split_off(buf_remaining);
-                buf.put_slice(data);
-                *data = remaining_data;
-            } else {
-                buf.put_slice(data);
-                data.clear();
-            }
-        }
-        if let Some(mut data) = self.buffer.take() {
-            // Fill `buf` from leftover data
-            fill_save_extra(buf, &mut data);
-            if !data.is_empty() {
-                // Save leftover data
-                self.buffer = Some(data);
-            }
-            Poll::Ready(Ok(()))
-        } else {
+        let buf_remaining = buf.remaining();
+        if self.buffer.is_empty() {
             Pin::new(&mut self.inner).poll_next(cx).map(|x| match x {
                 Some(Ok(message)) => {
-                    let mut data = message.into_data();
-                    fill_save_extra(buf, &mut data);
-                    if !data.is_empty() {
-                        // Save leftover data
-                        self.buffer = Some(data);
+                    let data = message.into_data();
+                    if buf_remaining < data.len() {
+                        buf.put_slice(&data[..buf_remaining]);
+                        self.buffer.extend_from_slice(&data[buf_remaining..]);
+                    } else {
+                        buf.put_slice(&data);
                     }
                     Ok(())
                 }
                 Some(Err(e)) => Err(e.into_io_error()),
                 None => Ok(()),
             })
+        } else {
+            if buf_remaining < self.buffer.len() {
+                buf.put_slice(&self.buffer[..buf_remaining]);
+                self.buffer.advance(buf_remaining);
+            } else {
+                buf.put_slice(&self.buffer);
+                self.buffer.clear();
+            }
+            Poll::Ready(Ok(()))
         }
     }
 }
