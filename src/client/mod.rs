@@ -37,6 +37,7 @@ type Command = oneshot::Sender<DuplexStream>;
 #[tracing::instrument(level = "trace")]
 pub async fn client_main(args: ClientArgs) -> Result<(), Error> {
     // TODO: Temporary, remove when implemented
+    // Blocked on `snapview/tungstenite-rs#177`
     if args.proxy.is_some() {
         warn!("Proxy not implemented yet");
     }
@@ -173,8 +174,10 @@ async fn get_send_chan_or_put_back(
     match mux.open_channel().await {
         Ok(stream) => {
             trace!("got a new channel");
-            sender.send(stream).unwrap();
-            trace!("sent stream to handler");
+            // `Err(_)` means "the corresponding receiver has already been deallocated"
+            // which means we don't care about the channel anymore.
+            sender.send(stream).ok();
+            trace!("sent stream to handler (or handler died)");
             Ok(true)
         }
         Err(crate::mux::Error::Io(e)) => {

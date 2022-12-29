@@ -103,20 +103,18 @@ pub async fn server_main(args: ServerArgs) -> Result<(), Error> {
     );
 
     if let Some(tls_key) = &args.tls_key {
+        // `unwrap()` is safe because `clap` ensures that both `--tls-cert` and `--tls-key` are
+        // specified if either is specified.
+        let tls_cert = args.tls_cert.unwrap();
         trace!("Enabling TLS");
         info!("Listening on wss://{}:{}/ws", args.host, args.port);
-        let config = make_rustls_server_config(
-            args.tls_cert.as_deref().unwrap(),
-            tls_key,
-            args.tls_ca.as_deref(),
-        )
-        .await?;
+        let config = make_rustls_server_config(&tls_cert, tls_key, args.tls_ca.as_deref()).await?;
         let config = RustlsConfig::from_config(Arc::new(config));
 
         #[cfg(unix)]
         tokio::spawn(reload_cert_on_signal(
             config.clone(),
-            args.tls_cert.unwrap(),
+            tls_cert,
             tls_key.clone(),
             args.tls_ca.clone(),
         ));
@@ -173,6 +171,12 @@ async fn backend_or_404_handler(
             .build()
             .unwrap();
         *req.uri_mut() = uri;
+        // This may not be the best way to do this, but to avoid panicking if
+        // we have a HTTP/2 request, but `backend` does not support h2, let's
+        // downgrade to HTTP/1.1 and let them upgrade if they want to.
+        *req.version_mut() = http::version::Version::default();
+        // XXX: I don't really know what I am `unwrap`ping, but I think it's
+        // the best I can do in this situation.
         return state.client.request(req).await.unwrap().into_response();
     }
     not_found_handler(State(state)).await

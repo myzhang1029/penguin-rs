@@ -288,6 +288,8 @@ where
                 }
                 1 => {
                     // Open a new channel
+                    // `unwrap` is safe because we have already checked that the control channel is
+                    // established
                     let ctrl_chan = self.ctrl_chan.as_mut().unwrap();
                     let listener = self.mux.bind(0).await?;
                     let port = listener.port();

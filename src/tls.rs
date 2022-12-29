@@ -49,6 +49,8 @@ pub async fn make_rustls_server_config(
     client_ca_path: Option<&str>,
 ) -> Result<ServerConfig, Error> {
     // Load certificate
+    // `unwrap()` is safe because we only get `None` if `key_path` and `cert_path` are `None`,
+    // which is not the case here.
     let (certs, key) = try_load_certificate(Some(key_path), Some(cert_path))
         .await?
         .unwrap();
