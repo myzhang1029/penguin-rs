@@ -56,14 +56,14 @@ where
 pub(crate) async fn handle_udp_socket(
     command_tx: mpsc::Sender<Command>,
     socket: UdpSocket,
-    rhost: String,
+    rhost: &str,
     rport: u16,
 ) -> Result<(), Error> {
     // Outer loop to handle channel reconnects
     loop {
         let channel = request_channel(&command_tx).await?;
         let (mut channel_rx, mut channel_tx) = tokio::io::split(channel);
-        channel_udp_handshake(&mut channel_rx, &mut channel_tx, &rhost, rport).await?;
+        channel_udp_handshake(&mut channel_rx, &mut channel_tx, rhost, rport).await?;
         let mut buf = [0u8; 65536];
         let e = loop {
             // XXX: Note that we block on reading from the channel. This means that

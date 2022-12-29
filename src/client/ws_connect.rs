@@ -1,8 +1,8 @@
 //! WebSocket connection.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use crate::proto_version::PROTOCOL_VERSION;
 use crate::tls::make_rustls_client_config;
+use crate::{arg::ServerUrl, proto_version::PROTOCOL_VERSION};
 use http::header::HeaderValue;
 use thiserror::Error;
 use tokio::net::TcpStream;
@@ -23,13 +23,14 @@ pub enum Error {
     Tls(#[from] crate::tls::Error),
 }
 
+/// Perform a WebSocket handshake.
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(level = "debug", skip(extra_headers))]
 pub async fn handshake(
-    url: crate::arg::ServerUrl,
-    ws_psk: Option<HeaderValue>,
-    override_hostname: Option<HeaderValue>,
-    extra_headers: Vec<crate::arg::Header>,
+    url: &ServerUrl,
+    ws_psk: Option<&HeaderValue>,
+    override_hostname: Option<&HeaderValue>,
+    extra_headers: &[crate::arg::Header],
     tls_ca: Option<&str>,
     tls_key: Option<&str>,
     tls_cert: Option<&str>,
@@ -39,7 +40,7 @@ pub async fn handshake(
     let is_tls = url.scheme().unwrap().as_str() == "wss";
 
     // Use a request to allow additional headers
-    let mut req: Request = url.0.into_client_request()?;
+    let mut req: Request = url.0.clone().into_client_request()?;
     let req_headers = req.headers_mut();
     // Add protocol version
     req_headers.insert(
@@ -48,15 +49,15 @@ pub async fn handshake(
     );
     // Add PSK
     if let Some(ws_psk) = ws_psk {
-        req_headers.insert("x-penguin-psk", ws_psk);
+        req_headers.insert("x-penguin-psk", ws_psk.clone());
     }
     // Add potentially custom hostname
     if let Some(hostname) = override_hostname {
-        req_headers.insert("host", hostname);
+        req_headers.insert("host", hostname.clone());
     }
     // Now add custom headers
     for header in extra_headers {
-        req_headers.insert(header.name, header.value);
+        req_headers.insert(header.name.clone(), header.value.clone());
     }
 
     let connector = if is_tls {

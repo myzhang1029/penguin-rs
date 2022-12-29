@@ -10,7 +10,7 @@ use crate::arg::{BackendUrl, ServerArgs};
 use crate::proto_version::PROTOCOL_VERSION;
 use crate::tls::make_rustls_server_config;
 use axum::async_trait;
-use axum::extract::FromRequestParts;
+use axum::extract::FromRequest;
 use axum::{
     body::Body,
     extract::State,
@@ -21,8 +21,8 @@ use axum::{
 };
 use axum_server::tls_rustls::RustlsConfig;
 use http::header::SEC_WEBSOCKET_VERSION;
+use http::HeaderValue;
 use http::Method;
-use http::{request::Parts, HeaderValue};
 use hyper::upgrade::{OnUpgrade, Upgraded};
 use hyper::{client::HttpConnector, Body as HyperBody, Client as HyperClient};
 use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
@@ -60,19 +60,19 @@ pub enum Error {
 
 /// Required state
 #[derive(Clone, Debug)]
-pub struct ServerState {
+pub struct ServerState<'a> {
     /// Backend URL
-    pub backend: Option<BackendUrl>,
+    pub backend: Option<&'a BackendUrl>,
     /// Websocket PSK
-    pub ws_psk: Option<HeaderValue>,
+    pub ws_psk: Option<&'a HeaderValue>,
     /// 404 response
-    pub not_found_resp: String,
+    pub not_found_resp: &'a str,
     /// Hyper client
     pub client: HyperClient<HttpsConnector<HttpConnector>, HyperBody>,
 }
 
 #[tracing::instrument(level = "trace")]
-pub async fn server_main(args: ServerArgs) -> Result<(), Error> {
+pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
     let host = if args.host.starts_with('[') && args.host.ends_with(']') {
         // Remove brackets from IPv6 addresses
         &args.host[1..args.host.len() - 1]
@@ -97,9 +97,9 @@ pub async fn server_main(args: ServerArgs) -> Result<(), Error> {
         .build();
 
     let state = ServerState {
-        backend: args.backend,
-        ws_psk: args.ws_psk,
-        not_found_resp: args.not_found_resp,
+        backend: args.backend.as_ref(),
+        ws_psk: args.ws_psk.as_ref(),
+        not_found_resp: &args.not_found_resp,
         client: HyperClient::builder().build(client_https),
     };
 
@@ -119,18 +119,18 @@ pub async fn server_main(args: ServerArgs) -> Result<(), Error> {
     if let Some(tls_key) = &args.tls_key {
         // `unwrap()` is safe because `clap` ensures that both `--tls-cert` and `--tls-key` are
         // specified if either is specified.
-        let tls_cert = args.tls_cert.unwrap();
+        let tls_cert = args.tls_cert.as_ref().unwrap();
         trace!("Enabling TLS");
         info!("Listening on wss://{}:{}/ws", args.host, args.port);
-        let config = make_rustls_server_config(&tls_cert, tls_key, args.tls_ca.as_deref()).await?;
+        let config = make_rustls_server_config(tls_cert, tls_key, args.tls_ca.as_deref()).await?;
         let config = RustlsConfig::from_config(Arc::new(config));
 
         #[cfg(unix)]
         tokio::spawn(reload_cert_on_signal(
             config.clone(),
             tls_cert,
-            tls_key.clone(),
-            args.tls_ca.clone(),
+            tls_key,
+            args.tls_ca.as_deref(),
         ));
         axum_server::bind_rustls(sockaddr, config)
             .serve(app.into_make_service())
@@ -148,27 +148,26 @@ pub async fn server_main(args: ServerArgs) -> Result<(), Error> {
 #[cfg(unix)]
 async fn reload_cert_on_signal(
     config: RustlsConfig,
-    cert_path: String,
-    key_path: String,
-    client_ca_path: Option<String>,
+    cert_path: &str,
+    key_path: &str,
+    client_ca_path: Option<&str>,
 ) -> Result<(), Error> {
     let mut sigusr1 =
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined1())?;
     loop {
         sigusr1.recv().await;
         info!("Reloading TLS certificate");
-        let server_config =
-            make_rustls_server_config(&cert_path, &key_path, client_ca_path.as_deref()).await?;
+        let server_config = make_rustls_server_config(cert_path, key_path, client_ca_path).await?;
         config.reload_from_config(Arc::new(server_config));
     }
 }
 
 /// Reverse proxy and 404
 async fn backend_or_404_handler(
-    State(state): State<ServerState>,
+    State(state): State<ServerState<'static>>,
     mut req: Request<Body>,
 ) -> Response {
-    if let Some(backend) = &state.backend {
+    if let Some(backend) = state.backend {
         let path = req.uri().path();
         let path_query = req
             .uri()
@@ -197,7 +196,7 @@ async fn backend_or_404_handler(
 }
 
 /// 404 handler
-async fn not_found_handler(State(state): State<ServerState>) -> Response {
+async fn not_found_handler(State(state): State<ServerState<'static>>) -> Response {
     (StatusCode::NOT_FOUND, state.not_found_resp).into_response()
 }
 
@@ -267,14 +266,15 @@ macro_rules! header_matches {
 }
 
 #[async_trait]
-impl FromRequestParts<ServerState> for StealthWebSocketUpgrade {
+impl FromRequest<ServerState<'static>, Body> for StealthWebSocketUpgrade {
     type Rejection = Response;
 
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &ServerState,
+    async fn from_request(
+        mut req: Request<Body>,
+        state: &ServerState<'static>,
     ) -> Result<Self, Self::Rejection> {
-        let headers = &parts.headers;
+        let on_upgrade = req.extensions_mut().remove::<OnUpgrade>();
+        let headers = req.headers();
         let connection = headers.get("connection");
         let upgrade = headers.get("upgrade");
         let sec_websocket_key = headers.get("sec-websocket-key");
@@ -282,33 +282,29 @@ impl FromRequestParts<ServerState> for StealthWebSocketUpgrade {
         let sec_websocket_version = headers.get(SEC_WEBSOCKET_VERSION);
         let x_penguin_psk = headers.get("x-penguin-psk");
 
-        let on_upgrade = parts.extensions.remove::<OnUpgrade>();
-
-        // TODO: the fact that we have `backend`, but we are not using it
-        // here is a leak of information. We should probably also use the
-        // backend here.
-        if parts.method != Method::GET {
+        // TODO: these clones are probably not necessary
+        if req.method() != Method::GET {
             warn!("Invalid websocket request: not a GET request");
-            return Err(not_found_handler(State(state.clone())).await);
+            return Err(backend_or_404_handler(State(state.clone()), req).await);
         }
-        if state.ws_psk.is_some() && x_penguin_psk != state.ws_psk.as_ref() {
+        if state.ws_psk.is_some() && x_penguin_psk != state.ws_psk {
             warn!("Invalid websocket request: invalid PSK {x_penguin_psk:?}");
-            return Err(not_found_handler(State(state.clone())).await);
+            return Err(backend_or_404_handler(State(state.clone()), req).await);
         }
         if sec_websocket_key.is_none() {
             warn!("Invalid websocket request: no sec-websocket-key header");
-            return Err(not_found_handler(State(state.clone())).await);
+            return Err(backend_or_404_handler(State(state.clone()), req).await);
         }
         if !header_matches!(connection, UPGRADE)
             || !header_matches!(upgrade, WEBSOCKET)
             || !header_matches!(sec_websocket_version, WEBSOCKET_VERSION)
             || !header_matches!(sec_websocket_protocol, WANTED_PROTOCOL)
         {
-            return Err(not_found_handler(State(state.clone())).await);
+            return Err(backend_or_404_handler(State(state.clone()), req).await);
         }
         if on_upgrade.is_none() {
             error!("Empty `on_upgrade`");
-            return Err(not_found_handler(State(state.clone())).await);
+            return Err(backend_or_404_handler(State(state.clone()), req).await);
         }
         // We can `unwrap()` here because we checked that the header is present
         let sec_websocket_accept = make_sec_websocket_accept(sec_websocket_key.unwrap());
@@ -331,8 +327,6 @@ fn make_sec_websocket_accept(key: &HeaderValue) -> HeaderValue {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use super::*;
 
     #[test]
@@ -347,8 +341,11 @@ mod tests {
         assert_eq!(actual, expected);
     }
 
+    #[cfg(feature = "tests-real-internet")]
     #[tokio::test]
     async fn test_stealth_websocket_upgrade_from_request_parts() {
+        use once_cell::sync::Lazy;
+        use std::str::FromStr;
         #[cfg(feature = "rustls-native-roots")]
         let client_https = HttpsConnectorBuilder::new()
             .with_native_roots()
@@ -363,22 +360,23 @@ mod tests {
             .enable_http1()
             .enable_http2()
             .build();
+        static BACKEND: Lazy<BackendUrl> =
+            Lazy::new(|| BackendUrl::from_str("http://example.com").unwrap());
         let state = ServerState {
             ws_psk: None,
-            backend: Some(BackendUrl::from_str("http://localhost:8080").unwrap()),
-            not_found_resp: String::from("not found in the test"),
+            backend: Some(&BACKEND),
+            not_found_resp: "not found in the test",
             client: HyperClient::builder().build(client_https),
         };
-        let (mut parts, _) = Request::builder()
+        let req = Request::builder()
             .method(Method::GET)
             .header("connection", "UpGrAdE")
             .header("upgrade", "WEBSOCKET")
             .header("sec-websocket-version", "13")
             .header("sec-websocket-protocol", &WANTED_PROTOCOL)
-            .body(())
-            .unwrap()
-            .into_parts();
-        let upgrade = StealthWebSocketUpgrade::from_request_parts(&mut parts, &state).await;
+            .body(Body::empty())
+            .unwrap();
+        let upgrade = StealthWebSocketUpgrade::from_request(req, &state).await;
         assert!(upgrade.is_err());
         // Can't really test the rest because we need to have a `OnUpgrade`.
     }

@@ -35,7 +35,7 @@ pub enum Error {
 type Command = oneshot::Sender<DuplexStream>;
 
 #[tracing::instrument(level = "trace")]
-pub async fn client_main(args: ClientArgs) -> Result<(), Error> {
+pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
     // TODO: Temporary, remove when implemented
     // Blocked on `snapview/tungstenite-rs#177`
     if args.proxy.is_some() {
@@ -48,7 +48,7 @@ pub async fn client_main(args: ClientArgs) -> Result<(), Error> {
     let (mut cmd_tx, mut cmd_rx) = mpsc::channel::<Command>(32);
     let mut jobs = JoinSet::new();
     // Spawn listeners. See `handle_remote.rs` for the implementation considerations.
-    for remote in args.remote {
+    for remote in &args.remote {
         // According to the docs, we should clone the sender for each task
         let cmd_tx = cmd_tx.clone();
         jobs.spawn(handle_remote(remote, cmd_tx));
@@ -56,10 +56,10 @@ pub async fn client_main(args: ClientArgs) -> Result<(), Error> {
     // Retry loop
     loop {
         match ws_connect::handshake(
-            args.server.clone(),
-            args.ws_psk.clone(),
-            args.hostname.clone(),
-            args.header.clone(),
+            &args.server,
+            args.ws_psk.as_ref(),
+            args.hostname.as_ref(),
+            &args.header,
             args.tls_ca.as_deref(),
             args.tls_key.as_deref(),
             args.tls_cert.as_deref(),

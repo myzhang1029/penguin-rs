@@ -44,7 +44,7 @@ pub(crate) async fn handle_socks_connection<R, W>(
     command_tx: mpsc::Sender<Command>,
     reader: R,
     mut writer: W,
-    local_addr: String,
+    local_addr: &str,
 ) -> Result<(), Error>
 where
     R: AsyncRead + Unpin,
@@ -147,7 +147,7 @@ where
     match command {
         0x01 => {
             // CONNECT
-            handle_connect(&command_tx, breader, writer, rhost, rport).await
+            handle_connect(&command_tx, breader, writer, &rhost, rport).await
         }
         0x02 => {
             // BIND
@@ -176,7 +176,7 @@ async fn handle_connect<R, W>(
     command_tx: &mpsc::Sender<Command>,
     reader: R,
     mut writer: W,
-    rhost: String,
+    rhost: &str,
     rport: u16,
 ) -> Result<(), Error>
 where
@@ -192,7 +192,7 @@ where
     );
     let (mut remote_rx, mut remote_tx) = tokio::io::split(channel);
     execute_or_pass_error!(
-        channel_tcp_handshake(&mut remote_rx, &mut remote_tx, &rhost, rport).await,
+        channel_tcp_handshake(&mut remote_rx, &mut remote_tx, rhost, rport).await,
         0x01,
         "cannot handshate on the channel",
         &mut writer
@@ -211,7 +211,7 @@ async fn handle_associate<R, W>(
     mut writer: W,
     rhost: String,
     rport: u16,
-    local_addr: String,
+    local_addr: &str,
 ) -> Result<(), Error>
 where
     R: AsyncRead + Unpin,

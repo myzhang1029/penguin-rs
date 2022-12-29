@@ -8,6 +8,7 @@ use http::{
     uri::{Authority, PathAndQuery, Scheme},
     HeaderValue, Uri,
 };
+use once_cell::sync::OnceCell;
 use std::{ops::Deref, str::FromStr};
 use thiserror::Error;
 
@@ -21,6 +22,20 @@ pub struct PenguinCli {
     pub(crate) verbose: bool,
     #[arg(short, long, conflicts_with = "verbose")]
     pub(crate) quiet: bool,
+}
+
+/// Global args to avoid cloning
+pub(crate) static ARGS: OnceCell<PenguinCli> = OnceCell::new();
+
+impl PenguinCli {
+    pub fn get_global() -> &'static Self {
+        ARGS.get().expect("ARGS is not initialized")
+    }
+
+    pub(crate) fn parse_global() {
+        ARGS.set(PenguinCli::parse())
+            .expect("Should not be called twice");
+    }
 }
 
 #[derive(Subcommand, Debug)]

@@ -86,12 +86,15 @@ pub enum Error {
 /// This should be spawned as tasks and they will remain as long as `client`
 /// is alive. Individual connection tasks are spawned as connections appear.
 #[tracing::instrument(skip(command_tx), level = "debug")]
-pub async fn handle_remote(remote: Remote, command_tx: mpsc::Sender<Command>) -> Result<(), Error> {
+pub async fn handle_remote(
+    remote: &'static Remote,
+    command_tx: mpsc::Sender<Command>,
+) -> Result<(), Error> {
     debug!("opening remote {remote}");
-    match (remote.local_addr, remote.remote_addr, remote.protocol) {
+    match (&remote.local_addr, &remote.remote_addr, remote.protocol) {
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Inet((rhost, rport)), Protocol::Tcp) => {
-            let listener = TcpListener::bind((lhost, lport)).await?;
-            info!("Listening on port {lport}");
+            let listener = TcpListener::bind((lhost.as_str(), *lport)).await?;
+            info!("Listening on {lhost}:{lport}");
             loop {
                 let (tcp_stream, _) = listener.accept().await?;
                 // A new channel is created for each incoming TCP connection.
@@ -99,23 +102,21 @@ pub async fn handle_remote(remote: Remote, command_tx: mpsc::Sender<Command>) ->
                 let channel = complete_or_continue!(request_channel(&command_tx).await);
                 // Don't use `BufWriter` here because it will buffer the handshake
                 // And also make sure we don't nest `BufReader`s
-                let rhost = rhost.clone();
                 tokio::spawn(async move {
                     let (tcp_rx, tcp_tx) = tokio::io::split(tcp_stream);
                     let tcp_rx = BufReader::new(tcp_rx);
                     let (channel_rx, channel_tx) = tokio::io::split(channel);
                     let channel_rx = BufReader::new(channel_rx);
-                    handle_tcp_connection(channel_rx, channel_tx, &rhost, rport, tcp_rx, tcp_tx)
+                    handle_tcp_connection(channel_rx, channel_tx, rhost, *rport, tcp_rx, tcp_tx)
                         .await
                 });
             }
         }
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Inet((rhost, rport)), Protocol::Udp) => {
-            let socket = UdpSocket::bind((lhost, lport)).await?;
-            info!("Bound on port {lport}");
+            let socket = UdpSocket::bind((lhost.as_str(), *lport)).await?;
+            info!("Bound on {lhost}:{lport}");
             let command_tx = command_tx.clone();
-            let rhost = rhost.clone();
-            tokio::spawn(handle_udp_socket(command_tx, socket, rhost, rport));
+            tokio::spawn(handle_udp_socket(command_tx, socket, rhost, *rport));
             Ok(())
         }
         (LocalSpec::Stdio, RemoteSpec::Inet((rhost, rport)), Protocol::Tcp) => {
@@ -126,7 +127,7 @@ pub async fn handle_remote(remote: Remote, command_tx: mpsc::Sender<Command>) ->
                 let (channel_rx, mut channel_tx) = tokio::io::split(channel);
                 let mut channel_rx = BufReader::new(channel_rx);
                 complete_or_continue!(
-                    channel_tcp_handshake(&mut channel_rx, &mut channel_tx, &rhost, rport).await
+                    channel_tcp_handshake(&mut channel_rx, &mut channel_tx, rhost, *rport).await
                 );
                 complete_or_continue_if_retryable!(
                     pipe_streams(&mut stdin, &mut stdout, channel_rx, channel_tx).await
@@ -140,7 +141,7 @@ pub async fn handle_remote(remote: Remote, command_tx: mpsc::Sender<Command>) ->
                 let (channel_rx, mut channel_tx) = tokio::io::split(channel);
                 let mut channel_rx = BufReader::new(channel_rx);
                 complete_or_continue!(
-                    channel_udp_handshake(&mut channel_rx, &mut channel_tx, &rhost, rport).await
+                    channel_udp_handshake(&mut channel_rx, &mut channel_tx, rhost, *rport).await
                 );
                 tokio::spawn(async move {
                     let mut stdout = tokio::io::stdout();
@@ -158,13 +159,12 @@ pub async fn handle_remote(remote: Remote, command_tx: mpsc::Sender<Command>) ->
         }
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Socks, _) => {
             // The parser guarantees that the protocol is TCP
-            let listener = TcpListener::bind((lhost.clone(), lport)).await?;
+            let listener = TcpListener::bind((lhost.as_str(), *lport)).await?;
             info!("Listening on port {lport}");
             loop {
                 let (tcp_stream, _) = listener.accept().await?;
                 let (tcp_rx, tcp_tx) = tokio::io::split(tcp_stream);
                 let command_tx = command_tx.clone();
-                let lhost = lhost.clone();
                 tokio::spawn(async move {
                     handle_socks_connection(command_tx, tcp_rx, tcp_tx, lhost).await
                 });
@@ -176,7 +176,7 @@ pub async fn handle_remote(remote: Remote, command_tx: mpsc::Sender<Command>) ->
                 command_tx,
                 tokio::io::stdin(),
                 tokio::io::stdout(),
-                String::from("localhost"),
+                "localhost",
             )
             .await?)
         }
