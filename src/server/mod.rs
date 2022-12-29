@@ -9,7 +9,8 @@ use std::sync::Arc;
 use crate::arg::{BackendUrl, ServerArgs};
 use crate::proto_version::PROTOCOL_VERSION;
 use crate::tls::make_rustls_server_config;
-use axum::extract::WebSocketUpgrade;
+use axum::async_trait;
+use axum::extract::FromRequestParts;
 use axum::{
     body::Body,
     extract::State,
@@ -19,13 +20,26 @@ use axum::{
     Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
-use http::{HeaderMap, HeaderValue};
+use http::header::SEC_WEBSOCKET_VERSION;
+use http::Method;
+use http::{request::Parts, HeaderValue};
+use hyper::upgrade::{OnUpgrade, Upgraded};
 use hyper::{client::HttpConnector, Body as HyperBody, Client as HyperClient};
 use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
+use sha1::{Digest, Sha1};
 use thiserror::Error;
+use tokio_tungstenite::WebSocketStream;
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 use tracing::{debug, error, info, trace, warn};
+use tungstenite::protocol::{self, WebSocketConfig};
 use websocket::handle_websocket;
+
+static UPGRADE: HeaderValue = HeaderValue::from_static("upgrade");
+static WEBSOCKET: HeaderValue = HeaderValue::from_static("websocket");
+static WANTED_PROTOCOL: HeaderValue = HeaderValue::from_static(PROTOCOL_VERSION);
+static WEBSOCKET_VERSION: HeaderValue = HeaderValue::from_static("13");
+
+type WebSocket = WebSocketStream<Upgraded>;
 
 /// Server Errors
 #[derive(Debug, Error)]
@@ -90,7 +104,7 @@ pub async fn server_main(args: ServerArgs) -> Result<(), Error> {
     };
 
     let mut app: Router<()> = Router::new()
-        .route("/ws", get(ws_or_404_handler))
+        .route("/ws", get(ws_handler))
         .fallback(backend_or_404_handler)
         .with_state(state);
     if !args.obfs {
@@ -188,23 +202,184 @@ async fn not_found_handler(State(state): State<ServerState>) -> Response {
 }
 
 /// Check the PSK and protocol version and upgrade to a websocket if the PSK matches (if required).
-pub async fn ws_or_404_handler(
-    State(state): State<ServerState>,
-    ws: WebSocketUpgrade,
-    headers: HeaderMap,
-) -> Response {
-    if let Some(predefined_psk) = &state.ws_psk {
-        let supplied_psk = headers.get("x-penguin-psk");
-        if supplied_psk.is_none() || supplied_psk.unwrap() != predefined_psk {
-            warn!("Invalid PSK");
-            return not_found_handler(State(state)).await;
-        }
-    }
-    let proto = headers.get("sec-websocket-protocol");
-    if proto.is_none() || proto.unwrap() != PROTOCOL_VERSION {
-        warn!("Invalid protocol version");
-        return not_found_handler(State(state)).await;
-    }
+pub async fn ws_handler(ws: StealthWebSocketUpgrade) -> Response {
     debug!("Upgrading to websocket");
-    ws.on_upgrade(handle_websocket)
+    ws.on_upgrade(handle_websocket).await
+}
+
+/// A variant of `WebSocketUpgrade` that does not leak information
+/// about the presence of a websocket endpoint if the upgrade fails.
+pub struct StealthWebSocketUpgrade {
+    config: WebSocketConfig,
+    sec_websocket_accept: HeaderValue,
+    on_upgrade: OnUpgrade,
+}
+
+impl StealthWebSocketUpgrade {
+    /// Upgrade to a websocket.
+    pub async fn on_upgrade<F, Fut, T>(self, callback: F) -> Response
+    where
+        F: FnOnce(WebSocket) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = T> + Send,
+    {
+        let on_upgrade = self.on_upgrade;
+        let config = self.config;
+
+        tokio::spawn(async move {
+            match on_upgrade.await {
+                Ok(upgraded) => {
+                    let ws = WebSocketStream::from_raw_socket(
+                        upgraded,
+                        protocol::Role::Server,
+                        Some(config),
+                    )
+                    .await;
+                    callback(ws).await;
+                }
+                Err(err) => {
+                    error!("Failed to upgrade to websocket: {err}");
+                }
+            };
+        });
+
+        // Shouldn't panic
+        Response::builder()
+            .status(StatusCode::SWITCHING_PROTOCOLS)
+            .header("connection", &UPGRADE)
+            .header("upgrade", &WEBSOCKET)
+            .header("sec-websocket-protocol", &WANTED_PROTOCOL)
+            .header("sec-websocket-accept", self.sec_websocket_accept)
+            .body(axum::body::boxed(axum::body::Empty::new()))
+            .expect("Failed to build response")
+    }
+}
+
+macro_rules! header_matches {
+    ($given:expr, $wanted:expr) => {
+        $given
+            .map(|v| v.as_bytes())
+            .map(|v| v.eq_ignore_ascii_case($wanted.as_bytes()))
+            .unwrap_or_else(|| {
+                warn!("Header {:?} does not match {:?}", $given, $wanted);
+                false
+            })
+    };
+}
+
+#[async_trait]
+impl FromRequestParts<ServerState> for StealthWebSocketUpgrade {
+    type Rejection = Response;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &ServerState,
+    ) -> Result<Self, Self::Rejection> {
+        let headers = &parts.headers;
+        let connection = headers.get("connection");
+        let upgrade = headers.get("upgrade");
+        let sec_websocket_key = headers.get("sec-websocket-key");
+        let sec_websocket_protocol = headers.get("sec-websocket-protocol");
+        let sec_websocket_version = headers.get(SEC_WEBSOCKET_VERSION);
+        let x_penguin_psk = headers.get("x-penguin-psk");
+
+        let on_upgrade = parts.extensions.remove::<OnUpgrade>();
+
+        // TODO: the fact that we have `backend`, but we are not using it
+        // here is a leak of information. We should probably also use the
+        // backend here.
+        if parts.method != Method::GET {
+            warn!("Invalid websocket request: not a GET request");
+            return Err(not_found_handler(State(state.clone())).await);
+        }
+        if state.ws_psk.is_some() && x_penguin_psk != state.ws_psk.as_ref() {
+            warn!("Invalid websocket request: invalid PSK {x_penguin_psk:?}");
+            return Err(not_found_handler(State(state.clone())).await);
+        }
+        if sec_websocket_key.is_none() {
+            warn!("Invalid websocket request: no sec-websocket-key header");
+            return Err(not_found_handler(State(state.clone())).await);
+        }
+        if !header_matches!(connection, UPGRADE)
+            || !header_matches!(upgrade, WEBSOCKET)
+            || !header_matches!(sec_websocket_version, WEBSOCKET_VERSION)
+            || !header_matches!(sec_websocket_protocol, WANTED_PROTOCOL)
+        {
+            return Err(not_found_handler(State(state.clone())).await);
+        }
+        if on_upgrade.is_none() {
+            error!("Empty `on_upgrade`");
+            return Err(not_found_handler(State(state.clone())).await);
+        }
+        // We can `unwrap()` here because we checked that the header is present
+        let sec_websocket_accept = make_sec_websocket_accept(sec_websocket_key.unwrap());
+        Ok(Self {
+            config: WebSocketConfig::default(),
+            on_upgrade: on_upgrade.unwrap(),
+            sec_websocket_accept,
+        })
+    }
+}
+
+fn make_sec_websocket_accept(key: &HeaderValue) -> HeaderValue {
+    let mut hasher = Sha1::new();
+    hasher.update(key.as_bytes());
+    hasher.update(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
+    let accept = base64::encode(hasher.finalize().as_slice());
+    // Shouldn't panic
+    accept.parse().expect("Broken header value")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use super::*;
+
+    #[test]
+    fn test_make_sec_websocket_accept() {
+        let key = "dGhlIHNhbXBsZSBub25jZQ==";
+        let expected = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=";
+        let actual = make_sec_websocket_accept(&key.parse().unwrap());
+        assert_eq!(actual, expected);
+        let key = "7S3qp57psT3kwWF29CFJNg==";
+        let expected = "4s9bDvNVhoia18oejmdBEUJci9s=";
+        let actual = make_sec_websocket_accept(&key.parse().unwrap());
+        assert_eq!(actual, expected);
+    }
+
+    #[tokio::test]
+    async fn test_stealth_websocket_upgrade_from_request_parts() {
+        #[cfg(feature = "rustls-native-roots")]
+        let client_https = HttpsConnectorBuilder::new()
+            .with_native_roots()
+            .https_or_http()
+            .enable_http1()
+            .enable_http2()
+            .build();
+        #[cfg(all(feature = "rustls-native-roots", not(feature = "rustls-native-roots")))]
+        let client_https = HttpsConnectorBuilder::new()
+            .with_webpki_roots()
+            .https_or_http()
+            .enable_http1()
+            .enable_http2()
+            .build();
+        let state = ServerState {
+            ws_psk: None,
+            backend: Some(BackendUrl::from_str("http://localhost:8080").unwrap()),
+            not_found_resp: String::from("not found in the test"),
+            client: HyperClient::builder().build(client_https),
+        };
+        let (mut parts, _) = Request::builder()
+            .method(Method::GET)
+            .header("connection", "UpGrAdE")
+            .header("upgrade", "WEBSOCKET")
+            .header("sec-websocket-version", "13")
+            .header("sec-websocket-protocol", &WANTED_PROTOCOL)
+            .body(())
+            .unwrap()
+            .into_parts();
+        let upgrade = StealthWebSocketUpgrade::from_request_parts(&mut parts, &state).await;
+        assert!(upgrade.is_err());
+        // Can't really test the rest because we need to have a `OnUpgrade`.
+    }
 }

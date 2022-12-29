@@ -2,8 +2,8 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::forwarder::dispatch_conn;
+use super::WebSocket;
 use crate::mux::{Multiplexor, Role, WebSocket as MuxWebSocket};
-use axum::extract::ws::WebSocket;
 use tokio::task::JoinSet;
 use tracing::{debug, error, warn};
 
