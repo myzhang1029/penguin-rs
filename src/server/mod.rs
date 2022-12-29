@@ -68,17 +68,12 @@ pub struct ServerState<'a> {
     /// 404 response
     pub not_found_resp: &'a str,
     /// Hyper client
-    pub client: HyperClient<HttpsConnector<HttpConnector>, HyperBody>,
+    pub client: Arc<HyperClient<HttpsConnector<HttpConnector>, HyperBody>>,
 }
 
 #[tracing::instrument(level = "trace")]
 pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
-    let host = if args.host.starts_with('[') && args.host.ends_with(']') {
-        // Remove brackets from IPv6 addresses
-        &args.host[1..args.host.len() - 1]
-    } else {
-        &args.host
-    };
+    let host = crate::parse_remote::remove_brackets(&args.host);
     let sockaddr = (host.parse::<std::net::IpAddr>()?, args.port).into();
 
     #[cfg(feature = "rustls-native-roots")]
@@ -100,7 +95,7 @@ pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
         backend: args.backend.as_ref(),
         ws_psk: args.ws_psk.as_ref(),
         not_found_resp: &args.not_found_resp,
-        client: HyperClient::builder().build(client_https),
+        client: Arc::new(HyperClient::builder().build(client_https)),
     };
 
     let mut app: Router<()> = Router::new()
@@ -282,7 +277,7 @@ impl FromRequest<ServerState<'static>, Body> for StealthWebSocketUpgrade {
         let sec_websocket_version = headers.get(SEC_WEBSOCKET_VERSION);
         let x_penguin_psk = headers.get("x-penguin-psk");
 
-        // TODO: these clones are probably not necessary
+        // `clone` should be cheap
         if req.method() != Method::GET {
             warn!("Invalid websocket request: not a GET request");
             return Err(backend_or_404_handler(State(state.clone()), req).await);
@@ -366,7 +361,7 @@ mod tests {
             ws_psk: None,
             backend: Some(&BACKEND),
             not_found_resp: "not found in the test",
-            client: HyperClient::builder().build(client_https),
+            client: Arc::new(HyperClient::builder().build(client_https)),
         };
         let req = Request::builder()
             .method(Method::GET)

@@ -148,7 +148,7 @@ impl FromStr for Remote {
             }),
             [host, port] => Ok(Remote {
                 local_addr: LocalSpec::Inet(("0.0.0.0".to_string(), port.parse()?)),
-                remote_addr: RemoteSpec::Inet((host.to_string(), port.parse()?)),
+                remote_addr: RemoteSpec::Inet((remove_brackets(host).to_string(), port.parse()?)),
                 protocol: proto,
             }),
             // Three elements:
@@ -157,22 +157,37 @@ impl FromStr for Remote {
             // - local port number, remote host, and port number.
             ["stdio", remote_host, remote_port] => Ok(Remote {
                 local_addr: LocalSpec::Stdio,
-                remote_addr: RemoteSpec::Inet((remote_host.to_string(), remote_port.parse()?)),
+                remote_addr: RemoteSpec::Inet((
+                    remove_brackets(remote_host).to_string(),
+                    remote_port.parse()?,
+                )),
                 protocol: proto,
             }),
             [local_host, local_port, "socks"] => Ok(Remote {
-                local_addr: LocalSpec::Inet((local_host.to_string(), local_port.parse()?)),
+                local_addr: LocalSpec::Inet((
+                    remove_brackets(local_host).to_string(),
+                    local_port.parse()?,
+                )),
                 remote_addr: RemoteSpec::Socks,
                 protocol: proto,
             }),
             [local_port, remote_host, remote_port] => Ok(Remote {
                 local_addr: LocalSpec::Inet(("0.0.0.0".to_string(), local_port.parse()?)),
-                remote_addr: RemoteSpec::Inet((remote_host.to_string(), remote_port.parse()?)),
+                remote_addr: RemoteSpec::Inet((
+                    remove_brackets(remote_host).to_string(),
+                    remote_port.parse()?,
+                )),
                 protocol: proto,
             }),
             [local_host, local_port, remote_host, remote_port] => Ok(Remote {
-                local_addr: LocalSpec::Inet((local_host.to_string(), local_port.parse()?)),
-                remote_addr: RemoteSpec::Inet((remote_host.to_string(), remote_port.parse()?)),
+                local_addr: LocalSpec::Inet((
+                    remove_brackets(local_host).to_string(),
+                    local_port.parse()?,
+                )),
+                remote_addr: RemoteSpec::Inet((
+                    remove_brackets(remote_host).to_string(),
+                    remote_port.parse()?,
+                )),
                 protocol: proto,
             }),
             _ => Err(Error::Format),
@@ -189,6 +204,14 @@ impl FromStr for Remote {
         } else {
             result
         }
+    }
+}
+
+pub fn remove_brackets(s: &str) -> &str {
+    if s.starts_with('[') && s.ends_with(']') {
+        &s[1..s.len() - 1]
+    } else {
+        s
     }
 }
 
@@ -259,7 +282,7 @@ mod tests {
             (
                 "[::1]:8080:google.com:80",
                 Remote {
-                    local_addr: LocalSpec::Inet((String::from("[::1]"), 8080)),
+                    local_addr: LocalSpec::Inet((String::from("::1"), 8080)),
                     remote_addr: RemoteSpec::Inet((String::from("google.com"), 80)),
                     protocol: Protocol::Tcp,
                 },

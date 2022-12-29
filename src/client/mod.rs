@@ -51,7 +51,11 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
     for remote in &args.remote {
         // According to the docs, we should clone the sender for each task
         let cmd_tx = cmd_tx.clone();
-        jobs.spawn(handle_remote(remote, cmd_tx));
+        jobs.spawn(async move {
+            if let Err(error) = handle_remote(remote, cmd_tx).await {
+                error!("Listener failed: {error}");
+            }
+        });
     }
     // Retry loop
     loop {
