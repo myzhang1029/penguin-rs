@@ -24,7 +24,7 @@ pub async fn handle_websocket(websocket: WebSocket) {
             // Check if any of the jobs have finished and panicked
             Some(Err(err)) = jobs.join_next() => {
                 if err.is_panic() {
-                    panic!("Panic in a SOCKS listener: {err}");
+                    panic!("Panic in a forwarder: {err}");
                 }
             }
             result = mux.open_channel() => {
