@@ -109,9 +109,9 @@ dependencies = [
 
 [[package]]
 name = "axum-server"
-version = "0.3.3"
+version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9cfd9dbe28ebde5c0460067ea27c6f3b1d514b699c4e0a5aab0fb63e452a8a8"
+checksum = "8456dab8f11484979a86651da8e619b355ede5d61a160755155f6c344bd18c47"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -121,7 +121,7 @@ dependencies = [
  "hyper",
  "pin-project-lite",
  "rustls",
- "rustls-pemfile 0.2.1",
+ "rustls-pemfile",
  "tokio",
  "tokio-rustls",
  "tower-service",
@@ -1255,18 +1255,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0167bac7a9f490495f3c33013e7722b53cb087ecbe082fb0c6387c96f634ea50"
 dependencies = [
  "openssl-probe",
- "rustls-pemfile 1.0.1",
+ "rustls-pemfile",
  "schannel",
  "security-framework",
-]
-
-[[package]]
-name = "rustls-pemfile"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5eebeaeb360c87bfb72e84abdb3447159c0eaececf1bef2aecd65a8be949d1c9"
-dependencies = [
- "base64 0.13.1",
 ]
 
 [[package]]
@@ -1306,7 +1297,7 @@ dependencies = [
  "rcgen",
  "rustls",
  "rustls-native-certs",
- "rustls-pemfile 1.0.1",
+ "rustls-pemfile",
  "serde",
  "sha1",
  "tempfile",
