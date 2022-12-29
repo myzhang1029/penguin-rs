@@ -21,6 +21,7 @@ use axum::{
 use axum_server::tls_rustls::RustlsConfig;
 use http::{HeaderMap, HeaderValue};
 use hyper::{client::HttpConnector, Body as HyperBody, Client as HyperClient};
+use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 use thiserror::Error;
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 use tracing::{debug, error, info, trace, warn};
@@ -53,7 +54,7 @@ pub struct ServerState {
     /// 404 response
     pub not_found_resp: String,
     /// Hyper client
-    pub client: HyperClient<HttpConnector, HyperBody>,
+    pub client: HyperClient<HttpsConnector<HttpConnector>, HyperBody>,
 }
 
 #[tracing::instrument(level = "trace")]
@@ -66,11 +67,26 @@ pub async fn server_main(args: ServerArgs) -> Result<(), Error> {
     };
     let sockaddr = (host.parse::<std::net::IpAddr>()?, args.port).into();
 
+    #[cfg(feature = "rustls-native-roots")]
+    let client_https = HttpsConnectorBuilder::new()
+        .with_native_roots()
+        .https_or_http()
+        .enable_http1()
+        .enable_http2()
+        .build();
+    #[cfg(all(feature = "rustls-native-roots", not(feature = "rustls-native-roots")))]
+    let client_https = HttpsConnectorBuilder::new()
+        .with_webpki_roots()
+        .https_or_http()
+        .enable_http1()
+        .enable_http2()
+        .build();
+
     let state = ServerState {
         backend: args.backend,
         ws_psk: args.ws_psk,
         not_found_resp: args.not_found_resp,
-        client: HyperClient::new(),
+        client: HyperClient::builder().build(client_https),
     };
 
     let mut app: Router<()> = Router::new()

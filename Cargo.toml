@@ -30,7 +30,8 @@ bytes = { version = "1", features = ["serde"] }
 clap = { version = "4", features = ["cargo", "derive"] }
 futures-util = { version = "0.3", default-features = false }
 http = "0.2"
-hyper = { version = "0.14", features = ["client", "http1", "http2"] }
+hyper = "0.14"
+hyper-rustls = { version = "0.23", features = ["http1", "http2"] }
 rustls = "0.20"
 rustls-native-certs = { version = "0.6", optional = true }
 rustls-pemfile = "1"
@@ -66,8 +67,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 default = ["rustls-native-roots"]
 # Note that it does not make sense to use rustls-webpki-roots and
 # rustls-native-roots at the same time, but there must be at least one. 
-rustls-webpki-roots = ["webpki-roots", "tokio-tungstenite/rustls-tls-webpki-roots", "tungstenite/rustls-tls-webpki-roots"]
-rustls-native-roots = ["rustls-native-certs", "tokio-tungstenite/rustls-tls-native-roots", "tungstenite/rustls-tls-native-roots"]
+rustls-webpki-roots = ["webpki-roots", "tokio-tungstenite/rustls-tls-webpki-roots", "tungstenite/rustls-tls-webpki-roots", "hyper-rustls/webpki-tokio"]
+rustls-native-roots = ["rustls-native-certs", "tokio-tungstenite/rustls-tls-native-roots", "tungstenite/rustls-tls-native-roots", "hyper-rustls/native-tokio"]
 more-verbose = []
 
 [profile.release]
