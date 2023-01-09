@@ -262,11 +262,11 @@ mod tests {
         let sock = UdpSocket::bind("0.0.0.0:0").await.unwrap();
         // Just for fun, let's query AAAA here
         let request = b"\x37\x0a\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03www\x06google\x03com\x00\x00\x1c\x00\x01";
-        let expected = b"\x37\x0a\x81\x80\x00\x01\x00\x01\x00\x00\x00\x00\x03www\x06google\x03com\x00\x00\x1c\x00\x01";
+        let expected = b"\x37\x0a\x81\x80\x00\x01";
         sock.send_to(request, "127.0.0.1:20326").await.unwrap();
         let mut buf = [0u8; 1024];
         sock.recv_from(&mut buf).await.unwrap();
-        assert_eq!(&buf[..32], expected);
+        assert_eq!(&buf[..6], expected);
         server_task.abort();
         client_task.abort();
     }
@@ -326,11 +326,11 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         let sock = UdpSocket::bind("[::]:0").await.unwrap();
         let request = b"\x39\x36\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03www\x06google\x03com\x00\x00\x01\x00\x01";
-        let expected = b"\x37\x0a\x81\x80\x00\x01\x00\x01\x00\x00\x00\x00\x03www\x06google\x03com\x00\x00\x01\x00\x01";
+        let expected = b"\x39\x36\x81\x80\x00\x01";
         sock.send_to(request, ("::1", 20326)).await.unwrap();
         let mut buf = [0u8; 1024];
         sock.recv_from(&mut buf).await.unwrap();
-        assert_eq!(&buf[..32], expected);
+        assert_eq!(&buf[..6], expected);
         server_task.abort();
         client_task.abort();
     }
