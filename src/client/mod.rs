@@ -168,8 +168,6 @@ async fn get_send_chan_or_put_back(
         tokio_tungstenite::WebSocketStream<
             tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
         >,
-        tungstenite::Message,
-        tungstenite::Error,
     >,
     sender: oneshot::Sender<DuplexStream>,
     command_tx: &mut mpsc::Sender<Command>,

@@ -11,23 +11,7 @@ use std::task::{Context, Poll};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tracing::{debug, error};
-use tungstenite::Message as ClientMessage;
-
-/// Generic representation of a `WebSocket` message
-pub trait WebSocketMessage: Unpin + Send + Sync + 'static {
-    fn from_data(data: Vec<u8>) -> Self;
-    fn into_data(self) -> Vec<u8>;
-}
-
-impl WebSocketMessage for ClientMessage {
-    fn from_data(data: Vec<u8>) -> Self {
-        Self::Binary(data)
-    }
-
-    fn into_data(self) -> Vec<u8> {
-        self.into_data()
-    }
-}
+use tungstenite::Message;
 
 /// `std::error::Error` + Sync + Send + 'static. Just for saving ink.
 pub trait AsyncIoError: std::error::Error + Unpin + Sync + Send + Sized + 'static {
@@ -41,23 +25,27 @@ impl<T> AsyncIoError for T where T: std::error::Error + Unpin + Sync + Send + 's
 
 /// A generic WebSocket connection
 #[derive(Clone, Debug)]
-pub struct WebSocket<Inner, Msg, Err>
+pub struct WebSocket<Inner>
 where
-    Msg: WebSocketMessage,
-    Err: AsyncIoError,
-    Inner:
-        Stream<Item = Result<Msg, Err>> + Sink<Msg, Error = Err> + Unpin + Send + Sized + 'static,
+    Inner: Stream<Item = Result<Message, tungstenite::Error>>
+        + Sink<Message, Error = tungstenite::Error>
+        + Unpin
+        + Send
+        + Sized
+        + 'static,
 {
     inner: Inner,
     buffer: Vec<u8>,
 }
 
-impl<Inner, Msg, Err> WebSocket<Inner, Msg, Err>
+impl<Inner> WebSocket<Inner>
 where
-    Msg: WebSocketMessage,
-    Err: AsyncIoError,
-    Inner:
-        Stream<Item = Result<Msg, Err>> + Sink<Msg, Error = Err> + Unpin + Send + Sized + 'static,
+    Inner: Stream<Item = Result<Message, tungstenite::Error>>
+        + Sink<Message, Error = tungstenite::Error>
+        + Unpin
+        + Send
+        + Sized
+        + 'static,
 {
     /// Create a new `WebSocket` from a `WebSocketStream`
     pub fn new(ws: Inner) -> Self {
@@ -68,12 +56,14 @@ where
     }
 }
 
-impl<Inner, Msg, Err> AsyncRead for WebSocket<Inner, Msg, Err>
+impl<Inner> AsyncRead for WebSocket<Inner>
 where
-    Msg: WebSocketMessage,
-    Err: AsyncIoError,
-    Inner:
-        Stream<Item = Result<Msg, Err>> + Sink<Msg, Error = Err> + Unpin + Send + Sized + 'static,
+    Inner: Stream<Item = Result<Message, tungstenite::Error>>
+        + Sink<Message, Error = tungstenite::Error>
+        + Unpin
+        + Send
+        + Sized
+        + 'static,
 {
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -116,12 +106,14 @@ where
     }
 }
 
-impl<Inner, Msg, Err> AsyncWrite for WebSocket<Inner, Msg, Err>
+impl<Inner> AsyncWrite for WebSocket<Inner>
 where
-    Msg: WebSocketMessage,
-    Err: AsyncIoError,
-    Inner:
-        Stream<Item = Result<Msg, Err>> + Sink<Msg, Error = Err> + Unpin + Send + Sized + 'static,
+    Inner: Stream<Item = Result<Message, tungstenite::Error>>
+        + Sink<Message, Error = tungstenite::Error>
+        + Unpin
+        + Send
+        + Sized
+        + 'static,
 {
     fn poll_write(
         mut self: Pin<&mut Self>,
@@ -133,7 +125,7 @@ where
                 // XXX: warp::ws::Message has a default max size of 64MB,
                 // so we can safely assume that no one will send a message
                 // larger than that. Prove me wrong.
-                let msg = Msg::from_data(data.to_vec());
+                let msg = Message::Binary(data.to_vec());
                 Pin::new(&mut self.inner)
                     .start_send(msg)
                     .map_err(AsyncIoError::into_io_error)?;
@@ -189,28 +181,34 @@ pub enum Role {
 /// - 0: ping; server responds with 0
 /// - 1: open a new channel; server responds with a port number, or 0 if no ports are available.
 #[derive(Debug)]
-pub struct Multiplexor<I, M, E>
+pub struct Multiplexor<I>
 where
-    E: AsyncIoError,
-    M: WebSocketMessage,
-    I: Stream<Item = Result<M, E>> + Sink<M, Error = E> + Unpin + Send + Sized + 'static,
+    I: Stream<Item = Result<Message, tungstenite::Error>>
+        + Sink<Message, Error = tungstenite::Error>
+        + Unpin
+        + Send
+        + Sized
+        + 'static,
 {
     /// The underlying `StreamMultiplexor`
-    mux: StreamMultiplexor<WebSocket<I, M, E>>,
+    mux: StreamMultiplexor<WebSocket<I>>,
     /// The role of this multiplexor
     role: Role,
     /// The control channel
     ctrl_chan: Option<DuplexStream>,
 }
 
-impl<I, M, E> Multiplexor<I, M, E>
+impl<I> Multiplexor<I>
 where
-    E: AsyncIoError,
-    M: WebSocketMessage,
-    I: Stream<Item = Result<M, E>> + Sink<M, Error = E> + Unpin + Send + Sized + 'static,
+    I: Stream<Item = Result<Message, tungstenite::Error>>
+        + Sink<Message, Error = tungstenite::Error>
+        + Unpin
+        + Send
+        + Sized
+        + 'static,
 {
     /// Create a new `ClientMultiplexor` from a `ClientWebSocket`
-    pub fn new(s: WebSocket<I, M, E>, role: Role) -> Self {
+    pub fn new(s: WebSocket<I>, role: Role) -> Self {
         let config = StreamMultiplexorConfig::default();
         let mux = StreamMultiplexor::new(s, config);
         Self {
