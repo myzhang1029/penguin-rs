@@ -1,7 +1,6 @@
 //! Client- and server-side connection multiplexing and processing
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use axum::extract::ws::Message as ServerMessage;
 use bytes::buf::Buf;
 use futures_util::{pin_mut, FutureExt, Sink, Stream};
 pub use penguin_tokio_stream_multiplexor::DuplexStream;
@@ -21,16 +20,6 @@ pub trait WebSocketMessage: Unpin + Send + Sync + 'static {
 }
 
 impl WebSocketMessage for ClientMessage {
-    fn from_data(data: Vec<u8>) -> Self {
-        Self::Binary(data)
-    }
-
-    fn into_data(self) -> Vec<u8> {
-        self.into_data()
-    }
-}
-
-impl WebSocketMessage for ServerMessage {
     fn from_data(data: Vec<u8>) -> Self {
         Self::Binary(data)
     }
