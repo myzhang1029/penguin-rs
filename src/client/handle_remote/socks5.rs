@@ -9,6 +9,7 @@ use super::udp::channel_udp_handshake;
 use super::Command;
 use super::{request_channel, Error};
 use crate::mux::pipe_streams;
+use tokio::io::BufWriter;
 use tokio::net::UdpSocket;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader},
@@ -30,6 +31,7 @@ macro_rules! execute_or_pass_error {
                 $writer
                     .write_all(&[0x05, $err, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
                     .await?;
+                $writer.flush().await?;
                 return Err(e.into());
             }
         }
@@ -43,7 +45,7 @@ macro_rules! execute_or_pass_error {
 pub(crate) async fn handle_socks_connection<R, W>(
     command_tx: mpsc::Sender<Command>,
     reader: R,
-    mut writer: W,
+    writer: W,
     local_addr: &str,
 ) -> Result<(), Error>
 where
@@ -51,6 +53,7 @@ where
     W: AsyncWrite + Unpin,
 {
     let mut breader = BufReader::new(reader);
+    let mut bwriter = BufWriter::new(writer);
     // Complete the handshake
     let version = breader.read_u8().await?;
     if version != 5 {
@@ -65,11 +68,13 @@ where
         // Send back NO ACCEPTABLE METHODS
         // Note that we are not compliant with RFC 1928 here, as we MUST
         // support GSSAPI and SHOULD support USERNAME/PASSWORD
-        writer.write_all(&[0x05, 0xFF]).await?;
+        bwriter.write_all(&[0x05, 0xFF]).await?;
+        bwriter.flush().await?;
         return Err(Error::OtherAuth);
     }
     // Send back NO AUTHENTICATION REQUIRED
-    writer.write_all(&[0x05, 0x00]).await?;
+    bwriter.write_all(&[0x05, 0x00]).await?;
+    bwriter.flush().await?;
     // Read the request
     let version = breader.read_u8().await?;
     if version != 5 {
@@ -80,19 +85,19 @@ where
         breader.read_u8().await,
         0x01,
         "cannot read command",
-        &mut writer
+        &mut bwriter
     );
     let _reserved = execute_or_pass_error!(
         breader.read_u8().await,
         0x01,
         "cannot read reserved",
-        &mut writer
+        &mut bwriter
     );
     let address_type = execute_or_pass_error!(
         breader.read_u8().await,
         0x01,
         "cannot read address type",
-        &mut writer
+        &mut bwriter
     );
     let rhost = match address_type {
         0x01 => {
@@ -102,7 +107,7 @@ where
                 breader.read_exact(&mut addr).await,
                 0x01,
                 "cannot read address",
-                &mut writer
+                &mut bwriter
             );
             std::net::Ipv4Addr::from(addr).to_string()
         }
@@ -114,7 +119,7 @@ where
                 breader.read_exact(&mut addr).await,
                 0x01,
                 "cannot read domain",
-                &mut writer
+                &mut bwriter
             );
             String::from_utf8(addr)?
         }
@@ -125,15 +130,16 @@ where
                 breader.read_exact(&mut addr).await,
                 0x01,
                 "cannot read address",
-                &mut writer
+                &mut bwriter
             );
             std::net::Ipv6Addr::from(addr).to_string()
         }
         _ => {
             debug!("invalid address type {address_type}");
-            writer
+            bwriter
                 .write_all(&[0x05, 0x08, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
                 .await?;
+            bwriter.flush().await?;
             return Err(Error::SocksRequest);
         }
     };
@@ -141,32 +147,34 @@ where
         breader.read_u16().await,
         0x01,
         "cannot read port",
-        &mut writer
+        &mut bwriter
     );
     debug!("got request {command} for {rhost}:{rport}");
     match command {
         0x01 => {
             // CONNECT
-            handle_connect(&command_tx, breader, writer, &rhost, rport).await
+            handle_connect(&command_tx, breader, bwriter, &rhost, rport).await
         }
         0x02 => {
             // BIND
             // We don't support this because I can't ask the remote host to bind
             warn!("BIND is not supported");
-            writer
+            bwriter
                 .write_all(&[0x05, 0x07, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
                 .await?;
+            bwriter.flush().await?;
             Err(Error::SocksRequest)
         }
         0x03 => {
             // UDP ASSOCIATE
-            handle_associate(&command_tx, breader, writer, rhost, rport, local_addr).await
+            handle_associate(&command_tx, breader, bwriter, rhost, rport, local_addr).await
         }
         _ => {
             warn!("invalid command {command}");
-            writer
+            bwriter
                 .write_all(&[0x05, 0x07, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
                 .await?;
+            bwriter.flush().await?;
             Err(Error::SocksRequest)
         }
     }
@@ -201,6 +209,7 @@ where
     writer
         .write_all(&[0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
         .await?;
+    writer.flush().await?;
     pipe_streams(reader, writer, remote_rx, remote_tx).await?;
     Ok(())
 }

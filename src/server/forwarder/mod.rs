@@ -24,14 +24,14 @@ mod udp;
 
 use penguin_tokio_stream_multiplexor::DuplexStream;
 use thiserror::Error;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tracing::info;
 
 /// Error type for the forwarder.
 #[derive(Error, Debug)]
 pub enum Error {
     #[error(transparent)]
-    Io(std::io::Error),
+    Io(#[from] std::io::Error),
     #[error("invalid host: {0}")]
     Host(std::string::FromUtf8Error),
     #[error("invalid command: {0}")]
@@ -44,22 +44,22 @@ pub enum Error {
 /// closed (dropped) when this task exits.
 #[tracing::instrument(skip(chan), level = "trace")]
 pub async fn dispatch_conn(chan: DuplexStream) -> Result<(), Error> {
-    let (chan_rx, mut chan_tx) = tokio::io::split(chan);
+    let (chan_rx, chan_tx) = tokio::io::split(chan);
     let mut chan_rx = BufReader::new(chan_rx);
+    let mut chan_tx = BufWriter::new(chan_tx);
     // Handshake
-    let command = chan_rx.read_u8().await.map_err(Error::Io)?;
-    let len = chan_rx.read_u8().await.map_err(Error::Io)?;
+    let command = chan_rx.read_u8().await?;
+    let len = chan_rx.read_u8().await?;
     let mut rhost = vec![0; len as usize];
-    chan_rx.read_exact(&mut rhost).await.map_err(Error::Io)?;
+    chan_rx.read_exact(&mut rhost).await?;
     let rhost = String::from_utf8(rhost).map_err(Error::Host)?;
-    let rport = chan_rx.read_u16().await.map_err(Error::Io)?;
-    chan_tx.write_u8(0x03).await.map_err(Error::Io)?;
+    let rport = chan_rx.read_u16().await?;
+    chan_tx.write_u8(0x03).await?;
+    chan_tx.flush().await?;
     match command {
         1 => {
             info!("TCP connect to {rhost}:{rport}");
-            tcp::start_forwarder_on_channel(chan_rx, chan_tx, &rhost, rport)
-                .await
-                .map_err(Error::Io)?;
+            tcp::start_forwarder_on_channel(chan_rx, chan_tx, &rhost, rport).await?;
             Ok(())
         }
         3 => {

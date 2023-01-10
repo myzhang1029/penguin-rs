@@ -3,7 +3,7 @@
 
 use crate::mux::pipe_streams;
 use tokio::{
-    io::{AsyncRead, AsyncWrite, BufReader},
+    io::{AsyncRead, AsyncWrite, BufReader, BufWriter},
     net::TcpStream,
 };
 
@@ -28,6 +28,8 @@ where
     let mut rstream = TcpStream::connect((rhost, rport)).await?;
     let (rread, rwrite) = rstream.split();
     let rread = BufReader::new(rread);
+    let rwrite = BufWriter::new(rwrite);
+    // chan_X should have already been buffered
     pipe_streams(rread, rwrite, chan_rx, chan_tx).await?;
     Ok(())
 }
