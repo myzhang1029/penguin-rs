@@ -16,7 +16,7 @@ use crate::parse_remote::{Protocol, Remote};
 use socks5::handle_socks_connection;
 use tcp::{channel_tcp_handshake, handle_tcp_connection};
 use thiserror::Error;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
@@ -100,13 +100,14 @@ pub async fn handle_remote(
                 // A new channel is created for each incoming TCP connection.
                 // It's already TCP, anyways.
                 let channel = complete_or_continue!(request_channel(&command_tx).await);
-                // Don't use `BufWriter` here because it will buffer the handshake
-                // And also make sure we don't nest `BufReader`s
+                // Make sure we don't nest `BufReader`s
                 tokio::spawn(async move {
                     let (tcp_rx, tcp_tx) = tokio::io::split(tcp_stream);
                     let tcp_rx = BufReader::new(tcp_rx);
+                    let tcp_tx = BufWriter::new(tcp_tx);
                     let (channel_rx, channel_tx) = tokio::io::split(channel);
                     let channel_rx = BufReader::new(channel_rx);
+                    let channel_tx = BufWriter::new(channel_tx);
                     handle_tcp_connection(channel_rx, channel_tx, rhost, *rport, tcp_rx, tcp_tx)
                         .await
                 });
@@ -124,8 +125,9 @@ pub async fn handle_remote(
             // We want `loop` to be able to continue after a connection failure
             loop {
                 let channel = complete_or_continue!(request_channel(&command_tx).await);
-                let (channel_rx, mut channel_tx) = tokio::io::split(channel);
+                let (channel_rx, channel_tx) = tokio::io::split(channel);
                 let mut channel_rx = BufReader::new(channel_rx);
+                let mut channel_tx = BufWriter::new(channel_tx);
                 complete_or_continue!(
                     channel_tcp_handshake(&mut channel_rx, &mut channel_tx, rhost, *rport).await
                 );
@@ -138,8 +140,9 @@ pub async fn handle_remote(
             let mut stdin = BufReader::new(tokio::io::stdin());
             loop {
                 let channel = complete_or_continue!(request_channel(&command_tx).await);
-                let (channel_rx, mut channel_tx) = tokio::io::split(channel);
+                let (channel_rx, channel_tx) = tokio::io::split(channel);
                 let mut channel_rx = BufReader::new(channel_rx);
+                let mut channel_tx = BufWriter::new(channel_tx);
                 complete_or_continue!(
                     channel_udp_handshake(&mut channel_rx, &mut channel_tx, rhost, *rport).await
                 );

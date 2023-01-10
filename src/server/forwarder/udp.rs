@@ -46,6 +46,7 @@ where
                 debug!("read {len} bytes from remote, sending to channel");
                 chan_tx.write_u32(len as u32).await?;
                 chan_tx.write_all(&buf[..len]).await?;
+                chan_tx.flush().await?;
             }
             Ok::<(), std::io::Error>(())
         })

@@ -40,6 +40,7 @@ where
     data.append(&mut encoded_rhost);
     channel_tx.write_all(&data).await?;
     channel_tx.write_u16(rport).await?;
+    channel_tx.flush().await?;
     if channel_rx.read_u8().await? != 0x03 {
         Err(Error::ServerHandshake)
     } else {
@@ -71,6 +72,7 @@ pub(crate) async fn handle_udp_socket(
             let (len, addr) = socket.recv_from(&mut buf).await?;
             complete_or_break!(channel_tx.write_u32(len as u32).await);
             complete_or_break!(channel_tx.write_all(&buf[..len]).await);
+            complete_or_break!(channel_tx.flush().await);
             let len = complete_or_break!(channel_rx.read_u32().await);
             let len = len as usize;
             complete_or_break!(channel_rx.read_exact(&mut buf[..len]).await);

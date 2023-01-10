@@ -25,6 +25,7 @@ where
     data.append(&mut encoded_rhost);
     channel_tx.write_all(&data).await?;
     channel_tx.write_u16(rport).await?;
+    channel_tx.flush().await?;
     if channel_rx.read_u8().await? != 0x03 {
         Err(Error::ServerHandshake)
     } else {
