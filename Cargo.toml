@@ -49,10 +49,9 @@ webpki-roots = { version = "0.22", optional = true }
 
 # From tokio-stream-multiplexor
 async-channel = "1"
-bincode = "1"
+bytes = "1"
 futures = "0.3"
 rand = "0.8"
-serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 tempfile = "3"
