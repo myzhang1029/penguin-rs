@@ -6,7 +6,6 @@ pub(crate) mod ws_connect;
 
 use crate::arg::ClientArgs;
 use crate::mux::{DuplexStream, Multiplexor, Role};
-use futures::StreamExt;
 use futures_util::{Sink as FutureSink, Stream as FutureStream};
 use handle_remote::handle_remote;
 use thiserror::Error;
@@ -123,8 +122,7 @@ async fn on_connected(
     command_tx: &mut mpsc::Sender<Command>,
     keepalive: u64,
 ) -> Result<(), Error> {
-    let (sink, stream) = ws_stream.split();
-    let mut mux = Multiplexor::new(sink, stream, Role::Client);
+    let mut mux = Multiplexor::new(ws_stream, Role::Client);
     mux.establish_control_channel()
         .await
         .or_else(maybe_retryable)?;

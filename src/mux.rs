@@ -1,24 +1,19 @@
 //! Client- and server-side connection multiplexing and processing
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
+use futures::stream::{SplitSink, SplitStream};
+use futures::StreamExt;
 use futures_util::{pin_mut, FutureExt};
 use futures_util::{Sink as FutureSink, Stream as FutureStream};
 pub use penguin_tokio_stream_multiplexor::DuplexStream;
 use penguin_tokio_stream_multiplexor::{Config, WebSocketMultiplexor};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio_tungstenite::WebSocketStream;
 use tracing::{debug, error};
 use tungstenite::Message;
 
-/// `std::error::Error` + Sync + Send + 'static. Just for saving ink.
-pub trait AsyncIoError: std::error::Error + Unpin + Sync + Send + Sized + 'static {
-    fn into_io_error(self) -> std::io::Error {
-        // Takes ownership of self
-        std::io::Error::new(std::io::ErrorKind::Other, self)
-    }
-}
-
-impl<T> AsyncIoError for T where T: std::error::Error + Unpin + Sync + Send + 'static {}
+pub use tungstenite::protocol::Role;
 
 /// Multiplexor error
 #[derive(Debug, Error)]
@@ -31,14 +26,6 @@ pub enum Error {
     ControlChannelNotEstablished,
     #[error("invalid control channel message")]
     InvalidControlChannelMessage,
-}
-/// Multiplexor role
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Role {
-    /// Client role
-    Client,
-    /// Server role
-    Server,
 }
 
 /// The actual multiplexor, which is a wrapper around a `WebSocketMultiplexor`
@@ -62,15 +49,16 @@ where
     ctrl_chan: Option<DuplexStream>,
 }
 
-impl<Sink, Stream> Multiplexor<Sink, Stream>
-where
-    Stream: FutureStream<Item = tungstenite::Result<Message>> + Send + Unpin + 'static,
-    Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Unpin + 'static,
+impl<S: AsyncRead + AsyncWrite + Unpin + Send>
+    Multiplexor<SplitSink<WebSocketStream<S>, Message>, SplitStream<WebSocketStream<S>>>
 {
     /// Create a new `WebSocketMultiplexor` from a `WebSocketStream`
-    pub fn new(sink: Sink, stream: Stream, role: Role) -> Self {
+    pub fn new(ws_stream: WebSocketStream<S>, role: Role) -> Self {
+        let (sink, stream) = ws_stream.split();
         let mut config = Config::default();
-        config.max_frame_size = tungstenite::protocol::WebSocketConfig::default().max_message_size.unwrap();
+        config.max_frame_size = tungstenite::protocol::WebSocketConfig::default()
+            .max_message_size
+            .unwrap();
         config.buf_size = config.max_frame_size - 1024;
         let mux = WebSocketMultiplexor::new(sink, stream, config);
         Self {
@@ -79,7 +67,13 @@ where
             ctrl_chan: None,
         }
     }
+}
 
+impl<Sink, Stream> Multiplexor<Sink, Stream>
+where
+    Stream: FutureStream<Item = tungstenite::Result<Message>> + Send + Unpin + 'static,
+    Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Unpin + 'static,
+{
     /// Establish the new control channel
     pub async fn establish_control_channel(&mut self) -> std::io::Result<()> {
         let ctrl_chan = match self.role {
