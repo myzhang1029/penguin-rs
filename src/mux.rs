@@ -1,10 +1,8 @@
 //! Client- and server-side connection multiplexing and processing
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use futures::stream::{SplitSink, SplitStream};
-use futures::StreamExt;
-use futures_util::{pin_mut, FutureExt};
-use futures_util::{Sink as FutureSink, Stream as FutureStream};
+use futures_util::stream::{SplitSink, SplitStream};
+use futures_util::{pin_mut, FutureExt, Sink as FutureSink, Stream as FutureStream, StreamExt};
 pub use penguin_tokio_stream_multiplexor::DuplexStream;
 use penguin_tokio_stream_multiplexor::{Config, WebSocketMultiplexor};
 use thiserror::Error;
