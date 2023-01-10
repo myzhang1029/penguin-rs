@@ -5,13 +5,16 @@ mod handle_remote;
 pub(crate) mod ws_connect;
 
 use crate::arg::ClientArgs;
-use crate::mux::{DuplexStream, Multiplexor, Role, WebSocket};
+use crate::mux::{DuplexStream, Multiplexor, Role};
+use futures::StreamExt;
+use futures_util::{Sink as FutureSink, Stream as FutureStream};
 use handle_remote::handle_remote;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
 use tokio::time;
 use tracing::{error, info, trace, warn};
+use tungstenite::Message;
 
 /// Errors
 #[derive(Debug, Error)]
@@ -120,8 +123,8 @@ async fn on_connected(
     command_tx: &mut mpsc::Sender<Command>,
     keepalive: u64,
 ) -> Result<(), Error> {
-    let ws = WebSocket::new(ws_stream);
-    let mut mux = Multiplexor::new(ws, Role::Client);
+    let (sink, stream) = ws_stream.split();
+    let mut mux = Multiplexor::new(sink, stream, Role::Client);
     mux.establish_control_channel()
         .await
         .or_else(maybe_retryable)?;
@@ -163,15 +166,15 @@ async fn on_connected(
 /// Returns `true` if we got a new channel, `false` if we put the sender back
 /// (and we should probably go back to the main loop and reconnect).
 #[tracing::instrument(skip_all, level = "trace")]
-async fn get_send_chan_or_put_back(
-    mux: &mut Multiplexor<
-        tokio_tungstenite::WebSocketStream<
-            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-        >,
-    >,
+async fn get_send_chan_or_put_back<Sink, Stream>(
+    mux: &mut Multiplexor<Sink, Stream>,
     sender: oneshot::Sender<DuplexStream>,
     command_tx: &mut mpsc::Sender<Command>,
-) -> Result<bool, Error> {
+) -> Result<bool, Error>
+where
+    Stream: FutureStream<Item = tungstenite::Result<Message>> + Send + Unpin + 'static,
+    Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Unpin + 'static,
+{
     trace!("connecting to a new port");
     match mux.open_channel().await {
         Ok(stream) => {

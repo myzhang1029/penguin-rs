@@ -27,7 +27,6 @@ path = "lib/tokio-stream-multiplexor/src/lib.rs"
 axum = { version = "0.6", features = ["headers", "tokio", "ws"] }
 axum-server = { version = "0.4", features = ["tls-rustls"] }
 base64 = "0.20"
-bytes = { version = "1", features = ["serde"] }
 clap = { version = "4", features = ["cargo", "derive"] }
 futures-util = { version = "0.3", default-features = false }
 http = "0.2"
@@ -54,7 +53,6 @@ bincode = "1"
 futures = "0.3"
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
-tokio-util = { version = "0.7", features = ["codec"] }
 
 [dev-dependencies]
 tempfile = "3"

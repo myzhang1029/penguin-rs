@@ -3,15 +3,16 @@
 
 use super::forwarder::dispatch_conn;
 use super::WebSocket;
-use crate::mux::{Multiplexor, Role, WebSocket as MuxWebSocket};
+use crate::mux::{Multiplexor, Role};
+use futures::StreamExt;
 use tokio::task::JoinSet;
 use tracing::{debug, error, warn};
 
 /// Multiplex the WebSocket connection and handle the forwarding requests.
-#[tracing::instrument(skip(websocket), level = "debug")]
-pub async fn handle_websocket(websocket: WebSocket) {
-    let mws = MuxWebSocket::new(websocket);
-    let mut mux = Multiplexor::new(mws, Role::Server);
+#[tracing::instrument(skip(ws_stream), level = "debug")]
+pub async fn handle_websocket(ws_stream: WebSocket) {
+    let (sink, stream) = ws_stream.split();
+    let mut mux = Multiplexor::new(sink, stream, Role::Server);
     // Establish the control channel connection
     if let Err(err) = mux.establish_control_channel().await {
         error!("Failed to establish control channel: {err}");
