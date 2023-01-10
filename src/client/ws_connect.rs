@@ -1,8 +1,10 @@
 //! WebSocket connection.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
+use crate::arg::ServerUrl;
+use crate::mux::DEFAULT_WS_CONFIG;
+use crate::proto_version::PROTOCOL_VERSION;
 use crate::tls::make_rustls_client_config;
-use crate::{arg::ServerUrl, proto_version::PROTOCOL_VERSION};
 use http::header::HeaderValue;
 use thiserror::Error;
 use tokio::net::TcpStream;
@@ -68,7 +70,8 @@ pub async fn handshake(
         warn!("Using insecure WebSocket connection");
         Connector::Plain
     };
-    let (ws_stream, _response) = connect_async_tls_with_config(req, None, Some(connector)).await?;
+    let (ws_stream, _response) =
+        connect_async_tls_with_config(req, Some(DEFAULT_WS_CONFIG), Some(connector)).await?;
     // We don't need to check the response now...
     debug!("WebSocket handshake succeeded");
     Ok(ws_stream)

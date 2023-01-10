@@ -11,9 +11,17 @@ use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio_tungstenite::WebSocketStream;
 use tracing::{debug, error};
+use tungstenite::protocol::WebSocketConfig;
 use tungstenite::Message;
 
 pub use tungstenite::protocol::Role;
+
+pub const DEFAULT_WS_CONFIG: WebSocketConfig = WebSocketConfig {
+    max_send_queue: None,
+    max_message_size: Some(64 << 20),
+    max_frame_size: Some(16 << 20),
+    accept_unmasked_frames: false,
+};
 
 /// Multiplexor error
 #[derive(Debug, Error)]
@@ -54,12 +62,17 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send>
 {
     /// Create a new `WebSocketMultiplexor` from a `WebSocketStream`
     pub fn new(ws_stream: WebSocketStream<S>, role: Role) -> Self {
-        let (sink, stream) = ws_stream.split();
         let mut config = Config::default();
-        config.max_frame_size = tungstenite::protocol::WebSocketConfig::default()
-            .max_message_size
-            .unwrap();
-        config.buf_size = config.max_frame_size - 1024;
+        let ws_config = ws_stream.get_config();
+        if let Some(max_frame_size) = ws_config.max_frame_size {
+            config.max_frame_size = max_frame_size;
+            config.buf_size = if config.max_frame_size > 2097152 + 1024 {
+                config.max_frame_size - 2097152
+            } else {
+                config.max_frame_size - 1024
+            };
+        }
+        let (sink, stream) = ws_stream.split();
         let mux = WebSocketMultiplexor::new(sink, stream, config);
         Self {
             mux,
