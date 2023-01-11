@@ -7,6 +7,7 @@ mod websocket;
 use std::sync::Arc;
 
 use crate::arg::{BackendUrl, ServerArgs};
+use crate::mux::DEFAULT_WS_CONFIG;
 use crate::proto_version::PROTOCOL_VERSION;
 use crate::tls::make_rustls_server_config;
 use axum::async_trait;
@@ -31,7 +32,7 @@ use thiserror::Error;
 use tokio_tungstenite::WebSocketStream;
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 use tracing::{debug, error, info, trace, warn};
-use tungstenite::protocol::{self, WebSocketConfig};
+use tungstenite::protocol::Role;
 use websocket::handle_websocket;
 
 static UPGRADE: HeaderValue = HeaderValue::from_static("upgrade");
@@ -204,7 +205,6 @@ pub async fn ws_handler(ws: StealthWebSocketUpgrade) -> Response {
 /// A variant of `WebSocketUpgrade` that does not leak information
 /// about the presence of a websocket endpoint if the upgrade fails.
 pub struct StealthWebSocketUpgrade {
-    config: WebSocketConfig,
     sec_websocket_accept: HeaderValue,
     on_upgrade: OnUpgrade,
 }
@@ -217,15 +217,14 @@ impl StealthWebSocketUpgrade {
         Fut: std::future::Future<Output = T> + Send,
     {
         let on_upgrade = self.on_upgrade;
-        let config = self.config;
 
         tokio::spawn(async move {
             match on_upgrade.await {
                 Ok(upgraded) => {
                     let ws = WebSocketStream::from_raw_socket(
                         upgraded,
-                        protocol::Role::Server,
-                        Some(config),
+                        Role::Server,
+                        Some(DEFAULT_WS_CONFIG),
                     )
                     .await;
                     callback(ws).await;
@@ -304,7 +303,6 @@ impl FromRequest<ServerState<'static>, Body> for StealthWebSocketUpgrade {
         // We can `unwrap()` here because we checked that the header is present
         let sec_websocket_accept = make_sec_websocket_accept(sec_websocket_key.unwrap());
         Ok(Self {
-            config: WebSocketConfig::default(),
             on_upgrade: on_upgrade.unwrap(),
             sec_websocket_accept,
         })

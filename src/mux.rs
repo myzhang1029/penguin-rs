@@ -1,156 +1,25 @@
 //! Client- and server-side connection multiplexing and processing
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use bytes::buf::Buf;
-use futures_util::{pin_mut, FutureExt, Sink, Stream};
+use futures_util::stream::{SplitSink, SplitStream};
+use futures_util::{pin_mut, FutureExt, Sink as FutureSink, Stream as FutureStream, StreamExt};
 pub use penguin_tokio_stream_multiplexor::DuplexStream;
-use penguin_tokio_stream_multiplexor::{StreamMultiplexor, StreamMultiplexorConfig};
-use std::ops::Deref;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use penguin_tokio_stream_multiplexor::{Config, WebSocketMultiplexor};
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio_tungstenite::WebSocketStream;
 use tracing::{debug, error};
+use tungstenite::protocol::WebSocketConfig;
 use tungstenite::Message;
 
-/// `std::error::Error` + Sync + Send + 'static. Just for saving ink.
-pub trait AsyncIoError: std::error::Error + Unpin + Sync + Send + Sized + 'static {
-    fn into_io_error(self) -> std::io::Error {
-        // Takes ownership of self
-        std::io::Error::new(std::io::ErrorKind::Other, self)
-    }
-}
+pub use tungstenite::protocol::Role;
 
-impl<T> AsyncIoError for T where T: std::error::Error + Unpin + Sync + Send + 'static {}
-
-/// A generic WebSocket connection
-#[derive(Clone, Debug)]
-pub struct WebSocket<Inner>
-where
-    Inner: Stream<Item = Result<Message, tungstenite::Error>>
-        + Sink<Message, Error = tungstenite::Error>
-        + Unpin
-        + Send
-        + Sized
-        + 'static,
-{
-    inner: Inner,
-    buffer: Vec<u8>,
-}
-
-impl<Inner> WebSocket<Inner>
-where
-    Inner: Stream<Item = Result<Message, tungstenite::Error>>
-        + Sink<Message, Error = tungstenite::Error>
-        + Unpin
-        + Send
-        + Sized
-        + 'static,
-{
-    /// Create a new `WebSocket` from a `WebSocketStream`
-    pub fn new(ws: Inner) -> Self {
-        Self {
-            inner: ws,
-            buffer: Vec::with_capacity(1024),
-        }
-    }
-}
-
-impl<Inner> AsyncRead for WebSocket<Inner>
-where
-    Inner: Stream<Item = Result<Message, tungstenite::Error>>
-        + Sink<Message, Error = tungstenite::Error>
-        + Unpin
-        + Send
-        + Sized
-        + 'static,
-{
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<Result<(), std::io::Error>> {
-        let initially_empty = self.buffer.is_empty();
-        if !initially_empty {
-            let buf_remaining = buf.remaining();
-            if buf_remaining < self.buffer.len() {
-                buf.put_slice(&self.buffer[..buf_remaining]);
-                self.buffer.deref().advance(buf_remaining);
-            } else {
-                buf.put_slice(&self.buffer);
-                self.buffer.clear();
-            }
-        }
-        match Pin::new(&mut self.inner).poll_next(cx) {
-            Poll::Ready(Some(Ok(message))) => {
-                let buf_remaining = buf.remaining();
-                let data = message.into_data();
-                if buf_remaining < data.len() {
-                    buf.put_slice(&data[..buf_remaining]);
-                    self.buffer.extend_from_slice(&data[buf_remaining..]);
-                } else {
-                    buf.put_slice(&data);
-                }
-                Poll::Ready(Ok(()))
-            }
-            Poll::Ready(Some(Err(e))) => Poll::Ready(Err(e.into_io_error())),
-            Poll::Ready(None) => Poll::Ready(Ok(())),
-            Poll::Pending => {
-                if initially_empty {
-                    Poll::Pending
-                } else {
-                    Poll::Ready(Ok(()))
-                }
-            }
-        }
-    }
-}
-
-impl<Inner> AsyncWrite for WebSocket<Inner>
-where
-    Inner: Stream<Item = Result<Message, tungstenite::Error>>
-        + Sink<Message, Error = tungstenite::Error>
-        + Unpin
-        + Send
-        + Sized
-        + 'static,
-{
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        data: &[u8],
-    ) -> Poll<Result<usize, std::io::Error>> {
-        match Pin::new(&mut self.inner).poll_ready(cx) {
-            Poll::Ready(Ok(())) => {
-                // XXX: warp::ws::Message has a default max size of 64MB,
-                // so we can safely assume that no one will send a message
-                // larger than that. Prove me wrong.
-                let msg = Message::Binary(data.to_vec());
-                Pin::new(&mut self.inner)
-                    .start_send(msg)
-                    .map_err(AsyncIoError::into_io_error)?;
-                Poll::Ready(Ok(data.len()))
-            }
-            Poll::Ready(Err(e)) => Poll::Ready(Err(e.into_io_error())),
-            Poll::Pending => Poll::Pending,
-        }
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
-        Pin::new(&mut self.get_mut().inner)
-            .poll_flush(cx)
-            .map_err(AsyncIoError::into_io_error)
-    }
-
-    fn poll_shutdown(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<(), std::io::Error>> {
-        Pin::new(&mut self.get_mut().inner)
-            .poll_close(cx)
-            .map_err(AsyncIoError::into_io_error)
-    }
-}
+pub const DEFAULT_WS_CONFIG: WebSocketConfig = WebSocketConfig {
+    max_send_queue: None,
+    max_message_size: Some(64 << 20),
+    max_frame_size: Some(16 << 20),
+    accept_unmasked_frames: false,
+};
 
 /// Multiplexor error
 #[derive(Debug, Error)]
@@ -164,16 +33,8 @@ pub enum Error {
     #[error("invalid control channel message")]
     InvalidControlChannelMessage,
 }
-/// Multiplexor role
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Role {
-    /// Client role
-    Client,
-    /// Server role
-    Server,
-}
 
-/// The actual multiplexor, which is a wrapper around a `StreamMultiplexor`
+/// The actual multiplexor, which is a wrapper around a `WebSocketMultiplexor`
 /// and a `WebSocket` instance.
 /// When we need a new channel, both ends synchronize on the `ctrl_chan`
 /// channel.
@@ -181,43 +42,49 @@ pub enum Role {
 /// - 0: ping; server responds with 0
 /// - 1: open a new channel; server responds with a port number, or 0 if no ports are available.
 #[derive(Debug)]
-pub struct Multiplexor<I>
+pub struct Multiplexor<Sink, Stream>
 where
-    I: Stream<Item = Result<Message, tungstenite::Error>>
-        + Sink<Message, Error = tungstenite::Error>
-        + Unpin
-        + Send
-        + Sized
-        + 'static,
+    Stream: FutureStream<Item = tungstenite::Result<Message>> + Send + Unpin + 'static,
+    Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Unpin + 'static,
 {
-    /// The underlying `StreamMultiplexor`
-    mux: StreamMultiplexor<WebSocket<I>>,
+    /// The underlying `WebSocketMultiplexor`
+    mux: WebSocketMultiplexor<Sink, Stream>,
     /// The role of this multiplexor
     role: Role,
     /// The control channel
     ctrl_chan: Option<DuplexStream>,
 }
 
-impl<I> Multiplexor<I>
-where
-    I: Stream<Item = Result<Message, tungstenite::Error>>
-        + Sink<Message, Error = tungstenite::Error>
-        + Unpin
-        + Send
-        + Sized
-        + 'static,
+impl<S: AsyncRead + AsyncWrite + Unpin + Send>
+    Multiplexor<SplitSink<WebSocketStream<S>, Message>, SplitStream<WebSocketStream<S>>>
 {
-    /// Create a new `ClientMultiplexor` from a `ClientWebSocket`
-    pub fn new(s: WebSocket<I>, role: Role) -> Self {
-        let config = StreamMultiplexorConfig::default();
-        let mux = StreamMultiplexor::new(s, config);
+    /// Create a new `WebSocketMultiplexor` from a `WebSocketStream`
+    pub fn new(ws_stream: WebSocketStream<S>, role: Role) -> Self {
+        let mut config = Config::default();
+        let ws_config = ws_stream.get_config();
+        if let Some(max_frame_size) = ws_config.max_frame_size {
+            config.max_frame_size = max_frame_size;
+            config.buf_size = if config.max_frame_size > 2097152 + 1024 {
+                config.max_frame_size - 2097152
+            } else {
+                config.max_frame_size - 1024
+            };
+        }
+        let (sink, stream) = ws_stream.split();
+        let mux = WebSocketMultiplexor::new(sink, stream, config);
         Self {
             mux,
             role,
             ctrl_chan: None,
         }
     }
+}
 
+impl<Sink, Stream> Multiplexor<Sink, Stream>
+where
+    Stream: FutureStream<Item = tungstenite::Result<Message>> + Send + Unpin + 'static,
+    Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Unpin + 'static,
+{
     /// Establish the new control channel
     pub async fn establish_control_channel(&mut self) -> std::io::Result<()> {
         let ctrl_chan = match self.role {
