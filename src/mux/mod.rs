@@ -6,6 +6,7 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 mod client;
+mod common_methods;
 mod frame;
 mod server;
 
@@ -57,6 +58,7 @@ pub enum Error {
     SendFrameToChannel(#[from] tokio::sync::mpsc::error::SendError<Frame>),
 }
 
+#[derive(Debug, Clone)]
 pub enum Multiplexor<Sink, Stream>
 where
     Stream: FutureStream<Item = tungstenite::Result<Message>> + Send + Unpin + 'static,

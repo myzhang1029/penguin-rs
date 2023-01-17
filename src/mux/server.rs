@@ -179,53 +179,11 @@ where
                 }
             }
         }
-        debug!("closing connection");
+        self.close_all_write().await;
         Ok(())
     }
 
-    /// Process an incoming message
-    /// Returns `Ok(true)` if we should close
-    async fn process_message(
-        self: Arc<Self>,
-        msg: Message,
-        datagram_tx: &mut tokio::sync::mpsc::Sender<DatagramFrame>,
-        stream_tx: &mut tokio::sync::mpsc::Sender<MuxStream<Sink, Stream>>,
-    ) -> Result<bool, super::Error> {
-        match msg {
-            Message::Binary(data) => {
-                let frame = data.try_into().map_err(super::Error::InvalidMessage)?;
-                match frame {
-                    Frame::Datagram(datagram_frame) => {
-                        trace!("Received datagram frame: {:?}", datagram_frame);
-                        datagram_tx.send(datagram_frame).await.unwrap();
-                    }
-                    Frame::Stream(stream_frame) => {
-                        trace!("Received stream frame: {:?}", stream_frame);
-                        self.process_stream_frame(stream_frame, stream_tx);
-                    }
-                }
-                Ok(false)
-            }
-            Message::Ping(data) => {
-                trace!("Received ping: {:?}", data);
-                let mut sink = self.sink.write().await;
-                sink.send(Message::Pong(data)).await?;
-                Ok(false)
-            }
-            Message::Pong(data) => {
-                trace!("Received pong: {:?}", data);
-                Ok(false)
-            }
-            Message::Close(_) => {
-                debug!("Received close");
-                Ok(true)
-            }
-            _ => {
-                error!("Received unrecognized message: {:?}", msg);
-                Err(super::Error::InvalidMessage("Unrecognized message type"))
-            }
-        }
-    }
+    crate::make_process_message! {}
 
     /// Process a stream frame
     /// Does the following:
@@ -241,10 +199,10 @@ where
         stream_frame: StreamFrame,
         stream_tx: &mut tokio::sync::mpsc::Sender<MuxStream<Sink, Stream>>,
     ) -> Result<(), super::Error> {
-        let dport = stream_frame.dport;
-        if dport == 0 {
+        let server_port = stream_frame.dport;
+        if server_port == 0 {
             assert!(stream_frame.flag == StreamFlag::Syn);
-            let mut port = 0;
+            let mut server_port = 0;
             // Decode Syn handshake
             let mut syn_data = bytes::Bytes::from(stream_frame.data);
             let host_len = syn_data.get_u8();
@@ -252,10 +210,10 @@ where
             let dest_port = syn_data.get_u16();
 
             // Allocate a new port
-            while self.streams.read().await.contains_key(&port) {
-                port = rand::thread_rng().gen_range(1..u16::MAX);
+            while self.streams.read().await.contains_key(&server_port) {
+                server_port = rand::thread_rng().gen_range(1..u16::MAX);
             }
-            trace!("port: {}", port);
+            trace!("port: {}", server_port);
 
             // So we expose an `AsyncRead` and `AsyncWrite` interface to the user
             // `our` is our end, `their` is the user's end
@@ -263,11 +221,11 @@ where
             let (our_rx, our_tx) = tokio::io::split(our);
             // Save the TX end of the stream so we can write to it when subsequent frames arrive
             let mut streams = self.streams.write().await;
-            streams.insert(port, our_tx);
+            streams.insert(server_port, our_tx);
             drop(streams);
             let stream = MuxStream {
                 stream: their,
-                port,
+                port: server_port,
                 client_port: stream_frame.sport,
                 host,
                 dest_port,
@@ -276,10 +234,10 @@ where
             // This goes to the user
             stream_tx.send(stream).await;
             // Read from the stream and pack frames
-            tokio::spawn(self.stream_task(port, stream_frame.sport, our_rx));
+            tokio::spawn(self.stream_task(server_port, stream_frame.sport, our_rx));
             // Send a Ack
             let ack_frame = Frame::Stream(StreamFrame {
-                sport: port,
+                sport: server_port,
                 dport: stream_frame.sport,
                 data: vec![],
                 flag: StreamFlag::Ack,
@@ -287,31 +245,19 @@ where
         } else {
             let mut streams = self.streams.write().await;
             let stream = streams
-                .get_mut(&dport)
+                .get_mut(&server_port)
                 .ok_or_else(|| super::Error::InvalidMessage("No stream with specified dport"))?;
+            if stream_frame.flag == StreamFlag::Fin {
+                self.close_write(server_port).await;
+            }
             stream.write_all(&stream_frame.data).await?;
         }
         Ok(())
     }
 
-    /// Spawn a reader task on a stream
-    async fn stream_task(
-        self: Arc<Self>,
-        sport: u16,
-        dport: u16,
-        mut stream: tokio::io::ReadHalf<tokio::io::DuplexStream>,
-    ) -> Result<(), super::Error> {
-        loop {
-            let mut buf = vec![0; super::READ_BUF_SIZE];
-            let n = stream.read(&mut buf).await?;
-            self.frame_tx
-                .send(Frame::Stream(StreamFrame {
-                    sport,
-                    dport,
-                    data: buf[..n].to_vec(),
-                    flag: StreamFlag::Psh,
-                }))
-                .await?;
-        }
-    }
+    crate::make_close_all_write! {}
+
+    crate::make_close_write! {}
+
+    crate::make_stream_task! {}
 }

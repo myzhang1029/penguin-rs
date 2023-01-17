@@ -2,19 +2,13 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::frame::{DatagramFrame, Frame, StreamFlag, StreamFrame};
-use futures_util::stream::{SplitSink, SplitStream};
-use futures_util::{
-    pin_mut, FutureExt, Sink as FutureSink, SinkExt, Stream as FutureStream, StreamExt,
-};
+use futures_util::{Sink as FutureSink, SinkExt, Stream as FutureStream, StreamExt};
 use rand::Rng;
 use std::collections::HashMap;
-use std::num::TryFromIntError;
 use std::sync::Arc;
-use thiserror::Error;
 pub use tokio::io::DuplexStream;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, WriteHalf};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, WriteHalf};
 use tokio::sync::RwLock;
-use tokio_tungstenite::WebSocketStream;
 use tracing::{debug, error, trace};
 use tungstenite::Message;
 
@@ -169,8 +163,8 @@ where
 
 impl<Sink, Stream> MultiplexorInner<Sink, Stream>
 where
-    Stream: FutureStream<Item = tungstenite::Result<Message>> + Send + Unpin + 'static,
-    Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Unpin + 'static,
+    Stream: FutureStream<Item = tungstenite::Result<Message>> + Send + Sync + Unpin + 'static,
+    Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Sync + Unpin + 'static,
 {
     /// Client-side processing task
     pub async fn task(
@@ -179,9 +173,103 @@ where
         mut stream_tx: tokio::sync::mpsc::Sender<MuxStream<Sink, Stream>>,
         mut frame_rx: tokio::sync::mpsc::Receiver<Frame>,
         mut may_close_ports_rx: tokio::sync::mpsc::UnboundedReceiver<u16>,
-    ) {
+    ) -> Result<(), super::Error> {
+        let mut keepalive_interval = if let Some(interval) = self.keepalive_interval {
+            Some(tokio::time::interval(interval))
+        } else {
+            None
+        };
         loop {
-            todo!()
+            tokio::select! {
+                Some(frame) = frame_rx.recv() => {
+                    trace!("sending frame: {:?}", frame);
+                    let mut sink = self.sink.write().await;
+                    sink.send(frame.try_into()?).await?;
+                }
+                Some(port) = may_close_ports_rx.recv() => {
+                    debug!("freeing port: {}", port);
+                    self.streams.write().await.remove(&port);
+                }
+                mut stream = self.stream.write() => {
+                    let msg = stream.next().await;
+                    if let Some(msg) = msg {
+                        let msg = msg?;
+                        trace!("received message: {:?}", msg);
+                        if self.clone().process_message(msg, &mut datagram_tx, &mut stream_tx).await? {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                _ =  keepalive_interval.as_mut().unwrap().tick(), if keepalive_interval.is_some() => {
+                    let mut sink = self.sink.write().await;
+                    trace!("sending ping");
+                    sink.send(Message::Ping(vec![])).await?;
+                }
+                else => {
+                    break;
+                }
+            }
         }
+        self.close_all_write().await;
+        Ok(())
     }
+
+    crate::make_process_message! {}
+
+    /// Process a stream frame
+    /// Does the following:
+    /// - If `flag` is `Ack`, we create a `DuplexStream` and send it to the
+    ///  `stream_tx` channel.
+    /// - Otherwise, we find the `DuplexStream` with the matching `dport` and
+    ///   - Send the data to the `DuplexStream`.
+    ///   - If the `DuplexStream` is closed, send a `Fin` frame.
+    async fn process_stream_frame(
+        self: Arc<Self>,
+        stream_frame: StreamFrame,
+        stream_tx: &mut tokio::sync::mpsc::Sender<MuxStream<Sink, Stream>>,
+    ) -> Result<(), super::Error> {
+        let port = stream_frame.dport;
+        match stream_frame.flag {
+            StreamFlag::Syn => {
+                panic!("`Syn` flag should not be received by client");
+            }
+            StreamFlag::Ack => {
+                // See `server.rs`
+                let (our, their) = tokio::io::duplex(super::DUPLEX_SIZE);
+                let (our_rx, our_tx) = tokio::io::split(our);
+                // Save the TX end of the stream so we can write to it when subsequent frames arrive
+                let mut streams = self.streams.write().await;
+                streams.insert(port, our_tx);
+                drop(streams);
+                let stream = MuxStream {
+                    stream: their,
+                    port,
+                    server_port: stream_frame.sport,
+                    inner: self.clone(),
+                };
+                // This goes to the user
+                stream_tx.send(stream).await;
+                // Read from the stream and pack frames
+                tokio::spawn(self.stream_task(port, stream_frame.sport, our_rx));
+            }
+            StreamFlag::Fin => {
+                self.close_write(port).await;
+            }
+            StreamFlag::Psh => {
+                let mut streams = self.streams.write().await;
+                if let Some(stream) = streams.get_mut(&port) {
+                    stream.write_all(&stream_frame.data).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    crate::make_close_all_write! {}
+
+    crate::make_close_write! {}
+
+    crate::make_stream_task! {}
 }

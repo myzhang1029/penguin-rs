@@ -32,13 +32,12 @@ use tungstenite::Message;
 /// Stream frame flags
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
+#[non_exhaustive]
 pub enum StreamFlag {
     /// New connection
     Syn = 0,
     /// Confirm connection
     Ack = 2,
-    /// Reset connection
-    Rst = 3,
     /// Close connection
     Fin = 4,
     /// Data
@@ -157,7 +156,6 @@ impl TryFrom<Bytes> for StreamFrame {
         let flag = match data.get_u8() {
             0 => StreamFlag::Syn,
             2 => StreamFlag::Ack,
-            3 => StreamFlag::Rst,
             4 => StreamFlag::Fin,
             5 => StreamFlag::Psh,
             _ => return Err("Invalid flag"),
