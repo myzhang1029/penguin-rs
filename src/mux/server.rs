@@ -183,8 +183,6 @@ where
         Ok(())
     }
 
-    crate::make_process_message! {}
-
     /// Process a stream frame
     /// Does the following:
     /// - If `dport` is `0`, we are creating a new stream.
@@ -255,9 +253,11 @@ where
         Ok(())
     }
 
-    crate::make_close_all_write! {}
+    super::common_methods::make_process_message! {}
 
-    crate::make_close_write! {}
+    super::common_methods::make_close_all_write! {}
 
-    crate::make_stream_task! {}
+    super::common_methods::make_close_write! {}
+
+    super::common_methods::make_stream_task! {}
 }

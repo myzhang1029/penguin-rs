@@ -1,7 +1,6 @@
 //! Macros to create common codes for client and server
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-#[macro_export]
 macro_rules! make_stream_task {
     () => {
         /// Spawn a reader task on a stream
@@ -39,7 +38,6 @@ macro_rules! make_stream_task {
     };
 }
 
-#[macro_export]
 macro_rules! make_process_message {
     () => {
         /// Process an incoming message
@@ -91,7 +89,6 @@ macro_rules! make_process_message {
     };
 }
 
-#[macro_export]
 macro_rules! make_close_write {
     () => {
         /// Close a port's write end.
@@ -107,7 +104,6 @@ macro_rules! make_close_write {
     };
 }
 
-#[macro_export]
 macro_rules! make_close_all_write {
     () => {
         /// Close all write ends of the streams
@@ -121,3 +117,8 @@ macro_rules! make_close_all_write {
         }
     };
 }
+
+pub(crate) use make_close_all_write;
+pub(crate) use make_close_write;
+pub(crate) use make_process_message;
+pub(crate) use make_stream_task;
