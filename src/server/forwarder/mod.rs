@@ -22,7 +22,7 @@
 mod tcp;
 mod udp;
 
-use penguin_tokio_stream_multiplexor::DuplexStream;
+use crate::mux::DuplexStream;
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tracing::info;
