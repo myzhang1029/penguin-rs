@@ -276,7 +276,7 @@ impl FromStr for ServerUrl {
                     && !url.starts_with("ws://")
                     && !url.starts_with("wss://")
                 {
-                    let url = format!("ws://{}", url);
+                    let url = format!("ws://{url}");
                     Uri::from_str(&url)?.into_parts()
                 } else {
                     return Err(e.into());

@@ -16,7 +16,7 @@ use tracing_subscriber::{filter, fmt, prelude::*, reload};
 
 /// Errors
 #[derive(Debug, Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error(transparent)]
     Client(#[from] client::Error),
     #[error(transparent)]

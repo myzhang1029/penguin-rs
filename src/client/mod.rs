@@ -24,7 +24,7 @@ use tungstenite::Message;
 
 /// Errors
 #[derive(Debug, Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error("failed to parse remote: {0}")]
     ParseRemote(#[from] crate::parse_remote::Error),
     #[error("failed to connect WebSocket: {0}")]
@@ -92,7 +92,7 @@ impl ClientIdMapEntry {
 }
 
 #[tracing::instrument(level = "trace")]
-pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
+pub(crate) async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
     // TODO: Temporary, remove when implemented
     // Blocked on `snapview/tungstenite-rs#177`
     if args.proxy.is_some() {
@@ -231,7 +231,7 @@ async fn on_connected(
                                 &information.socket,
                                 &information.addr,
                                 &data,
-                            );
+                            ).await?;
                         } else if let Err(e) = information.socket.send_to(&data, &information.addr).await {
                             error!("Failed to send datagram to client: {e}");
                         }
@@ -241,7 +241,10 @@ async fn on_connected(
                     }
                 }
             }
-            // else: All senders are dropped, which should not happen
+            else => {
+                // The multiplexor has closed for some reason
+                break;
+            }
         }
     }
     Ok(())
@@ -307,13 +310,4 @@ fn retryable_errors(e: &std::io::Error) -> bool {
         || e.kind() == std::io::ErrorKind::BrokenPipe
         || e.kind() == std::io::ErrorKind::ConnectionReset
         || e.kind() == std::io::ErrorKind::ConnectionRefused
-}
-
-/// Converts `std::io::Error` to `Ok(())` if it's retryable, `Err(_)` otherwise.
-fn maybe_retryable(e: std::io::Error) -> Result<(), Error> {
-    if retryable_errors(&e) {
-        Ok(())
-    } else {
-        Err(e.into())
-    }
 }

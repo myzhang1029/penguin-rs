@@ -4,7 +4,6 @@
 use super::Error;
 use crate::client::{ClientIdMapEntry, HandlerResources};
 use crate::mux::{DatagramFrame, IntKey};
-use std::ops::Deref;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::UdpSocket;
@@ -27,7 +26,7 @@ pub(super) async fn handle_udp(
         let mut buf = [0u8; 65536];
         let (len, addr) = socket.recv_from(&mut buf).await?;
         let mut udp_client_id_map = handler_resources.udp_client_id_map.write().await;
-        let client_id = u32::next_available_key(udp_client_id_map.deref());
+        let client_id = u32::next_available_key(&*udp_client_id_map);
         udp_client_id_map.insert(
             client_id,
             ClientIdMapEntry::new(addr, socket.clone(), false),

@@ -168,15 +168,14 @@ async fn backend_or_404_handler(
         let path_query = req
             .uri()
             .path_and_query()
-            .map(|v| v.as_str())
-            .unwrap_or(path);
+            .map_or(path, http::uri::PathAndQuery::as_str);
 
         let uri = Uri::builder()
             // `unwrap()` should not panic because `BackendUrl` is validated
             // by clap.
             .scheme(backend.scheme.clone())
             .authority(backend.authority.clone())
-            .path_and_query(format!("{}{}", backend.path.path(), path_query))
+            .path_and_query(format!("{}{path_query}", backend.path.path()))
             .build()
             .unwrap();
         *req.uri_mut() = uri;
@@ -196,21 +195,21 @@ async fn not_found_handler(State(state): State<ServerState<'static>>) -> Respons
     (StatusCode::NOT_FOUND, state.not_found_resp).into_response()
 }
 
-/// Check the PSK and protocol version and upgrade to a websocket if the PSK matches (if required).
+/// Check the PSK and protocol version and upgrade to a WebSocket if the PSK matches (if required).
 pub async fn ws_handler(ws: StealthWebSocketUpgrade) -> Response {
-    debug!("Upgrading to websocket");
+    debug!("Upgrading to WebSocket");
     ws.on_upgrade(handle_websocket).await
 }
 
 /// A variant of `WebSocketUpgrade` that does not leak information
-/// about the presence of a websocket endpoint if the upgrade fails.
+/// about the presence of a WebSocket endpoint if the upgrade fails.
 pub struct StealthWebSocketUpgrade {
     sec_websocket_accept: HeaderValue,
     on_upgrade: OnUpgrade,
 }
 
 impl StealthWebSocketUpgrade {
-    /// Upgrade to a websocket.
+    /// Upgrade to a WebSocket.
     pub async fn on_upgrade<F, Fut, T>(self, callback: F) -> Response
     where
         F: FnOnce(WebSocket) -> Fut + Send + 'static,
@@ -230,7 +229,7 @@ impl StealthWebSocketUpgrade {
                     callback(ws).await;
                 }
                 Err(err) => {
-                    error!("Failed to upgrade to websocket: {err}");
+                    error!("Failed to upgrade to WebSocket: {err}");
                 }
             };
         });
@@ -278,15 +277,15 @@ impl FromRequest<ServerState<'static>, Body> for StealthWebSocketUpgrade {
 
         // `clone` should be cheap
         if req.method() != Method::GET {
-            warn!("Invalid websocket request: not a GET request");
+            warn!("Invalid WebSocket request: not a GET request");
             return Err(backend_or_404_handler(State(state.clone()), req).await);
         }
         if state.ws_psk.is_some() && x_penguin_psk != state.ws_psk {
-            warn!("Invalid websocket request: invalid PSK {x_penguin_psk:?}");
+            warn!("Invalid WebSocket request: invalid PSK {x_penguin_psk:?}");
             return Err(backend_or_404_handler(State(state.clone()), req).await);
         }
         if sec_websocket_key.is_none() {
-            warn!("Invalid websocket request: no sec-websocket-key header");
+            warn!("Invalid WebSocket request: no sec-websocket-key header");
             return Err(backend_or_404_handler(State(state.clone()), req).await);
         }
         if !header_matches!(connection, UPGRADE)

@@ -44,10 +44,9 @@ macro_rules! complete_or_continue_if_retryable {
                 if crate::client::retryable_errors(&err) {
                     warn!("Remote error: {err}");
                     continue;
-                } else {
-                    error!("Giving up");
-                    return Err(err.into());
                 }
+                error!("Giving up");
+                return Err(err.into());
             }
         }
     };
@@ -57,7 +56,7 @@ pub(super) use {complete_or_continue, complete_or_continue_if_retryable};
 
 /// Errors
 #[derive(Debug, Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
@@ -70,8 +69,6 @@ pub enum Error {
     SendDatagram(#[from] mpsc::error::SendError<DatagramFrame>),
     #[error("remote host longer than 255 octets")]
     RHostTooLong(#[from] std::num::TryFromIntError),
-    #[error("server did not complete the handshake")]
-    ServerHandshake,
 
     // These are for the socks server
     #[error("only supports SOCKSv5")]
@@ -90,7 +87,7 @@ pub enum Error {
 /// This should be spawned as tasks and they will remain as long as `client`
 /// is alive. Individual connection tasks are spawned as connections appear.
 #[tracing::instrument(skip(handler_resources), level = "debug")]
-pub async fn handle_remote(
+pub(super) async fn handle_remote(
     remote: &'static Remote,
     handler_resources: HandlerResources,
 ) -> Result<(), Error> {

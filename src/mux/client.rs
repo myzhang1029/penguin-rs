@@ -5,12 +5,11 @@ use super::frame::{DatagramFrame, Frame, StreamFlag, StreamFrame};
 use super::IntKey;
 use futures_util::{Sink as FutureSink, SinkExt, Stream as FutureStream, StreamExt};
 use std::collections::HashMap;
-use std::ops::Deref;
 use std::sync::Arc;
 pub use tokio::io::DuplexStream;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, WriteHalf};
 use tokio::sync::RwLock;
-use tracing::{debug, error, trace};
+use tracing::{debug, error, trace, warn};
 use tungstenite::Message;
 
 /// All parameters of a stream channel
@@ -39,7 +38,8 @@ where
         self.inner
             .may_close_ports_tx
             .send(self.port)
-            .expect("Failed to notify task of dropped port");
+            // Maybe the task has already exited, who knows
+            .unwrap_or_else(|_| warn!("Failed to notify task of dropped port"));
     }
 }
 
@@ -56,8 +56,6 @@ where
     sink: RwLock<Sink>,
     /// The underlying `Stream` of messages
     stream: RwLock<Stream>,
-    /// Maximum size of a frame
-    max_frame_size: usize,
     /// Interval between keepalive `Ping`s
     keepalive_interval: Option<std::time::Duration>,
     /// Open stream channels
@@ -66,8 +64,6 @@ where
     datagram_rx: RwLock<tokio::sync::mpsc::Receiver<DatagramFrame>>,
     /// Channel of established streams for processing
     stream_rx: RwLock<tokio::sync::mpsc::Receiver<MuxStream<Sink, Stream>>>,
-    /// Channel for the task to receive frames to send
-    frame_tx: tokio::sync::mpsc::Sender<Frame>,
     /// Channel for notifying the task of a dropped port
     may_close_ports_tx: tokio::sync::mpsc::UnboundedSender<u16>,
 }
@@ -87,40 +83,39 @@ where
     Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Sync + Unpin + 'static,
 {
     /// Create a new `Multiplexor`
+    #[tracing::instrument(skip_all, level = "debug")]
     pub fn new(
         sink: Sink,
         stream: Stream,
-        max_frame_size: usize,
         keepalive_interval: Option<std::time::Duration>,
     ) -> Self {
         let (datagram_tx, datagram_rx) = tokio::sync::mpsc::channel(super::DATAGRAM_BUFFER_SIZE);
         let (stream_tx, stream_rx) = tokio::sync::mpsc::channel(super::STREAM_BUFFER_SIZE);
-        let (frame_tx, frame_rx) = tokio::sync::mpsc::channel(super::FRAME_BUFFER_SIZE);
         let (may_close_ports_tx, may_close_ports_rx) = tokio::sync::mpsc::unbounded_channel();
 
         let inner = Arc::new(MultiplexorInner {
             sink: RwLock::new(sink),
             stream: RwLock::new(stream),
-            max_frame_size,
             keepalive_interval,
             streams: RwLock::new(HashMap::new()),
             datagram_rx: RwLock::new(datagram_rx),
             stream_rx: RwLock::new(stream_rx),
-            frame_tx,
             may_close_ports_tx,
         });
 
         tokio::spawn(
             inner
                 .clone()
-                .task(datagram_tx, stream_tx, frame_rx, may_close_ports_rx),
+                .task(datagram_tx, stream_tx, may_close_ports_rx),
         );
+        trace!("Multiplexor task spawned");
 
         Self { inner }
     }
 
     /// Request a channel for `host` and `port`
     /// Returns `None` if the connection is closed
+    #[tracing::instrument(skip(self), level = "debug")]
     pub async fn new_stream_channel(
         &self,
         host: Vec<u8>,
@@ -129,18 +124,21 @@ where
         let host_len = host.len();
         let mut syn_payload =
             Vec::with_capacity(std::mem::size_of::<u8>() + std::mem::size_of::<u16>() + host_len);
-        syn_payload[0] = u8::try_from(host_len)?;
-        syn_payload[1..=host_len].copy_from_slice(&host);
-        syn_payload[host_len + 1..].copy_from_slice(&port.to_be_bytes());
+        syn_payload.push(u8::try_from(host_len)?);
+        syn_payload.extend_from_slice(&host);
+        syn_payload.extend_from_slice(&port.to_be_bytes());
         // Allocate a new port
-        let sport = u16::next_available_key(self.inner.streams.read().await.deref());
+        let sport = u16::next_available_key(&*self.inner.streams.read().await);
+        trace!("sport = {sport}");
         let syn_frame = StreamFrame {
             sport,
             dport: 0,
             flag: StreamFlag::Syn,
             data: syn_payload,
         };
-        self.inner.frame_tx.send(Frame::Stream(syn_frame)).await?;
+        trace!("sending syn");
+        self.inner.send_frame(Frame::Stream(syn_frame)).await?;
+        trace!("sending stream to user");
         let mut stream_rx = self.inner.stream_rx.write().await;
         // `unwrap`. Panic implies my logic is wrong
         let stream = stream_rx.recv().await.unwrap();
@@ -149,14 +147,16 @@ where
 
     /// Get the next available datagram
     /// Returns `None` if the connection is closed
+    #[tracing::instrument(skip(self), level = "debug")]
     pub async fn get_datagram(&self) -> Option<DatagramFrame> {
         let mut datagram_rx = self.inner.datagram_rx.write().await;
         datagram_rx.recv().await
     }
 
     /// Send a datagram
+    #[tracing::instrument(skip(self), level = "debug")]
     pub async fn send_datagram(&self, frame: DatagramFrame) -> Result<(), super::Error> {
-        self.inner.frame_tx.send(Frame::Datagram(frame)).await?;
+        self.inner.send_frame(Frame::Datagram(frame)).await?;
         Ok(())
     }
 }
@@ -167,25 +167,20 @@ where
     Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Sync + Unpin + 'static,
 {
     /// Client-side processing task
+    #[tracing::instrument(skip_all, level = "trace")]
     pub async fn task(
         self: Arc<Self>,
         mut datagram_tx: tokio::sync::mpsc::Sender<DatagramFrame>,
         mut stream_tx: tokio::sync::mpsc::Sender<MuxStream<Sink, Stream>>,
-        mut frame_rx: tokio::sync::mpsc::Receiver<Frame>,
         mut may_close_ports_rx: tokio::sync::mpsc::UnboundedReceiver<u16>,
     ) -> Result<(), super::Error> {
-        let mut keepalive_interval = if let Some(interval) = self.keepalive_interval {
-            Some(tokio::time::interval(interval))
-        } else {
-            None
-        };
+        let keepalive_interval = self
+            .keepalive_interval
+            .unwrap_or(tokio::time::Duration::MAX);
+        // This is a bit of a hack, but there seems to be no way to optionally unwrap in `select!`
+        let mut keepalive_interval = tokio::time::interval(keepalive_interval);
         loop {
             tokio::select! {
-                Some(frame) = frame_rx.recv() => {
-                    trace!("sending frame: {:?}", frame);
-                    let mut sink = self.sink.write().await;
-                    sink.send(frame.try_into()?).await?;
-                }
                 Some(port) = may_close_ports_rx.recv() => {
                     debug!("freeing port: {}", port);
                     self.streams.write().await.remove(&port);
@@ -202,7 +197,7 @@ where
                         break;
                     }
                 }
-                _ =  keepalive_interval.as_mut().unwrap().tick(), if keepalive_interval.is_some() => {
+                _ = keepalive_interval.tick() => {
                     let mut sink = self.sink.write().await;
                     trace!("sending ping");
                     sink.send(Message::Ping(vec![])).await?;
@@ -223,6 +218,7 @@ where
     /// - Otherwise, we find the `DuplexStream` with the matching `dport` and
     ///   - Send the data to the `DuplexStream`.
     ///   - If the `DuplexStream` is closed, send a `Fin` frame.
+    #[tracing::instrument(skip_all, level = "trace")]
     async fn process_stream_frame(
         self: Arc<Self>,
         stream_frame: StreamFrame,
@@ -248,7 +244,10 @@ where
                     inner: self.clone(),
                 };
                 // This goes to the user
-                stream_tx.send(stream).await;
+                stream_tx
+                    .send(stream)
+                    .await
+                    .map_err(|e| super::Error::SendStreamToClient(e.to_string()))?;
                 // Read from the stream and pack frames
                 tokio::spawn(self.stream_task(port, stream_frame.sport, our_rx));
             }
@@ -264,6 +263,8 @@ where
         }
         Ok(())
     }
+
+    super::common_methods::make_send_frame! {}
 
     super::common_methods::make_process_message! {}
 

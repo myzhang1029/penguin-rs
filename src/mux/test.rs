@@ -3,10 +3,28 @@
 
 use super::*;
 use tokio::io::duplex;
+use tracing::{debug, info};
+use tracing_subscriber::prelude::*;
+
+fn setup_log() {
+    let fmt_layer = tracing_subscriber::fmt::Layer::default()
+        .with_thread_ids(true)
+        .with_file(true)
+        .with_line_number(true)
+        .with_timer(tracing_subscriber::fmt::time::time())
+        .with_writer(std::io::stderr);
+    let level_layer = tracing_subscriber::filter::LevelFilter::TRACE;
+    tracing_subscriber::registry()
+        .with(level_layer)
+        .with(fmt_layer)
+        .init();
+    info!("Starting test");
+}
 
 #[tokio::test]
-#[tracing::instrument]
 async fn connect_listen_succeeds() {
+    setup_log();
+
     let (client, server) = duplex(10);
     let client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
     let server = WebSocketStream::from_raw_socket(server, Role::Server, None).await;
@@ -14,17 +32,26 @@ async fn connect_listen_succeeds() {
     let client_mux = Multiplexor::new(client, Role::Client, None);
     let server_mux = Multiplexor::new(server, Role::Server, None);
 
-    tokio::spawn(async move {
-        server_mux
-            .unwrap_server()
+    let server_task = tokio::spawn(async move {
+        let stream = server_mux
+            .as_server()
+            .unwrap()
             .new_stream_channel()
             .await
             .unwrap();
+        info!(
+            "sport = {}, dport = {}, dest = {:?}:{}",
+            stream.client_port, stream.port, stream.host, stream.dest_port
+        );
     });
 
-    let _ = client_mux
-        .unwrap_client()
+    let stream = client_mux
+        .as_client()
+        .unwrap()
         .new_stream_channel(vec![], 0)
         .await
         .unwrap();
+    info!("sport = {}, dport = {}", stream.port, stream.server_port);
+    debug!("Waiting for server task to finish");
+    server_task.await.unwrap();
 }

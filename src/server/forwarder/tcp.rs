@@ -18,13 +18,15 @@ use tokio::{
 pub async fn start_forwarder_on_channel<R, W>(
     chan_rx: R,
     chan_tx: W,
-    rhost: &str,
+    rhost: String,
     rport: u16,
 ) -> std::io::Result<()>
 where
     R: AsyncRead + Unpin + Send,
     W: AsyncWrite + Unpin + Send,
 {
+    let chan_rx = BufReader::new(chan_rx);
+    let chan_tx = BufWriter::new(chan_tx);
     let mut rstream = TcpStream::connect((rhost, rport)).await?;
     let (rread, rwrite) = rstream.split();
     let rread = BufReader::new(rread);

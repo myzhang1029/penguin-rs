@@ -1,4 +1,4 @@
-//! WebSocket connection.
+//! `WebSocket` connection.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use crate::arg::ServerUrl;
@@ -14,7 +14,7 @@ use tokio_tungstenite::{
 use tracing::{debug, warn};
 use tungstenite::{client::IntoClientRequest, handshake::client::Request};
 
-/// Error type for WebSocket connection.
+/// Error type for `WebSocket` connection.
 #[derive(Error, Debug)]
 pub enum Error {
     /// Invalid URL
@@ -25,7 +25,7 @@ pub enum Error {
     Tls(#[from] crate::tls::Error),
 }
 
-/// Perform a WebSocket handshake.
+/// Perform a `WebSocket` handshake.
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(level = "debug", skip(extra_headers))]
 pub async fn handshake(

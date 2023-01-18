@@ -1,6 +1,6 @@
 //! Client- and server-side connection multiplexing and processing
 //!
-//! This is not a general-purpose WebSocket multiplexing library.
+//! This is not a general-purpose `WebSocket` multiplexing library.
 //! It is tailored to the needs of `penguin`.
 //!
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
@@ -40,10 +40,9 @@ pub const DEFAULT_WS_CONFIG: WebSocketConfig = WebSocketConfig {
 /// Number of frames to buffer in the channels before blocking
 const DATAGRAM_BUFFER_SIZE: usize = 2 << 8;
 const STREAM_BUFFER_SIZE: usize = 2 << 8;
-const FRAME_BUFFER_SIZE: usize = 2 << 8;
 /// Size of the `n` in `duplex(n)`
 const DUPLEX_SIZE: usize = 2 << 21;
-/// Less than max_frame_size - header size
+/// Less than `max_frame_size` - header size
 const READ_BUF_SIZE: usize = 2 << 22;
 
 /// Multiplexor error
@@ -51,8 +50,6 @@ const READ_BUF_SIZE: usize = 2 << 22;
 pub enum Error {
     #[error(transparent)]
     Io(#[from] std::io::Error),
-    #[error("no available ports")]
-    NoAvailablePorts,
     #[error(transparent)]
     Tungstenite(#[from] tungstenite::Error),
     #[error("invalid message: {0}")]
@@ -61,6 +58,10 @@ pub enum Error {
     InvalidFrame(#[from] <Vec<u8> as TryFrom<Frame>>::Error),
     #[error(transparent)]
     SendFrameToChannel(#[from] tokio::sync::mpsc::error::SendError<Frame>),
+    #[error(transparent)]
+    SendDatagramToClient(#[from] tokio::sync::mpsc::error::SendError<DatagramFrame>),
+    #[error("cannot send stream to client: {0}")]
+    SendStreamToClient(String),
 }
 
 #[derive(Debug, Clone)]
@@ -82,19 +83,12 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send>
         role: Role,
         keepalive_interval: Option<std::time::Duration>,
     ) -> Self {
-        let ws_config = ws_stream.get_config();
-        let max_frame_size = ws_config.max_frame_size.unwrap_or(1 << 22);
         let (sink, stream) = ws_stream.split();
         match role {
-            Role::Client => Multiplexor::Client(ClientMultiplexor::new(
-                sink,
-                stream,
-                max_frame_size,
-                keepalive_interval,
-            )),
-            Role::Server => {
-                Multiplexor::Server(ServerMultiplexor::new(sink, stream, max_frame_size))
+            Role::Client => {
+                Multiplexor::Client(ClientMultiplexor::new(sink, stream, keepalive_interval))
             }
+            Role::Server => Multiplexor::Server(ServerMultiplexor::new(sink, stream)),
         }
     }
 }
@@ -104,27 +98,6 @@ where
     Stream: FutureStream<Item = tungstenite::Result<Message>> + Send + Unpin + 'static,
     Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Unpin + 'static,
 {
-    pub fn role(&self) -> Role {
-        match self {
-            Multiplexor::Client(_) => Role::Client,
-            Multiplexor::Server(_) => Role::Server,
-        }
-    }
-
-    pub fn unwrap_client(self) -> ClientMultiplexor<Sink, Stream> {
-        match self {
-            Multiplexor::Client(mux) => mux,
-            Multiplexor::Server(_) => panic!("not a client multiplexor"),
-        }
-    }
-
-    pub fn unwrap_server(self) -> ServerMultiplexor<Sink, Stream> {
-        match self {
-            Multiplexor::Client(_) => panic!("not a server multiplexor"),
-            Multiplexor::Server(mux) => mux,
-        }
-    }
-
     pub fn as_client(&self) -> Option<&ClientMultiplexor<Sink, Stream>> {
         match self {
             Multiplexor::Client(mux) => Some(mux),
@@ -175,7 +148,8 @@ macro_rules! impl_int_key {
         $(
             impl IntKey for $t {
                 fn next_available_key<V>(map: &HashMap<Self, V>) -> Self {
-                    let mut i = 0;
+                    let mut i = 1;
+
                     while map.contains_key(&i) {
                         i = rand::thread_rng().gen_range(1..<$t>::MAX);
                     }

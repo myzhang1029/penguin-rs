@@ -3,8 +3,8 @@
 //!
 //! Architecture:
 //! The system is similar to a traditional SOCKS5 proxy, but the protocol
-//! allows for UDP to be transmitted over the same WebSocket connection.
-//! It is essentially a SOCKS5 forwarder over a WebSocket.
+//! allows for UDP to be transmitted over the same `WebSocket` connection.
+//! It is essentially a SOCKS5 forwarder over a `WebSocket`.
 //!
 //! All `Message`s carry a frame:
 //! - 1 byte: type (1 for TCP, 3 for UDP)
@@ -102,7 +102,7 @@ impl TryFrom<Frame> for Vec<u8> {
     /// Convert a `Frame` to bytes. Gives an error when
     /// `DatagramFrame::host` is longer than 255 octets.
     #[tracing::instrument(skip_all, level = "trace")]
-    fn try_from(mut frame: Frame) -> Result<Vec<u8>, Self::Error> {
+    fn try_from(frame: Frame) -> Result<Vec<u8>, Self::Error> {
         match frame {
             Frame::Stream(mut frame) => {
                 let size = 1
@@ -150,7 +150,7 @@ impl TryFrom<Frame> for Message {
 impl TryFrom<Bytes> for StreamFrame {
     type Error = &'static str;
 
-    fn try_from(data: Bytes) -> Result<Self, Self::Error> {
+    fn try_from(mut data: Bytes) -> Result<Self, Self::Error> {
         let sport = data.get_u16();
         let dport = data.get_u16();
         let flag = match data.get_u8() {
@@ -170,7 +170,7 @@ impl TryFrom<Bytes> for StreamFrame {
 }
 
 impl From<Bytes> for DatagramFrame {
-    fn from(data: Bytes) -> Self {
+    fn from(mut data: Bytes) -> Self {
         let host_len = data.get_u8();
         let host = data.split_to(host_len as usize).into();
         let port = data.get_u16();

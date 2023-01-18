@@ -6,7 +6,6 @@ use super::{Error, HandlerResources};
 use crate::client::ClientIdMapEntry;
 use crate::mux::{pipe_streams, DatagramFrame, IntKey};
 use std::net::{IpAddr, SocketAddr};
-use std::ops::Deref;
 use std::sync::Arc;
 use tokio::io::BufWriter;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
@@ -299,8 +298,8 @@ where
 
 /// UDP task spawned by the TCP connection
 async fn udp_relay(
-    rhost: String,
-    rport: u16,
+    _rhost: String,
+    _rport: u16,
     handler_resources: HandlerResources,
     socket: UdpSocket,
 ) -> Result<(), Error> {
@@ -313,7 +312,7 @@ async fn udp_relay(
                 None => continue,
             };
         let mut udp_client_id_map = handler_resources.udp_client_id_map.write().await;
-        let client_id = u32::next_available_key(udp_client_id_map.deref());
+        let client_id = u32::next_available_key(&*udp_client_id_map);
         udp_client_id_map.insert(
             client_id,
             ClientIdMapEntry::new((src, sport).into(), socket.clone(), true),
@@ -348,30 +347,30 @@ async fn handle_udp_relay_header<'buf>(
         0x01 => {
             // IPv4
             let dst = format!("{}.{}.{}.{}", buf[4], buf[5], buf[6], buf[7]);
-            let port = ((buf[8] as u16) << 8) | (buf[9] as u16);
+            let port = (u16::from(buf[8]) << 8) | u16::from(buf[9]);
             (dst, port, 10)
         }
         0x03 => {
             // Domain name
             let len = buf[4] as usize;
             let dst = String::from_utf8_lossy(&buf[5..5 + len]).to_string();
-            let port = ((buf[5 + len] as u16) << 8) | (buf[6 + len] as u16);
+            let port = (u16::from(buf[5 + len]) << 8) | u16::from(buf[6 + len]);
             (dst, port, 7 + len)
         }
         0x04 => {
             // IPv6
             let dst = format!(
                 "{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}",
-                ((buf[4] as u16) << 8) | (buf[5] as u16),
-                ((buf[6] as u16) << 8) | (buf[7] as u16),
-                ((buf[8] as u16) << 8) | (buf[9] as u16),
-                ((buf[10] as u16) << 8) | (buf[11] as u16),
-                ((buf[12] as u16) << 8) | (buf[13] as u16),
-                ((buf[14] as u16) << 8) | (buf[15] as u16),
-                ((buf[16] as u16) << 8) | (buf[17] as u16),
-                ((buf[18] as u16) << 8) | (buf[19] as u16),
+                (u16::from(buf[4]) << 8) | u16::from(buf[5]),
+                (u16::from(buf[6]) << 8) | u16::from(buf[7]),
+                (u16::from(buf[8]) << 8) | u16::from(buf[9]),
+                (u16::from(buf[10]) << 8) | u16::from(buf[11]),
+                (u16::from(buf[12]) << 8) | u16::from(buf[13]),
+                (u16::from(buf[14]) << 8) | u16::from(buf[15]),
+                (u16::from(buf[16]) << 8) | u16::from(buf[17]),
+                (u16::from(buf[18]) << 8) | u16::from(buf[19]),
             );
-            let port = ((buf[20] as u16) << 8) | (buf[21] as u16);
+            let port = (u16::from(buf[20]) << 8) | u16::from(buf[21]);
             (dst, port, 22)
         }
         _ => {
@@ -394,7 +393,7 @@ pub(crate) async fn send_udp_relay_response(
     socket: &UdpSocket,
     target: &SocketAddr,
     data: &[u8],
-) -> Result<(), Error> {
+) -> std::io::Result<()> {
     // Write the header
     let (target_addr, target_atyp) = match target.ip() {
         IpAddr::V4(ip) => (ip.octets().to_vec(), 0x01),

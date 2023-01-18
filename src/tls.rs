@@ -154,7 +154,7 @@ async fn try_load_certificate(
         // Load private key
         let key = tokio::fs::read(key).await?;
         let key = match rustls_pemfile::read_one(&mut key.as_ref())? {
-            Some(Item::RSAKey(key)) | Some(Item::PKCS8Key(key)) | Some(Item::ECKey(key)) => key,
+            Some(Item::RSAKey(key) | Item::PKCS8Key(key) | Item::ECKey(key)) => key,
             _ => return Err(Error::PrivateKeyNotSupported),
         };
         let key = rustls::PrivateKey(key);

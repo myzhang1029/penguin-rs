@@ -4,6 +4,7 @@
 macro_rules! make_stream_task {
     () => {
         /// Spawn a reader task on a stream
+        #[tracing::instrument(skip(self, stream), level = "trace")]
         async fn stream_task(
             self: Arc<Self>,
             sport: u16,
@@ -15,24 +16,22 @@ macro_rules! make_stream_task {
                 let n = stream.read(&mut buf).await?;
                 if n == 0 {
                     // Send a Fin
-                    self.frame_tx
-                        .send(Frame::Stream(StreamFrame {
-                            sport,
-                            dport,
-                            data: vec![],
-                            flag: StreamFlag::Fin,
-                        }))
-                        .await?;
-                    return Ok(());
-                }
-                self.frame_tx
-                    .send(Frame::Stream(StreamFrame {
+                    self.send_frame(Frame::Stream(StreamFrame {
                         sport,
                         dport,
-                        data: buf[..n].to_vec(),
-                        flag: StreamFlag::Psh,
+                        data: vec![],
+                        flag: StreamFlag::Fin,
                     }))
                     .await?;
+                    return Ok(());
+                }
+                self.send_frame(Frame::Stream(StreamFrame {
+                    sport,
+                    dport,
+                    data: buf[..n].to_vec(),
+                    flag: StreamFlag::Psh,
+                }))
+                .await?;
             }
         }
     };
@@ -42,6 +41,7 @@ macro_rules! make_process_message {
     () => {
         /// Process an incoming message
         /// Returns `Ok(true)` if we should close
+        #[tracing::instrument(skip_all, level = "trace")]
         async fn process_message(
             self: Arc<Self>,
             msg: Message,
@@ -54,11 +54,11 @@ macro_rules! make_process_message {
                     match frame {
                         Frame::Datagram(datagram_frame) => {
                             trace!("Received datagram frame: {:?}", datagram_frame);
-                            datagram_tx.send(datagram_frame).await.unwrap();
+                            datagram_tx.send(datagram_frame).await?;
                         }
                         Frame::Stream(stream_frame) => {
                             trace!("Received stream frame: {:?}", stream_frame);
-                            self.process_stream_frame(stream_frame, stream_tx);
+                            self.process_stream_frame(stream_frame, stream_tx).await?;
                         }
                     }
                     Ok(false)
@@ -89,13 +89,28 @@ macro_rules! make_process_message {
     };
 }
 
+macro_rules! make_send_frame {
+    () => {
+        /// Send a frame
+        #[tracing::instrument(skip_all, level = "trace")]
+        async fn send_frame(&self, frame: Frame) -> Result<(), super::Error> {
+            let mut sink = self.sink.write().await;
+            sink.send(frame.try_into()?).await?;
+            Ok(())
+        }
+    };
+}
+
 macro_rules! make_close_write {
     () => {
         /// Close a port's write end.
+        #[tracing::instrument(skip(self), level = "trace")]
         async fn close_write(&self, port: u16) {
             let mut streams = self.streams.write().await;
             if let Some(stream) = streams.get_mut(&port) {
-                stream.shutdown().await;
+                stream.shutdown().await.unwrap_or_else(|e| {
+                    warn!("Failed to shutdown stream: {:?}", e);
+                });
                 // Which should still allow `ReadHalf` to read the remaining data
                 // Wait until it is `Drop`ped before removing the port from the map,
                 // which is done in `task`
@@ -107,6 +122,7 @@ macro_rules! make_close_write {
 macro_rules! make_close_all_write {
     () => {
         /// Close all write ends of the streams
+        #[tracing::instrument(skip_all, level = "trace")]
         async fn close_all_write(&self) {
             debug!("closing all connections");
             let streams = self.streams.read().await;
@@ -128,7 +144,7 @@ macro_rules! make_asyncrw_proxy {
         {
             #[inline]
             fn poll_read(
-                self: std::pin::Pin<&mut Self>,
+                mut self: std::pin::Pin<&mut Self>,
                 cx: &mut std::task::Context<'_>,
                 buf: &mut tokio::io::ReadBuf<'_>,
             ) -> std::task::Poll<Result<(), std::io::Error>> {
@@ -143,7 +159,7 @@ macro_rules! make_asyncrw_proxy {
         {
             #[inline]
             fn poll_write(
-                self: std::pin::Pin<&mut Self>,
+                mut self: std::pin::Pin<&mut Self>,
                 cx: &mut std::task::Context<'_>,
                 buf: &[u8],
             ) -> std::task::Poll<Result<usize, std::io::Error>> {
@@ -152,7 +168,7 @@ macro_rules! make_asyncrw_proxy {
 
             #[inline]
             fn poll_flush(
-                self: std::pin::Pin<&mut Self>,
+                mut self: std::pin::Pin<&mut Self>,
                 cx: &mut std::task::Context<'_>,
             ) -> std::task::Poll<Result<(), std::io::Error>> {
                 std::pin::Pin::new(&mut self.stream).poll_flush(cx)
@@ -160,7 +176,7 @@ macro_rules! make_asyncrw_proxy {
 
             #[inline]
             fn poll_shutdown(
-                self: std::pin::Pin<&mut Self>,
+                mut self: std::pin::Pin<&mut Self>,
                 cx: &mut std::task::Context<'_>,
             ) -> std::task::Poll<Result<(), std::io::Error>> {
                 std::pin::Pin::new(&mut self.stream).poll_shutdown(cx)
@@ -173,4 +189,5 @@ pub(super) use make_asyncrw_proxy;
 pub(super) use make_close_all_write;
 pub(super) use make_close_write;
 pub(super) use make_process_message;
+pub(super) use make_send_frame;
 pub(super) use make_stream_task;
