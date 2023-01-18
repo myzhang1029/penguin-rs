@@ -4,14 +4,21 @@
 mod handle_remote;
 pub(crate) mod ws_connect;
 
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::sync::Arc;
+
 use crate::arg::ClientArgs;
-use crate::mux::{DuplexStream, Multiplexor, Role};
-use futures_util::{Sink as FutureSink, Stream as FutureStream};
+use crate::mux::{ClientMuxStream, DatagramFrame, Multiplexor, Role};
+use futures_util::stream::{SplitSink, SplitStream};
 use handle_remote::handle_remote;
 use thiserror::Error;
-use tokio::sync::{mpsc, oneshot};
+use tokio::io::AsyncWriteExt;
+use tokio::net::{TcpStream, UdpSocket};
+use tokio::sync::{mpsc, oneshot, RwLock};
 use tokio::task::JoinSet;
 use tokio::time;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use tracing::{error, info, trace, warn};
 use tungstenite::Message;
 
@@ -29,12 +36,60 @@ pub enum Error {
     #[error(transparent)]
     Mux(#[from] crate::mux::Error),
     #[error("cannot put sender back to the queue: {0}")]
-    CommandPutBack(#[from] mpsc::error::SendError<Command>),
+    CommandPutBack(#[from] mpsc::error::SendError<StreamCommand>),
 }
+
+type Sink = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
+type Stream = SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>;
+type MuxStream = ClientMuxStream<Sink, Stream>;
+
+const UDP_PRUNE_TIMEOUT: time::Duration = time::Duration::from_secs(60);
 
 // Send the information about how to send the stream to the listener
 /// Type that local listeners send to the main loop to request a connection
-type Command = oneshot::Sender<DuplexStream>;
+#[derive(Debug)]
+pub(super) struct StreamCommand {
+    /// Channel to send the stream back to the listener
+    pub tx: oneshot::Sender<MuxStream>,
+    pub host: Vec<u8>,
+    pub port: u16,
+}
+
+/// Data for a function to be able to use the mux/connection
+/// May be cheaply cloned for new `tokio::spawn` tasks.
+#[derive(Clone, Debug)]
+pub(super) struct HandlerResources {
+    /// Send a request for a TCP channel to the main loop
+    pub stream_command_tx: mpsc::Sender<StreamCommand>,
+    /// Send a UDP datagram to the main loop
+    pub datagram_tx: mpsc::Sender<DatagramFrame>,
+    /// Map of client IDs to UDP sockets
+    pub udp_client_id_map: Arc<RwLock<HashMap<u32, ClientIdMapEntry>>>,
+}
+
+/// Type stored in the client ID map
+#[derive(Clone, Debug)]
+pub(super) struct ClientIdMapEntry {
+    /// The address of the client
+    pub addr: SocketAddr,
+    /// The UDP socket used to communicate with the client
+    pub socket: Arc<UdpSocket>,
+    /// Whether responses should include a SOCKS5 header
+    pub socks5: bool,
+    /// When this entry should be removed
+    pub expires: time::Instant,
+}
+
+impl ClientIdMapEntry {
+    pub fn new(addr: SocketAddr, socket: Arc<UdpSocket>, socks5: bool) -> Self {
+        Self {
+            addr,
+            socket,
+            socks5,
+            expires: time::Instant::now() + UDP_PRUNE_TIMEOUT,
+        }
+    }
+}
 
 #[tracing::instrument(level = "trace")]
 pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
@@ -46,15 +101,25 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
     let mut current_retry_count: u32 = 0;
     // Initial retry interval is 200ms
     let mut current_retry_interval: u64 = 200;
-    // Channel for listeners to send commands to the main loop
-    let (mut cmd_tx, mut cmd_rx) = mpsc::channel::<Command>(32);
+    // Channel for listeners to request TCP channels the main loop
+    let (mut stream_cmd_tx, mut stream_cmd_rx) = mpsc::channel::<StreamCommand>(32);
+    // Channel for listeners to send UDP datagrams to the main loop
+    let (datagram_send_tx, mut datagram_send_rx) = mpsc::channel::<DatagramFrame>(32);
+    // Map of client IDs to (source, UdpSocket, bool)
+    let udp_client_id_map: HashMap<u32, ClientIdMapEntry> = HashMap::new();
+    let udp_client_id_map = Arc::new(RwLock::new(udp_client_id_map));
+    tokio::spawn(prune_client_id_map_task(udp_client_id_map.clone()));
     let mut jobs = JoinSet::new();
     // Spawn listeners. See `handle_remote.rs` for the implementation considerations.
     for remote in &args.remote {
         // According to the docs, we should clone the sender for each task
-        let cmd_tx = cmd_tx.clone();
+        let handler_resources = HandlerResources {
+            stream_command_tx: stream_cmd_tx.clone(),
+            datagram_tx: datagram_send_tx.clone(),
+            udp_client_id_map: udp_client_id_map.clone(),
+        };
         jobs.spawn(async move {
-            if let Err(error) = handle_remote(remote, cmd_tx).await {
+            if let Err(error) = handle_remote(remote, handler_resources).await {
                 error!("Listener failed: {error}");
             }
         });
@@ -74,7 +139,15 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
         .await
         {
             Ok(ws_stream) => {
-                on_connected(ws_stream, &mut cmd_rx, &mut cmd_tx, args.keepalive).await?;
+                on_connected(
+                    ws_stream,
+                    &mut stream_cmd_rx,
+                    &mut stream_cmd_tx,
+                    &mut datagram_send_rx,
+                    udp_client_id_map.clone(),
+                    args.keepalive,
+                )
+                .await?;
                 warn!("Disconnected from server");
                 // Since we once connected, reset the retry count
                 current_retry_count = 0;
@@ -118,41 +191,57 @@ async fn on_connected(
     ws_stream: tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
-    command_rx: &mut mpsc::Receiver<Command>,
-    command_tx: &mut mpsc::Sender<Command>,
+    stream_command_rx: &mut mpsc::Receiver<StreamCommand>,
+    stream_command_tx: &mut mpsc::Sender<StreamCommand>,
+    datagram_rx: &mut mpsc::Receiver<DatagramFrame>,
+    udp_client_id_map: Arc<RwLock<HashMap<u32, ClientIdMapEntry>>>,
     keepalive: u64,
 ) -> Result<(), Error> {
-    let mut mux = Multiplexor::new(ws_stream, Role::Client);
-    mux.establish_control_channel()
-        .await
-        .or_else(maybe_retryable)?;
+    let keepalive_duration = match keepalive {
+        0 => None,
+        _ => Some(time::Duration::from_secs(keepalive)),
+    };
+    let mut mux = Multiplexor::new(ws_stream, Role::Client, keepalive_duration);
     info!("Connected to server");
-    if keepalive == 0 {
-        // Just keep the main thread alive and wait for a command
-        while let Some(sender) = command_rx.recv().await {
-            if !get_send_chan_or_put_back(&mut mux, sender, command_tx).await? {
-                break;
-            }
-        }
-    } else {
-        let mut keepalive_interval = time::interval(time::Duration::from_secs(keepalive));
-        loop {
-            tokio::select! {
-                Some(sender) = command_rx.recv() => {
-                    if !get_send_chan_or_put_back(&mut mux, sender, command_tx).await? {
-                        break;
-                    }
-                }
-                // If there are too many `get_send_chan_or_put_back` requests, we may
-                // not be able to send keepalive packets in time, but that's fine because
-                // the connection won't be closed if we are using it.
-                _ = keepalive_interval.tick() => {
-                    if let Err(e) = mux.ping().await {
-                        warn!("Failed to send keepalive: {e}");
-                        break;
-                    }
+    loop {
+        tokio::select! {
+            Some(sender) = stream_command_rx.recv() => {
+                if !get_send_stream_chan_or_put_back(&mut mux, sender, stream_command_tx).await? {
+                    break;
                 }
             }
+            Some(datagram) = datagram_rx.recv() => {
+                if let Err(e) = mux.as_client().unwrap().send_datagram(datagram).await {
+                    error!("Failed to send datagram: {e}");
+                }
+            }
+            Some(dgram_frame) = mux.as_client().unwrap().get_datagram() => {
+                let client_id = dgram_frame.sid;
+                let data = dgram_frame.data;
+                if client_id == 0 {
+                    // Used for stdio
+                    if let Err(e) = tokio::io::stdout().write_all(&data).await {
+                        error!("Failed to write to stdout: {e}");
+                    }
+                } else {
+                    let udp_client_id_map = udp_client_id_map.read().await;
+                    if let Some(information) = udp_client_id_map.get(&client_id) {
+                        if information.socks5 {
+                            handle_remote::socks5::send_udp_relay_response(
+                                &information.socket,
+                                &information.addr,
+                                &data,
+                            );
+                        } else if let Err(e) = information.socket.send_to(&data, &information.addr).await {
+                            error!("Failed to send datagram to client: {e}");
+                        }
+                    } else {
+                        // Just drop the datagram
+                        info!("Received datagram for unknown client ID: {client_id}");
+                    }
+                }
+            }
+            // else: All senders are dropped, which should not happen
         }
     }
     Ok(())
@@ -163,46 +252,52 @@ async fn on_connected(
 /// This carries the semantics that `Err(_)` means we should not retry.
 /// Returns `true` if we got a new channel, `false` if we put the sender back
 /// (and we should probably go back to the main loop and reconnect).
+/// Datagrams are simply dropped if we fail to get a new channel.
 #[tracing::instrument(skip_all, level = "trace")]
-async fn get_send_chan_or_put_back<Sink, Stream>(
+async fn get_send_stream_chan_or_put_back(
     mux: &mut Multiplexor<Sink, Stream>,
-    sender: oneshot::Sender<DuplexStream>,
-    command_tx: &mut mpsc::Sender<Command>,
-) -> Result<bool, Error>
-where
-    Stream: FutureStream<Item = tungstenite::Result<Message>> + Send + Unpin + 'static,
-    Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Unpin + 'static,
-{
+    stream_command: StreamCommand,
+    stream_command_tx: &mut mpsc::Sender<StreamCommand>,
+) -> Result<bool, Error> {
     trace!("connecting to a new port");
-    match mux.open_channel().await {
+    let mux = mux.as_client().unwrap();
+    match mux
+        .new_stream_channel(stream_command.host.clone(), stream_command.port)
+        .await
+    {
         Ok(stream) => {
             trace!("got a new channel");
             // `Err(_)` means "the corresponding receiver has already been deallocated"
             // which means we don't care about the channel anymore.
-            sender.send(stream).ok();
+            stream_command.tx.send(stream).ok();
             trace!("sent stream to handler (or handler died)");
             Ok(true)
         }
         Err(crate::mux::Error::Io(e)) => {
             if retryable_errors(&e) {
                 warn!("Connection error: {e}");
-                command_tx.send(sender).await?;
+                stream_command_tx.send(stream_command).await?;
                 Ok(false)
             } else {
                 error!("Connection error: {e}");
                 Err(e.into())
             }
         }
-        Err(crate::mux::Error::ControlChannelNotEstablished) => {
-            // Not important, we'll retry
-            warn!("Control channel not established");
-            command_tx.send(sender).await?;
-            Ok(false)
-        }
         Err(e) => {
             error!("{e}");
             Err(e.into())
         }
+    }
+}
+
+/// Prune the client ID map of entries that have not been used for a while.
+#[tracing::instrument(skip_all, level = "trace")]
+async fn prune_client_id_map_task(udp_client_id_map: Arc<RwLock<HashMap<u32, ClientIdMapEntry>>>) {
+    loop {
+        tokio::time::sleep(2 * UDP_PRUNE_TIMEOUT).await;
+        let mut udp_client_id_map = udp_client_id_map.write().await;
+        let now = time::Instant::now();
+        udp_client_id_map.retain(|_, entry| entry.expires > now);
     }
 }
 

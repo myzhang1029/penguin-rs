@@ -2,12 +2,13 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::frame::{DatagramFrame, Frame, StreamFlag, StreamFrame};
+use super::IntKey;
 use futures_util::{Sink as FutureSink, SinkExt, Stream as FutureStream, StreamExt};
-use rand::Rng;
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::sync::Arc;
 pub use tokio::io::DuplexStream;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, WriteHalf};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, WriteHalf};
 use tokio::sync::RwLock;
 use tracing::{debug, error, trace};
 use tungstenite::Message;
@@ -41,6 +42,8 @@ where
             .expect("Failed to notify task of dropped port");
     }
 }
+
+super::common_methods::make_asyncrw_proxy! {}
 
 /// Multiplexor inner
 #[derive(Debug)]
@@ -130,10 +133,7 @@ where
         syn_payload[1..=host_len].copy_from_slice(&host);
         syn_payload[host_len + 1..].copy_from_slice(&port.to_be_bytes());
         // Allocate a new port
-        let mut sport = 0;
-        while self.inner.streams.read().await.contains_key(&sport) {
-            sport = rand::thread_rng().gen_range(1..u16::MAX);
-        }
+        let sport = u16::next_available_key(self.inner.streams.read().await.deref());
         let syn_frame = StreamFrame {
             sport,
             dport: 0,

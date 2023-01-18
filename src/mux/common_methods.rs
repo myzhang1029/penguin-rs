@@ -118,7 +118,59 @@ macro_rules! make_close_all_write {
     };
 }
 
-pub(crate) use make_close_all_write;
-pub(crate) use make_close_write;
-pub(crate) use make_process_message;
-pub(crate) use make_stream_task;
+macro_rules! make_asyncrw_proxy {
+    () => {
+        // Proxy the AsyncRead trait to the underlying stream so that users don't access `stream`
+        impl<Sink, Stream> AsyncRead for MuxStream<Sink, Stream>
+        where
+            Stream: FutureStream<Item = tungstenite::Result<Message>> + Send + Unpin + 'static,
+            Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Unpin + 'static,
+        {
+            #[inline]
+            fn poll_read(
+                self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+                buf: &mut tokio::io::ReadBuf<'_>,
+            ) -> std::task::Poll<Result<(), std::io::Error>> {
+                std::pin::Pin::new(&mut self.stream).poll_read(cx, buf)
+            }
+        }
+
+        impl<Sink, Stream> AsyncWrite for MuxStream<Sink, Stream>
+        where
+            Stream: FutureStream<Item = tungstenite::Result<Message>> + Send + Unpin + 'static,
+            Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Unpin + 'static,
+        {
+            #[inline]
+            fn poll_write(
+                self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+                buf: &[u8],
+            ) -> std::task::Poll<Result<usize, std::io::Error>> {
+                std::pin::Pin::new(&mut self.stream).poll_write(cx, buf)
+            }
+
+            #[inline]
+            fn poll_flush(
+                self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Result<(), std::io::Error>> {
+                std::pin::Pin::new(&mut self.stream).poll_flush(cx)
+            }
+
+            #[inline]
+            fn poll_shutdown(
+                self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Result<(), std::io::Error>> {
+                std::pin::Pin::new(&mut self.stream).poll_shutdown(cx)
+            }
+        }
+    };
+}
+
+pub(super) use make_asyncrw_proxy;
+pub(super) use make_close_all_write;
+pub(super) use make_close_write;
+pub(super) use make_process_message;
+pub(super) use make_stream_task;

@@ -2,13 +2,14 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::frame::{DatagramFrame, Frame, StreamFlag, StreamFrame};
+use super::IntKey;
 use bytes::Buf;
 use futures_util::{Sink as FutureSink, SinkExt, Stream as FutureStream, StreamExt};
-use rand::Rng;
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::sync::Arc;
 pub use tokio::io::DuplexStream;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, WriteHalf};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, WriteHalf};
 use tokio::sync::RwLock;
 use tracing::{debug, error, trace};
 use tungstenite::Message;
@@ -21,7 +22,7 @@ where
     Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Unpin + 'static,
 {
     /// Communication happens here
-    pub stream: DuplexStream,
+    stream: DuplexStream,
     /// Our port
     pub port: u16,
     /// Port of the other end
@@ -46,6 +47,8 @@ where
             .expect("Failed to notify task of dropped port");
     }
 }
+
+super::common_methods::make_asyncrw_proxy! {}
 
 /// Multiplexor inner
 #[derive(Debug)]
@@ -200,17 +203,12 @@ where
         let server_port = stream_frame.dport;
         if server_port == 0 {
             assert!(stream_frame.flag == StreamFlag::Syn);
-            let mut server_port = 0;
             // Decode Syn handshake
             let mut syn_data = bytes::Bytes::from(stream_frame.data);
             let host_len = syn_data.get_u8();
             let host = syn_data.split_to(host_len as usize).to_vec();
             let dest_port = syn_data.get_u16();
-
-            // Allocate a new port
-            while self.streams.read().await.contains_key(&server_port) {
-                server_port = rand::thread_rng().gen_range(1..u16::MAX);
-            }
+            let server_port = u16::next_available_key(self.streams.read().await.deref());
             trace!("port: {}", server_port);
 
             // So we expose an `AsyncRead` and `AsyncWrite` interface to the user

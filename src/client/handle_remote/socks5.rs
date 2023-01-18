@@ -1,21 +1,17 @@
 //! SOCKS 5 server.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use std::net::IpAddr;
+use super::tcp::request_tcp_channel;
+use super::{Error, HandlerResources};
+use crate::client::ClientIdMapEntry;
+use crate::mux::{pipe_streams, DatagramFrame, IntKey};
+use std::net::{IpAddr, SocketAddr};
+use std::ops::Deref;
 use std::sync::Arc;
-
-use super::tcp::channel_tcp_handshake;
-use super::udp::channel_udp_handshake;
-use super::Command;
-use super::{request_channel, Error};
-use crate::mux::pipe_streams;
 use tokio::io::BufWriter;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::UdpSocket;
-use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader},
-    sync::mpsc,
-};
-use tracing::{debug, trace, warn};
+use tracing::{debug, warn};
 
 /// Execute an expression, and if it returns an error, write an error response to the client and return the error.
 ///
@@ -42,11 +38,11 @@ macro_rules! execute_or_pass_error {
 /// Based on socksv5's example.
 /// We need to be able to request additional channels, so we need `command_tx`
 #[tracing::instrument(skip_all, level = "debug")]
-pub(crate) async fn handle_socks_connection<R, W>(
-    command_tx: mpsc::Sender<Command>,
+pub(super) async fn handle_socks_connection<R, W>(
     reader: R,
     writer: W,
     local_addr: &str,
+    handler_resources: &HandlerResources,
 ) -> Result<(), Error>
 where
     R: AsyncRead + Unpin,
@@ -153,7 +149,7 @@ where
     match command {
         0x01 => {
             // CONNECT
-            handle_connect(&command_tx, breader, bwriter, &rhost, rport).await
+            handle_connect(breader, bwriter, &rhost, rport, handler_resources).await
         }
         0x02 => {
             // BIND
@@ -167,7 +163,15 @@ where
         }
         0x03 => {
             // UDP ASSOCIATE
-            handle_associate(&command_tx, breader, bwriter, rhost, rport, local_addr).await
+            handle_associate(
+                breader,
+                bwriter,
+                &rhost,
+                rport,
+                local_addr,
+                handler_resources,
+            )
+            .await
         }
         _ => {
             warn!("invalid command {command}");
@@ -181,11 +185,11 @@ where
 }
 
 async fn handle_connect<R, W>(
-    command_tx: &mpsc::Sender<Command>,
     reader: R,
     mut writer: W,
     rhost: &str,
     rport: u16,
+    handler_resources: &HandlerResources,
 ) -> Result<(), Error>
 where
     R: AsyncRead + Unpin,
@@ -193,16 +197,9 @@ where
 {
     // Establish a connection to the remote host
     let channel = execute_or_pass_error!(
-        request_channel(command_tx).await,
+        request_tcp_channel(&handler_resources.stream_command_tx, rhost.into(), rport).await,
         0x01,
         "cannot get channel",
-        &mut writer
-    );
-    let (mut remote_rx, mut remote_tx) = tokio::io::split(channel);
-    execute_or_pass_error!(
-        channel_tcp_handshake(&mut remote_rx, &mut remote_tx, rhost, rport).await,
-        0x01,
-        "cannot handshate on the channel",
         &mut writer
     );
     // Send back a successful response
@@ -210,17 +207,18 @@ where
         .write_all(&[0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
         .await?;
     writer.flush().await?;
+    let (remote_rx, remote_tx) = tokio::io::split(channel);
     pipe_streams(reader, writer, remote_rx, remote_tx).await?;
     Ok(())
 }
 
 async fn handle_associate<R, W>(
-    command_tx: &mpsc::Sender<Command>,
     mut reader: R,
     mut writer: W,
-    rhost: String,
+    rhost: &str,
     rport: u16,
     local_addr: &str,
+    handler_resources: &HandlerResources,
 ) -> Result<(), Error>
 where
     R: AsyncRead + Unpin,
@@ -240,7 +238,12 @@ where
     );
     let local_port = sock_local_addr.port().to_be_bytes();
     let local_ip = sock_local_addr.ip();
-    let relay_task = tokio::spawn(udp_relay(rhost, rport, command_tx.clone(), socket));
+    let relay_task = tokio::spawn(udp_relay(
+        rhost.to_string(),
+        rport,
+        handler_resources.clone(),
+        socket,
+    ));
     // Send back a successful response
     match local_ip {
         IpAddr::V4(ip) => {
@@ -294,80 +297,43 @@ where
     Ok(())
 }
 
+/// UDP task spawned by the TCP connection
 async fn udp_relay(
     rhost: String,
     rport: u16,
-    command_tx: mpsc::Sender<Command>,
+    handler_resources: HandlerResources,
     socket: UdpSocket,
 ) -> Result<(), Error> {
-    let dest_is_specified =
-        rhost != "0.0.0.0" && rhost != "0000:0000:0000:0000:0000:0000:0000:0000" && rport != 0;
-    let arc_socket = Arc::new(socket);
-    if dest_is_specified {
-        let channel = request_channel(&command_tx).await?;
-        let (mut channel_rx, mut channel_tx) = tokio::io::split(channel);
-        channel_udp_handshake(&mut channel_rx, &mut channel_tx, &rhost, rport).await?;
-        loop {
-            let mut buf = [0; 65536];
-            let (dst, dport, data, len, src, sport) =
-                match handle_udp_relay_header(arc_socket.clone(), &mut buf).await? {
-                    Some(x) => x,
-                    None => continue,
-                };
-            if dst != rhost || dport != rport {
-                warn!("Dropping datagram to invalid destination {dst}:{dport}");
-                continue;
-            }
-            debug!("relaying UDP datagram from {src}:{sport} to {dst}:{dport}");
-            channel_tx.write_u32(len as u32).await?;
-            channel_tx.write_all(data).await?;
-            trace!("sent to channel ({len} bytes)");
-            channel_tx.flush().await?;
-            let len = channel_rx.read_u32().await? as usize;
-            channel_rx.read_exact(&mut buf[..len]).await?;
-            trace!("received from channel ({len} bytes)");
-            // Write the header
-            let (target_addr, target_atyp) = match src {
-                IpAddr::V4(ip) => (ip.octets().to_vec(), 0x01),
-                IpAddr::V6(ip) => (ip.octets().to_vec(), 0x04),
+    let socket = Arc::new(socket);
+    loop {
+        let mut buf = [0; 65536];
+        let (dst, dport, data, len, src, sport) =
+            match handle_udp_relay_header(&socket, &mut buf).await? {
+                Some(x) => x,
+                None => continue,
             };
-            let mut content = vec![0, 0, 0, target_atyp];
-            content.extend_from_slice(&target_addr);
-            content.extend_from_slice(&sport.to_be_bytes());
-            content.extend_from_slice(&buf[..len]);
-            arc_socket.send_to(&content, (src, sport)).await?;
-        }
-    } else {
-        // Fallback mode: establish a new connection for each packet
-        loop {
-            let mut buf = [0; 65536];
-            let (dst, dport, data, len, src, sport) =
-                match handle_udp_relay_header(arc_socket.clone(), &mut buf).await? {
-                    Some(x) => x,
-                    None => continue,
-                };
-            let channel = request_channel(&command_tx).await?;
-            let (mut channel_rx, mut channel_tx) = tokio::io::split(channel);
-            channel_udp_handshake(&mut channel_rx, &mut channel_tx, &dst, dport).await?;
-            handle_udp_relay_response(
-                &mut channel_rx,
-                &mut channel_tx,
-                arc_socket.clone(),
-                len,
-                src,
-                sport,
-                data,
-            )
-            .await?;
-        }
+        let mut udp_client_id_map = handler_resources.udp_client_id_map.write().await;
+        let client_id = u32::next_available_key(udp_client_id_map.deref());
+        udp_client_id_map.insert(
+            client_id,
+            ClientIdMapEntry::new((src, sport).into(), socket.clone(), true),
+        );
+        drop(udp_client_id_map);
+        let datagram_frame = DatagramFrame {
+            host: dst.into(),
+            port: dport,
+            sid: client_id,
+            data: data[..len].to_vec(),
+        };
+        handler_resources.datagram_tx.send(datagram_frame).await?;
     }
 }
 
 /// Parse a UDP relay request
-async fn handle_udp_relay_header(
-    socket: Arc<UdpSocket>,
-    buf: &mut [u8],
-) -> Result<Option<(String, u16, &[u8], usize, IpAddr, u16)>, Error> {
+async fn handle_udp_relay_header<'buf>(
+    socket: &UdpSocket,
+    buf: &'buf mut [u8],
+) -> Result<Option<(String, u16, &'buf [u8], usize, IpAddr, u16)>, Error> {
     // XXX: Note that we block on reading from the channel. This means that
     // only one client can use the channel at a time.
     let (len, addr) = socket.recv_from(buf).await?;
@@ -424,34 +390,20 @@ async fn handle_udp_relay_header(
 }
 
 /// Send a UDP relay response
-async fn handle_udp_relay_response<R, W>(
-    mut channel_rx: R,
-    mut channel_tx: W,
-    socket: Arc<UdpSocket>,
-    len: usize,
-    src: IpAddr,
-    sport: u16,
+pub(crate) async fn send_udp_relay_response(
+    socket: &UdpSocket,
+    target: &SocketAddr,
     data: &[u8],
-) -> Result<(), Error>
-where
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin,
-{
-    channel_tx.write_u32(len as u32).await?;
-    channel_tx.write_all(data).await?;
-    channel_tx.flush().await?;
-    let len = channel_rx.read_u32().await? as usize;
-    let mut buf = vec![0; len];
-    channel_rx.read_exact(&mut buf).await?;
+) -> Result<(), Error> {
     // Write the header
-    let (target_addr, target_atyp) = match src {
+    let (target_addr, target_atyp) = match target.ip() {
         IpAddr::V4(ip) => (ip.octets().to_vec(), 0x01),
         IpAddr::V6(ip) => (ip.octets().to_vec(), 0x04),
     };
     let mut content = vec![0, 0, 0, target_atyp];
     content.extend_from_slice(&target_addr);
-    content.extend_from_slice(&sport.to_be_bytes());
-    content.extend_from_slice(&buf);
-    socket.send_to(&content, (src, sport)).await?;
+    content.extend_from_slice(&target.port().to_be_bytes());
+    content.extend_from_slice(data);
+    socket.send_to(&content, target).await?;
     Ok(())
 }

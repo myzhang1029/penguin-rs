@@ -22,7 +22,7 @@
 mod tcp;
 mod udp;
 
-use crate::mux::DuplexStream;
+use super::websocket::MuxStream;
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tracing::info;
@@ -43,7 +43,7 @@ pub enum Error {
 /// Should be spawned as a new task. In whatever case, `chan` will be
 /// closed (dropped) when this task exits.
 #[tracing::instrument(skip(chan), level = "trace")]
-pub async fn dispatch_conn(chan: DuplexStream) -> Result<(), Error> {
+pub async fn dispatch_conn(chan: MuxStream) -> Result<(), Error> {
     let (chan_rx, chan_tx) = tokio::io::split(chan);
     let mut chan_rx = BufReader::new(chan_rx);
     let mut chan_tx = BufWriter::new(chan_tx);

@@ -3,9 +3,17 @@
 
 use super::forwarder::dispatch_conn;
 use super::WebSocket;
-use crate::mux::{Multiplexor, Role};
+use crate::mux::{Multiplexor, Role, ServerMuxStream};
+use futures_util::stream::{SplitSink, SplitStream};
+use hyper::upgrade::Upgraded;
 use tokio::task::JoinSet;
+use tokio_tungstenite::WebSocketStream;
 use tracing::{debug, error, warn};
+use tungstenite::Message;
+
+pub(super) type Sink = SplitSink<WebSocketStream<Upgraded>, Message>;
+pub(super) type Stream = SplitStream<WebSocketStream<Upgraded>>;
+pub(super) type MuxStream = ServerMuxStream<Sink, Stream>;
 
 /// Multiplex the WebSocket connection and handle the forwarding requests.
 #[tracing::instrument(skip(ws_stream), level = "debug")]
