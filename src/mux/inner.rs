@@ -138,11 +138,7 @@ where
         mut stream_tx: tokio::sync::mpsc::Sender<MuxStream<Sink, Stream>>,
         mut may_close_ports_rx: tokio::sync::mpsc::UnboundedReceiver<u16>,
     ) -> Result<(), super::Error> {
-        let keepalive_interval = self
-            .keepalive_interval
-            .unwrap_or(tokio::time::Duration::MAX);
-        // This is a bit of a hack, but there seems to be no way to optionally unwrap in `select!`
-        let mut keepalive_interval = tokio::time::interval(keepalive_interval);
+        let mut keepalive_interval = MaybeInterval::new(self.keepalive_interval);
         loop {
             tokio::select! {
                 Some(port) = may_close_ports_rx.recv() => {
@@ -398,6 +394,29 @@ where
         let ports = streams.keys();
         for port in ports {
             self.close_write(*port).await;
+        }
+    }
+}
+
+/// An interval or a never-resolving future
+#[derive(Debug)]
+struct MaybeInterval {
+    interval: Option<tokio::time::Interval>,
+}
+
+impl MaybeInterval {
+    fn new(interval: Option<tokio::time::Duration>) -> Self {
+        Self {
+            interval: interval.map(tokio::time::interval),
+        }
+    }
+
+    async fn tick(&mut self) {
+        if let Some(interval) = &mut self.interval {
+            interval.tick().await;
+        } else {
+            let never = futures_util::future::pending::<()>();
+            never.await;
         }
     }
 }

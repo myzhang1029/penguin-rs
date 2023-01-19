@@ -83,7 +83,7 @@ async fn main() {
 
 #[cfg(test)]
 // TODO: Disabling these tests for now.
-#[cfg(not(test))]
+//#[cfg(not(test))]
 mod tests {
     use super::*;
     use crate::{arg::ServerUrl, parse_remote::Remote};
@@ -91,7 +91,7 @@ mod tests {
     use std::str::FromStr;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
-        net::{TcpListener, TcpStream},
+        net::{TcpListener, TcpStream, UdpSocket},
     };
 
     #[tokio::test]
@@ -219,8 +219,6 @@ mod tests {
     #[cfg(feature = "tests-real-internet")]
     #[tokio::test]
     async fn test_it_works_dns_v4() {
-        use tokio::net::UdpSocket;
-
         static SERVER_ARGS: Lazy<arg::ServerArgs> = Lazy::new(|| arg::ServerArgs {
             host: String::from("127.0.0.1"),
             port: 17706,
@@ -276,14 +274,6 @@ mod tests {
     #[cfg(feature = "tests-real-internet")]
     #[tokio::test]
     async fn test_it_works_dns_v6() {
-        let my_subscriber = tracing_subscriber::FmtSubscriber::builder()
-            .compact()
-            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-            .finish();
-        tracing::subscriber::set_global_default(my_subscriber)
-            .expect("setting tracing default failed");
-        use tokio::net::UdpSocket;
-
         static SERVER_ARGS: Lazy<arg::ServerArgs> = Lazy::new(|| arg::ServerArgs {
             host: String::from("[::1]"),
             port: 17706,
