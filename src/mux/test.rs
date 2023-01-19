@@ -33,25 +33,18 @@ async fn connect_listen_succeeds() {
     let server_mux = Multiplexor::new(server, Role::Server, None);
 
     let server_task = tokio::spawn(async move {
-        let stream = server_mux
-            .as_server()
-            .unwrap()
-            .new_stream_channel()
-            .await
-            .unwrap();
+        let stream = server_mux.server_new_stream_channel().await.unwrap();
         info!(
             "sport = {}, dport = {}, dest = {:?}:{}",
-            stream.client_port, stream.port, stream.host, stream.dest_port
+            stream.our_port, stream.their_port, stream.dest_host, stream.dest_port
         );
     });
 
     let stream = client_mux
-        .as_client()
-        .unwrap()
-        .new_stream_channel(vec![], 0)
+        .client_new_stream_channel(vec![], 0)
         .await
         .unwrap();
-    info!("sport = {}, dport = {}", stream.port, stream.server_port);
+    info!("sport = {}, dport = {}", stream.our_port, stream.their_port);
     debug!("Waiting for server task to finish");
     server_task.await.unwrap();
 }

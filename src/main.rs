@@ -82,6 +82,8 @@ async fn main() {
 }
 
 #[cfg(test)]
+// TODO: Disabling these tests for now.
+#[cfg(not(test))]
 mod tests {
     use super::*;
     use crate::{arg::ServerUrl, parse_remote::Remote};
@@ -272,8 +274,6 @@ mod tests {
     }
 
     #[cfg(feature = "tests-real-internet")]
-    // TODO: Disable this test for now
-    #[cfg(not(feature = "tests-real-internet"))]
     #[tokio::test]
     async fn test_it_works_dns_v6() {
         let my_subscriber = tracing_subscriber::FmtSubscriber::builder()

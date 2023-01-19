@@ -3,7 +3,7 @@
 
 use super::forwarder::tcp::start_forwarder_on_channel;
 use super::WebSocket;
-use crate::mux::{Multiplexor, Role, ServerMuxStream};
+use crate::mux::{Multiplexor, MuxStream as GMuxStream, Role};
 use futures_util::stream::{SplitSink, SplitStream};
 use hyper::upgrade::Upgraded;
 use tokio::task::JoinSet;
@@ -13,7 +13,7 @@ use tungstenite::Message;
 
 pub(super) type Sink = SplitSink<WebSocketStream<Upgraded>, Message>;
 pub(super) type Stream = SplitStream<WebSocketStream<Upgraded>>;
-pub(super) type MuxStream = ServerMuxStream<Sink, Stream>;
+pub(super) type MuxStream = GMuxStream<Sink, Stream>;
 
 /// Multiplex the `WebSocket` connection and handle the forwarding requests.
 #[tracing::instrument(skip(ws_stream), level = "debug")]
@@ -27,16 +27,16 @@ pub async fn handle_websocket(ws_stream: WebSocket) {
             Some(Err(err)) = jobs.join_next() => {
                 assert!(!err.is_panic(), "Panic in a forwarder: {err}");
             }
-            Some(result) = mux.as_server().unwrap().new_stream_channel() => {
-                if let Ok(rhost) = String::from_utf8(result.host.clone()) {
-                let rport = result.dest_port;
-                let (rx, tx) = tokio::io::split(result);
-                jobs.spawn(start_forwarder_on_channel(rx, tx, rhost, rport));
+            Some(result) = mux.server_new_stream_channel() => {
+                if let Ok(rhost) = String::from_utf8(result.dest_host.clone()) {
+                    let rport = result.dest_port;
+                    let (rx, tx) = tokio::io::split(result);
+                    jobs.spawn(start_forwarder_on_channel(rx, tx, rhost, rport));
                 } else {
                     warn!("Invalid host name");
                 }
             }
-            Some(datagram_frame) = mux.as_server().unwrap().get_datagram() => {
+            Some(datagram_frame) = mux.get_datagram() => {
                 trace!("got datagram frame: {datagram_frame:?}");
                 todo!();
             }

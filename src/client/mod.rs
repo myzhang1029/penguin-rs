@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use crate::arg::ClientArgs;
-use crate::mux::{ClientMuxStream, DatagramFrame, Multiplexor, Role};
+use crate::mux::{DatagramFrame, Multiplexor, MuxStream as GMuxStream, Role};
 use futures_util::stream::{SplitSink, SplitStream};
 use handle_remote::handle_remote;
 use thiserror::Error;
@@ -41,7 +41,7 @@ pub(crate) enum Error {
 
 type Sink = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
 type Stream = SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>;
-type MuxStream = ClientMuxStream<Sink, Stream>;
+type MuxStream = GMuxStream<Sink, Stream>;
 
 const UDP_PRUNE_TIMEOUT: time::Duration = time::Duration::from_secs(60);
 
@@ -211,11 +211,11 @@ async fn on_connected(
                 }
             }
             Some(datagram) = datagram_rx.recv() => {
-                if let Err(e) = mux.as_client().unwrap().send_datagram(datagram).await {
+                if let Err(e) = mux.send_datagram(datagram).await {
                     error!("Failed to send datagram: {e}");
                 }
             }
-            Some(dgram_frame) = mux.as_client().unwrap().get_datagram() => {
+            Some(dgram_frame) = mux.get_datagram() => {
                 let client_id = dgram_frame.sid;
                 let data = dgram_frame.data;
                 if client_id == 0 {
@@ -263,9 +263,8 @@ async fn get_send_stream_chan_or_put_back(
     stream_command_tx: &mut mpsc::Sender<StreamCommand>,
 ) -> Result<bool, Error> {
     trace!("connecting to a new port");
-    let mux = mux.as_client().unwrap();
     match mux
-        .new_stream_channel(stream_command.host.clone(), stream_command.port)
+        .client_new_stream_channel(stream_command.host.clone(), stream_command.port)
         .await
     {
         Ok(stream) => {

@@ -46,6 +46,7 @@ pub enum StreamFlag {
 
 /// Stream frame
 #[derive(Clone)]
+#[repr(C)]
 pub struct StreamFrame {
     pub sport: u16,
     pub dport: u16,
@@ -65,6 +66,7 @@ impl Debug for StreamFrame {
 }
 
 #[derive(Clone)]
+#[repr(C)]
 pub struct DatagramFrame {
     /// Host of the other end
     /// host of the "remote" if sent from client;
@@ -89,6 +91,7 @@ impl Debug for DatagramFrame {
 }
 
 #[derive(Clone, Debug)]
+#[repr(C)]
 pub enum Frame {
     /// Stream frame, encoded with Type=0x01
     Stream(StreamFrame),
