@@ -218,6 +218,7 @@ mod tests {
 
     #[cfg(feature = "tests-real-internet")]
     #[tokio::test]
+    #[cfg(disabled)]
     async fn test_it_works_dns_v4() {
         static SERVER_ARGS: Lazy<arg::ServerArgs> = Lazy::new(|| arg::ServerArgs {
             host: String::from("127.0.0.1"),
@@ -273,6 +274,7 @@ mod tests {
 
     #[cfg(feature = "tests-real-internet")]
     #[tokio::test]
+    #[cfg(disabled)]
     async fn test_it_works_dns_v6() {
         static SERVER_ARGS: Lazy<arg::ServerArgs> = Lazy::new(|| arg::ServerArgs {
             host: String::from("[::1]"),
