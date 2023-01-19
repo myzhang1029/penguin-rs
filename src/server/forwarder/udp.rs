@@ -1,81 +1,57 @@
 //! Forwards UDP Datagrams to and from another host.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
+use crate::mux::DatagramFrame;
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
-    net::UdpSocket,
+    net::{lookup_host, UdpSocket},
+    sync::mpsc::Sender,
+    time,
 };
-use tracing::debug;
+use tracing::trace;
 
-/// Start a UDP forwarder server on the given listener.
-///
-/// I'm pretty sure this `Future` won't linger around after the other end of
-/// the channel is closed.
-///
-/// This forwarder expects to receive a 32-bit length prefix before each UDP
-/// datagram, and then the datagram itself. It will then forward the datagram
-/// to the remote host.
-/// When it receives datagrams from the remote host, it will send them to the
-/// channel with the same 32-bit length prefix.
-/// The entire system effectively acts as a full-cone NAT.
-/// A length of 0 can be used to indicate EOF.
-///
-/// # Errors
-/// It carries the errors from the underlying UDP or channel IO functions.
-#[tracing::instrument(skip(chan_rx, chan_tx), level = "debug")]
-pub async fn start_forwarder_on_channel<R, W>(
-    mut chan_rx: R,
-    mut chan_tx: W,
-    rhost: &str,
-    rport: u16,
-) -> std::io::Result<()>
-where
-    R: AsyncRead + Unpin + Send,
-    W: AsyncWrite + Unpin + Send + 'static,
-{
-    let rsocket = UdpSocket::bind("0.0.0.0:0").await?;
-    let arc_socket = std::sync::Arc::new(rsocket);
-    let reader_job = {
-        let socket = arc_socket.clone();
-        // The final `Ok` is for type inference.
-        #[allow(unreachable_code)]
-        tokio::spawn(async move {
-            let mut buf = [0u8; 65507];
-            loop {
-                let (len, _) = socket.recv_from(&mut buf).await?;
-                debug!("read {len} bytes from remote, sending to channel");
-                chan_tx.write_u32(len as u32).await?;
-                chan_tx.write_all(&buf[..len]).await?;
-                chan_tx.flush().await?;
-            }
-            Ok::<(), std::io::Error>(())
-        })
+const UDP_PRUNE_TIMEOUT: time::Duration = time::Duration::from_secs(60);
+
+/// Send a UDP datagram to the given host and port and wait for a response
+/// in the following `UDP_PRUNE_TIMEOUT` seconds.
+pub(in super::super) async fn udp_forward_to(
+    datagram_frame: DatagramFrame,
+    datagram_tx: Sender<DatagramFrame>,
+) -> Result<(), super::Error> {
+    trace!("got datagram frame: {datagram_frame:?}");
+    let rhost = datagram_frame.host;
+    let rhost = String::from_utf8(rhost)?;
+    let rport = datagram_frame.port;
+    let data = datagram_frame.data;
+    let client_id = datagram_frame.sid;
+    let target = lookup_host((&*rhost, rport)).await?.next().unwrap();
+    let socket = if target.is_ipv4() {
+        UdpSocket::bind("0.0.0.0:0").await?
+    } else {
+        UdpSocket::bind("[::]:0").await?
     };
-    let result = loop {
-        match chan_rx.read_u32().await {
-            Ok(len) => {
-                let len = len as usize;
-                debug!("read {len} bytes from channel, forwarding to {rhost}:{rport}");
-                let mut buf = vec![0u8; len];
-                if let Err(e) = chan_rx.read_exact(&mut buf).await {
-                    // use `break` so we can await the reader job
-                    break Err(e);
-                }
-                if let Err(e) = arc_socket.send_to(&buf, (rhost, rport)).await {
-                    // use `break` so we can await the reader job
-                    break Err(e);
-                }
+    socket.send_to(&data, target).await?;
+    loop {
+        let mut buf = [0u8; 65536];
+        tokio::select! {
+            _ = time::sleep(UDP_PRUNE_TIMEOUT) => {
+                trace!("UDP prune timeout");
+                break;
             }
-            Err(e) => {
-                if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                    // I guess this is normal?
-                    break Ok(());
+            result = socket.recv_from(&mut buf) => {
+                let (len, addr) = result?;
+                if addr == target {
+                    trace!("got UDP response from {addr}");
+                    let datagram_frame = DatagramFrame {
+                        sid: client_id,
+                        host: rhost.into_bytes(),
+                        port: rport,
+                        data: buf[..len].to_vec(),
+                    };
+                    datagram_tx.send(datagram_frame).await?;
+                    break;
                 }
-                break Err(e);
             }
         }
-    };
-    debug!("aborting reader job");
-    reader_job.abort();
-    result
+    }
+    Ok(())
 }

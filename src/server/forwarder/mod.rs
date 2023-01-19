@@ -12,7 +12,7 @@ pub(super) enum Error {
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error("invalid host: {0}")]
-    Host(std::string::FromUtf8Error),
-    #[error("invalid command: {0}")]
-    Command(u8),
+    Host(#[from] std::string::FromUtf8Error),
+    #[error("cannot send `DatagramFrame` to main loop: {0}")]
+    DatagramSend(#[from] tokio::sync::mpsc::error::SendError<crate::mux::DatagramFrame>),
 }
