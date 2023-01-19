@@ -15,11 +15,7 @@ use tungstenite::Message;
 
 /// All parameters of a stream channel
 #[derive(Debug)]
-pub struct MuxStream<Sink, Stream>
-where
-    Stream: FutureStream<Item = tungstenite::Result<Message>> + Send + Unpin + 'static,
-    Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Unpin + 'static,
-{
+pub struct MuxStream<Sink, Stream> {
     /// Communication happens here
     stream: DuplexStream,
     /// Our port
@@ -33,11 +29,7 @@ where
     inner: Arc<MultiplexorInner<Sink, Stream>>,
 }
 
-impl<Sink, Stream> Drop for MuxStream<Sink, Stream>
-where
-    Stream: FutureStream<Item = tungstenite::Result<Message>> + Send + Unpin + 'static,
-    Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Unpin + 'static,
-{
+impl<Sink, Stream> Drop for MuxStream<Sink, Stream> {
     fn drop(&mut self) {
         // Notify the task that this port is no longer in use
         self.inner
@@ -49,11 +41,7 @@ where
 }
 
 // Proxy the AsyncRead trait to the underlying stream so that users don't access `stream`
-impl<Sink, Stream> AsyncRead for MuxStream<Sink, Stream>
-where
-    Stream: FutureStream<Item = tungstenite::Result<Message>> + Send + Unpin + 'static,
-    Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Unpin + 'static,
-{
+impl<Sink, Stream> AsyncRead for MuxStream<Sink, Stream> {
     #[inline]
     fn poll_read(
         mut self: std::pin::Pin<&mut Self>,
@@ -64,11 +52,7 @@ where
     }
 }
 
-impl<Sink, Stream> AsyncWrite for MuxStream<Sink, Stream>
-where
-    Stream: FutureStream<Item = tungstenite::Result<Message>> + Send + Unpin + 'static,
-    Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Unpin + 'static,
-{
+impl<Sink, Stream> AsyncWrite for MuxStream<Sink, Stream> {
     #[inline]
     fn poll_write(
         mut self: std::pin::Pin<&mut Self>,
@@ -97,11 +81,7 @@ where
 
 /// Multiplexor inner
 #[derive(Debug)]
-pub(super) struct MultiplexorInner<Sink, Stream>
-where
-    Stream: FutureStream<Item = tungstenite::Result<Message>> + Send + Unpin + 'static,
-    Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Unpin + 'static,
-{
+pub(super) struct MultiplexorInner<Sink, Stream> {
     /// The role of this multiplexor
     pub(super) role: Role,
     /// The underlying `Sink` of messages

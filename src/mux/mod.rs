@@ -65,11 +65,7 @@ pub enum Error {
 }
 
 #[derive(Clone, Debug)]
-pub struct Multiplexor<Sink, Stream>
-where
-    Stream: FutureStream<Item = tungstenite::Result<Message>> + Send + Unpin + 'static,
-    Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Unpin + 'static,
-{
+pub struct Multiplexor<Sink, Stream> {
     inner: Arc<MultiplexorInner<Sink, Stream>>,
 }
 
@@ -169,7 +165,7 @@ where
     }
 }
 
-impl<S: AsyncRead + AsyncWrite + Unpin + Send>
+impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>
     Multiplexor<SplitSink<WebSocketStream<S>, Message>, SplitStream<WebSocketStream<S>>>
 {
     /// Create a new `WebSocketMultiplexor` from a `WebSocketStream`
