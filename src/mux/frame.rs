@@ -26,8 +26,20 @@
 
 use bytes::{Buf, Bytes};
 use std::{fmt::Debug, num::TryFromIntError};
+use thiserror::Error;
 use tracing::warn;
 use tungstenite::Message;
+
+/// Conversion errors
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("invalid frame type: {0}")]
+    InvalidFrameType(u8),
+    #[error("invalid stream flag: {0}")]
+    InvalidStreamFlag(u8),
+    #[error("host longer than 255 octets")]
+    HostLength(#[from] TryFromIntError),
+}
 
 /// Stream frame flags
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -38,6 +50,8 @@ pub enum StreamFlag {
     Syn = 0,
     /// Confirm connection
     Ack = 2,
+    /// When `dport` is not open
+    Rst = 3,
     /// Close connection
     Fin = 4,
     /// Data
@@ -45,7 +59,7 @@ pub enum StreamFlag {
 }
 
 /// Stream frame
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 #[repr(C)]
 pub struct StreamFrame {
     pub sport: u16,
@@ -65,7 +79,49 @@ impl Debug for StreamFrame {
     }
 }
 
-#[derive(Clone)]
+impl StreamFrame {
+    /// Create a new `Syn` frame.
+    #[tracing::instrument(skip_all, level = "trace")]
+    #[must_use]
+    pub fn new_syn(dest_host: &[u8], dest_port: u16, sport: u16) -> Result<Self, Error> {
+        let host_len = dest_host.len();
+        let mut syn_payload =
+            Vec::with_capacity(std::mem::size_of::<u8>() + std::mem::size_of::<u16>() + host_len);
+        syn_payload.push(u8::try_from(host_len)?);
+        syn_payload.extend_from_slice(dest_host);
+        syn_payload.extend_from_slice(&dest_port.to_be_bytes());
+        Ok(Self {
+            sport,
+            dport: 0,
+            flag: StreamFlag::Syn,
+            data: syn_payload,
+        })
+    }
+    /// Create a new `Ack` frame.
+    #[tracing::instrument(skip_all, level = "trace")]
+    #[must_use]
+    pub fn new_ack(sport: u16, dport: u16) -> Self {
+        Self {
+            sport,
+            dport,
+            flag: StreamFlag::Ack,
+            data: vec![],
+        }
+    }
+    /// Create a new `Rst` frame.
+    #[tracing::instrument(skip_all, level = "trace")]
+    #[must_use]
+    pub fn new_rst(sport: u16, dport: u16) -> Self {
+        Self {
+            sport,
+            dport,
+            flag: StreamFlag::Rst,
+            data: vec![],
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
 #[repr(C)]
 pub struct DatagramFrame {
     /// Host of the other end
@@ -90,7 +146,7 @@ impl Debug for DatagramFrame {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[repr(C)]
 pub enum Frame {
     /// Stream frame, encoded with Type=0x01
@@ -100,7 +156,7 @@ pub enum Frame {
 }
 
 impl TryFrom<Frame> for Vec<u8> {
-    type Error = TryFromIntError;
+    type Error = Error;
 
     /// Convert a `Frame` to bytes. Gives an error when
     /// `DatagramFrame::host` is longer than 255 octets.
@@ -151,7 +207,7 @@ impl TryFrom<Frame> for Message {
 }
 
 impl TryFrom<Bytes> for StreamFrame {
-    type Error = &'static str;
+    type Error = Error;
 
     fn try_from(mut data: Bytes) -> Result<Self, Self::Error> {
         let sport = data.get_u16();
@@ -159,9 +215,10 @@ impl TryFrom<Bytes> for StreamFrame {
         let flag = match data.get_u8() {
             0 => StreamFlag::Syn,
             2 => StreamFlag::Ack,
+            3 => StreamFlag::Rst,
             4 => StreamFlag::Fin,
             5 => StreamFlag::Psh,
-            _ => return Err("Invalid flag"),
+            other => return Err(Error::InvalidStreamFlag(other)),
         };
         Ok(Self {
             sport,
@@ -188,7 +245,7 @@ impl From<Bytes> for DatagramFrame {
 }
 
 impl TryFrom<Vec<u8>> for Frame {
-    type Error = &'static str;
+    type Error = Error;
 
     #[tracing::instrument(skip_all, level = "trace")]
     fn try_from(data: Vec<u8>) -> Result<Self, Self::Error> {
@@ -197,7 +254,97 @@ impl TryFrom<Vec<u8>> for Frame {
         match frame_type {
             1 => Ok(Frame::Stream(StreamFrame::try_from(data)?)),
             3 => Ok(Frame::Datagram(DatagramFrame::from(data))),
-            _ => Err("Invalid frame type"),
+            other => Err(Error::InvalidFrameType(other)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_stream_frame() {
+        let frame = Frame::Stream(StreamFrame {
+            sport: 1234,
+            dport: 5678,
+            flag: StreamFlag::Syn,
+            data: vec![1, 2, 3, 4],
+        });
+        let bytes = Vec::try_from(frame.clone()).unwrap();
+        let decoded = Frame::try_from(bytes).unwrap();
+        assert_eq!(frame, decoded);
+    }
+
+    #[test]
+    fn test_datagram_frame() {
+        let frame = Frame::Datagram(DatagramFrame {
+            host: vec![1, 2, 3, 4],
+            port: 1234,
+            sid: 5678,
+            data: vec![1, 2, 3, 4],
+        });
+        let bytes = Vec::try_from(frame.clone()).unwrap();
+        let decoded = Frame::try_from(bytes).unwrap();
+        assert_eq!(frame, decoded);
+    }
+
+    /// These tests are to make sure that the binary representation of the
+    /// frames does not change without a protocol version bump.
+    #[test]
+    fn test_frame_repr() {
+        let frame = Frame::Stream(StreamFrame {
+            sport: 1234,
+            dport: 5678,
+            flag: StreamFlag::Psh,
+            data: vec![1, 2, 3, 4],
+        });
+        let bytes = Vec::try_from(frame).unwrap();
+        assert_eq!(
+            bytes,
+            vec![
+                0x01, // frame type (u8)
+                0x04, 0xd2, // sport (u16)
+                0x16, 0x2e, // dport (u16)
+                0x05, // flag (u8)
+                0x01, 0x02, 0x03, 0x04 // data (variable)
+            ]
+        );
+
+        let frame = Frame::Stream(StreamFrame {
+            sport: 5678,
+            dport: 1234,
+            flag: StreamFlag::Fin,
+            data: vec![],
+        });
+        let bytes = Vec::try_from(frame).unwrap();
+        assert_eq!(
+            bytes,
+            vec![
+                0x01, // frame type (u8)
+                0x16, 0x2e, // sport (u16)
+                0x04, 0xd2, // dport (u16)
+                0x04  // flag (u8)
+            ]
+        );
+
+        let frame = Frame::Datagram(DatagramFrame {
+            host: vec![1, 2, 3, 4],
+            port: 1234,
+            sid: 5678,
+            data: vec![1, 2, 3, 4],
+        });
+        let bytes = Vec::try_from(frame).unwrap();
+        assert_eq!(
+            bytes,
+            vec![
+                0x03, // frame type (u8)
+                0x04, // host len (u8)
+                0x01, 0x02, 0x03, 0x04, // host (variable)
+                0x04, 0xd2, // port (u16)
+                0x00, 0x00, 0x16, 0x2e, // sid (u32)
+                0x01, 0x02, 0x03, 0x04 // data (variable)
+            ]
+        );
     }
 }

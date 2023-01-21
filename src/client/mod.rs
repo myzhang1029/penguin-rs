@@ -260,7 +260,7 @@ async fn get_send_stream_chan_or_put_back(
     stream_command: StreamCommand,
     stream_command_tx: &mut mpsc::Sender<StreamCommand>,
 ) -> Result<bool, Error> {
-    trace!("connecting to a new port");
+    trace!("requesting a new TCP channel");
     match mux
         .client_new_stream_channel(stream_command.host.clone(), stream_command.port)
         .await

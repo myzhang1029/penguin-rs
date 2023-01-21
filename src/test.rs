@@ -2,9 +2,11 @@ use super::*;
 use crate::{arg::ServerUrl, parse_remote::Remote};
 use once_cell::sync::Lazy;
 use std::str::FromStr;
+#[cfg(any(feature = "tests-real-internet4", feature = "tests-real-internet6"))]
+use tokio::net::UdpSocket;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream, UdpSocket},
+    net::{TcpListener, TcpStream},
 };
 
 #[tokio::test]
@@ -187,16 +189,6 @@ async fn test_it_works_dns_v4() {
 #[cfg(feature = "tests-real-internet6")]
 #[tokio::test]
 async fn test_it_works_dns_v6() {
-    use tracing_subscriber::{filter, fmt, prelude::*};
-    let fmt_layer = fmt::Layer::default()
-        .compact()
-        .with_thread_ids(true)
-        .with_timer(fmt::time::time())
-        .with_writer(std::io::stderr);
-    tracing_subscriber::registry()
-        .with(filter::LevelFilter::TRACE)
-        .with(fmt_layer)
-        .init();
     static SERVER_ARGS: Lazy<arg::ServerArgs> = Lazy::new(|| arg::ServerArgs {
         host: String::from("[::1]"),
         port: 17706,

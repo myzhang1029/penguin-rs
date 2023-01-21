@@ -41,28 +41,26 @@ pub(super) async fn udp_forward_to(
     let client_id = datagram_frame.sid;
     let target = lookup_host((rhost_str, rport)).await?.next().unwrap();
     let socket = if target.is_ipv4() {
-        debug!("binding to 0.0.0.0:0");
         UdpSocket::bind(("0.0.0.0", 0)).await?
     } else {
-        debug!("binding to [::]:0");
         UdpSocket::bind(("::", 0)).await?
     };
-    socket.send_to(&data, target).await?;
+    debug!("bound to {}", socket.local_addr()?);
+    socket.connect(target).await?;
+    socket.send(&data).await?;
     trace!("sent UDP packet to {target}");
     loop {
         let mut buf = [0u8; 65536];
-        match tokio::time::timeout(config::UDP_PRUNE_TIMEOUT, socket.recv_from(&mut buf)).await {
-            Ok(Ok((len, addr))) => {
-                if addr == target {
-                    trace!("got UDP response from {addr}");
-                    let datagram_frame = DatagramFrame {
-                        sid: client_id,
-                        host: rhost.clone(),
-                        port: rport,
-                        data: buf[..len].to_vec(),
-                    };
-                    datagram_tx.send(datagram_frame).await?;
-                }
+        match tokio::time::timeout(config::UDP_PRUNE_TIMEOUT, socket.recv(&mut buf)).await {
+            Ok(Ok(len)) => {
+                trace!("got UDP response from {target}");
+                let datagram_frame = DatagramFrame {
+                    sid: client_id,
+                    host: rhost.clone(),
+                    port: rport,
+                    data: buf[..len].to_vec(),
+                };
+                datagram_tx.send(datagram_frame).await?;
             }
             Ok(Err(e)) => {
                 return Err(e.into());
@@ -93,7 +91,9 @@ pub(super) async fn tcp_forwarder_on_channel<RW>(
 where
     RW: AsyncRead + AsyncWrite + Unpin + Send,
 {
-    let mut rstream = TcpStream::connect((rhost, rport)).await?;
+    let mut rstream = TcpStream::connect((&*rhost, rport)).await?;
+    trace!("connected to {rhost}:{rport}");
     tokio::io::copy_bidirectional(&mut channel, &mut rstream).await?;
+    trace!("TCP forwarding finished");
     Ok(())
 }

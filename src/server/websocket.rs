@@ -18,10 +18,10 @@ pub async fn handle_websocket(ws_stream: WebSocket) {
     let (datagram_send_tx, mut datagram_send_rx) = mpsc::channel::<DatagramFrame>(32);
     loop {
         tokio::select! {
-            // Check if any of the jobs have finished and panicked
+            // Check if any of the jobs have finished
             Some(Err(err)) = jobs.join_next() => {
                 assert!(!err.is_panic(), "Panic in a forwarder: {err}");
-                debug!("Forwarder finished with error: {err}");
+                debug!("forwarder finished with error: {err}");
             }
             // Check if the multiplexor has received a new stream request
             Some(result) = mux.server_new_stream_channel() => {

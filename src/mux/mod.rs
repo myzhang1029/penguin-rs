@@ -38,9 +38,13 @@ pub enum Error {
     #[error(transparent)]
     Tungstenite(#[from] tungstenite::Error),
     #[error("invalid message: {0}")]
-    InvalidMessage(&'static str),
-    #[error("invalid frame: {0}")]
-    InvalidFrame(#[from] <Vec<u8> as TryFrom<Frame>>::Error),
+    InvalidMessage(#[from] frame::Error),
+    #[error("received `Text` message")]
+    TextMessage,
+    #[error("server received `Ack` frame")]
+    ServerReceivedAck,
+    #[error("client received `Syn` frame")]
+    ClientReceivedSyn,
     #[error(transparent)]
     SendFrameToChannel(#[from] tokio::sync::mpsc::error::SendError<Frame>),
     #[error(transparent)]
@@ -69,7 +73,7 @@ where
     ) -> Self {
         let (datagram_tx, datagram_rx) = tokio::sync::mpsc::channel(config::DATAGRAM_BUFFER_SIZE);
         let (stream_tx, stream_rx) = tokio::sync::mpsc::channel(config::STREAM_BUFFER_SIZE);
-        let (may_close_ports_tx, may_close_ports_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (dropped_ports_tx, dropped_ports_rx) = tokio::sync::mpsc::unbounded_channel();
 
         let inner = Arc::new(MultiplexorInner {
             role,
@@ -79,14 +83,10 @@ where
             streams: RwLock::new(HashMap::new()),
             datagram_rx: RwLock::new(datagram_rx),
             stream_rx: RwLock::new(stream_rx),
-            may_close_ports_tx,
+            dropped_ports_tx,
         });
 
-        tokio::spawn(
-            inner
-                .clone()
-                .task(datagram_tx, stream_tx, may_close_ports_rx),
-        );
+        tokio::spawn(inner.clone().task(datagram_tx, stream_tx, dropped_ports_rx));
         trace!("Multiplexor task spawned");
 
         Self { inner }
@@ -101,21 +101,10 @@ where
         port: u16,
     ) -> Result<MuxStream<Sink, Stream>, Error> {
         assert_eq!(self.inner.role, Role::Client);
-        let host_len = host.len();
-        let mut syn_payload =
-            Vec::with_capacity(std::mem::size_of::<u8>() + std::mem::size_of::<u16>() + host_len);
-        syn_payload.push(u8::try_from(host_len)?);
-        syn_payload.extend_from_slice(&host);
-        syn_payload.extend_from_slice(&port.to_be_bytes());
         // Allocate a new port
         let sport = u16::next_available_key(&*self.inner.streams.read().await);
         trace!("sport = {sport}");
-        let syn_frame = StreamFrame {
-            sport,
-            dport: 0,
-            flag: StreamFlag::Syn,
-            data: syn_payload,
-        };
+        let syn_frame = StreamFrame::new_syn(&host, port, sport)?;
         trace!("sending syn");
         self.inner.send_frame(Frame::Stream(syn_frame)).await?;
         trace!("sending stream to user");
@@ -168,7 +157,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>
 impl<Sink, Stream> Drop for Multiplexor<Sink, Stream> {
     fn drop(&mut self) {
         self.inner
-            .may_close_ports_tx
+            .dropped_ports_tx
             .send(0)
             .unwrap_or_else(|_| warn!("Failed to notify task of dropped mux"));
     }

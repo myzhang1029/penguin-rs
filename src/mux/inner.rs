@@ -2,7 +2,7 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::frame::{DatagramFrame, Frame, StreamFlag, StreamFrame};
-use super::{IntKey, Role};
+use super::{Error, IntKey, Role};
 use crate::config;
 use bytes::Buf;
 use futures_util::{Sink as FutureSink, SinkExt, Stream as FutureStream, StreamExt};
@@ -34,7 +34,7 @@ impl<Sink, Stream> Drop for MuxStream<Sink, Stream> {
     fn drop(&mut self) {
         // Notify the task that this port is no longer in use
         self.inner
-            .may_close_ports_tx
+            .dropped_ports_tx
             .send(self.our_port)
             // Maybe the task has already exited, who knows
             .unwrap_or_else(|_| warn!("Failed to notify task of dropped port"));
@@ -97,8 +97,9 @@ pub(super) struct MultiplexorInner<Sink, Stream> {
     pub(super) datagram_rx: RwLock<tokio::sync::mpsc::Receiver<DatagramFrame>>,
     /// Channel of established streams for processing
     pub(super) stream_rx: RwLock<tokio::sync::mpsc::Receiver<MuxStream<Sink, Stream>>>,
-    /// Channel for notifying the task of a dropped port. Sending 0 means that the task should exit.
-    pub(super) may_close_ports_tx: tokio::sync::mpsc::UnboundedSender<u16>,
+    /// Channel for notifying the task of a dropped port. Sending 0 means that the
+    /// multiplexor is being dropped and the task should exit.
+    pub(super) dropped_ports_tx: tokio::sync::mpsc::UnboundedSender<u16>,
 }
 
 impl<Sink, Stream> MultiplexorInner<Sink, Stream>
@@ -117,12 +118,13 @@ where
         self: Arc<Self>,
         mut datagram_tx: tokio::sync::mpsc::Sender<DatagramFrame>,
         mut stream_tx: tokio::sync::mpsc::Sender<MuxStream<Sink, Stream>>,
-        mut may_close_ports_rx: tokio::sync::mpsc::UnboundedReceiver<u16>,
-    ) -> Result<(), super::Error> {
+        mut dropped_ports_rx: tokio::sync::mpsc::UnboundedReceiver<u16>,
+    ) -> Result<(), Error> {
         let mut keepalive_interval = MaybeInterval::new(self.keepalive_interval);
         loop {
+            trace!("task loop");
             tokio::select! {
-                Some(port) = may_close_ports_rx.recv() => {
+                Some(port) = dropped_ports_rx.recv() => {
                     if port == 0 {
                         debug!("mux dropped");
                         break;
@@ -130,15 +132,10 @@ where
                     debug!("freeing port: {}", port);
                     self.streams.write().await.remove(&port);
                 }
-                mut stream = self.stream.write() => {
-                    let msg = stream.next().await;
-                    if let Some(msg) = msg {
-                        let msg = msg?;
-                        trace!("received message: {:?}", msg);
-                        if self.clone().process_message(msg, &mut datagram_tx, &mut stream_tx).await? {
-                            break;
-                        }
-                    } else {
+                Some(msg) = self.next_message() => {
+                    let msg = msg?;
+                    trace!("received message: {}", msg.len());
+                    if self.clone().process_message(msg, &mut datagram_tx, &mut stream_tx).await? {
                         break;
                     }
                 }
@@ -156,6 +153,14 @@ where
         Ok(())
     }
 
+    /// Get the next message
+    #[tracing::instrument(skip_all, level = "trace")]
+    #[inline]
+    async fn next_message(&self) -> Option<tungstenite::Result<Message>> {
+        let mut stream = self.stream.write().await;
+        stream.next().await
+    }
+
     /// Process a stream frame
     /// Does the following:
     /// - If `flag` is `Syn`,
@@ -171,19 +176,20 @@ where
         self: Arc<Self>,
         stream_frame: StreamFrame,
         stream_tx: &mut tokio::sync::mpsc::Sender<MuxStream<Sink, Stream>>,
-    ) -> Result<(), super::Error> {
-        let our_port = stream_frame.dport;
-        let their_port = stream_frame.sport;
-        match stream_frame.flag {
+    ) -> Result<(), Error> {
+        let StreamFrame {
+            dport: our_port,
+            sport: their_port,
+            flag,
+            data,
+        } = stream_frame;
+        match flag {
             StreamFlag::Syn => {
-                assert_eq!(
-                    self.role,
-                    Role::Server,
-                    "`Syn` flag should not be received by client"
-                );
-                assert!(stream_frame.flag == StreamFlag::Syn);
+                if self.role == Role::Client {
+                    return Err(Error::ClientReceivedSyn);
+                }
                 // Decode Syn handshake
-                let mut syn_data = bytes::Bytes::from(stream_frame.data);
+                let mut syn_data = bytes::Bytes::from(data);
                 let host_len = syn_data.get_u8();
                 let dest_host = syn_data.split_to(host_len as usize).to_vec();
                 let dest_port = syn_data.get_u16();
@@ -211,25 +217,18 @@ where
                 stream_tx
                     .send(stream)
                     .await
-                    .map_err(|e| super::Error::SendStreamToClient(e.to_string()))?;
+                    .map_err(|e| Error::SendStreamToClient(e.to_string()))?;
                 // Send a Ack
-                let ack_frame = Frame::Stream(StreamFrame {
-                    sport: our_port,
-                    dport: their_port,
-                    data: vec![],
-                    flag: StreamFlag::Ack,
-                });
+                let ack_frame = Frame::Stream(StreamFrame::new_ack(our_port, their_port));
                 trace!("sending ack");
                 self.send_frame(ack_frame).await?;
                 // Read from the stream and pack frames
                 tokio::spawn(self.stream_task(our_port, their_port, our_rx));
             }
             StreamFlag::Ack => {
-                assert_eq!(
-                    self.role,
-                    Role::Client,
-                    "`Ack` flag should not be received by server"
-                );
+                if self.role == Role::Server {
+                    return Err(Error::ServerReceivedAck);
+                }
                 // See `server.rs`
                 let (our, their) = tokio::io::duplex(config::DUPLEX_SIZE);
                 let (our_rx, our_tx) = tokio::io::split(our);
@@ -251,19 +250,22 @@ where
                 stream_tx
                     .send(stream)
                     .await
-                    .map_err(|e| super::Error::SendStreamToClient(e.to_string()))?;
+                    .map_err(|e| Error::SendStreamToClient(e.to_string()))?;
                 // Read from the stream and pack frames
                 tokio::spawn(self.stream_task(our_port, their_port, our_rx));
             }
-            StreamFlag::Fin => {
+            StreamFlag::Rst | StreamFlag::Fin => {
                 self.close_write(our_port).await;
             }
             StreamFlag::Psh => {
                 let mut streams = self.streams.write().await;
-                let stream = streams.get_mut(&our_port).ok_or_else(|| {
-                    super::Error::InvalidMessage("No stream with specified dport")
-                })?;
-                stream.write_all(&stream_frame.data).await?;
+                if let Some(stream) = streams.get_mut(&our_port) {
+                    stream.write_all(&data).await?;
+                } else {
+                    let rst_frame = Frame::Stream(StreamFrame::new_rst(our_port, their_port));
+                    warn!("Port {our_port} not found, sending RST");
+                    self.send_frame(rst_frame).await?;
+                }
             }
         }
         Ok(())
@@ -271,7 +273,7 @@ where
 
     /// Send a frame
     #[tracing::instrument(skip_all, level = "trace")]
-    pub(super) async fn send_frame(&self, frame: Frame) -> Result<(), super::Error> {
+    pub(super) async fn send_frame(&self, frame: Frame) -> Result<(), Error> {
         let mut sink = self.sink.write().await;
         sink.send(frame.try_into()?).await?;
         Ok(())
@@ -285,10 +287,10 @@ where
         msg: Message,
         datagram_tx: &mut tokio::sync::mpsc::Sender<DatagramFrame>,
         stream_tx: &mut tokio::sync::mpsc::Sender<MuxStream<Sink, Stream>>,
-    ) -> Result<bool, super::Error> {
+    ) -> Result<bool, Error> {
         match msg {
             Message::Binary(data) => {
-                let frame = data.try_into().map_err(super::Error::InvalidMessage)?;
+                let frame = data.try_into()?;
                 match frame {
                     Frame::Datagram(datagram_frame) => {
                         trace!("Received datagram frame: {:?}", datagram_frame);
@@ -317,7 +319,7 @@ where
             }
             Message::Text(_) => {
                 error!("Received `Text` message: {:?}", msg);
-                Err(super::Error::InvalidMessage("`Text` message received"))
+                Err(Error::TextMessage)
             }
             Message::Frame(_) => {
                 unreachable!("`Frame` message should not be received");
@@ -332,7 +334,7 @@ where
         sport: u16,
         dport: u16,
         mut stream: tokio::io::ReadHalf<tokio::io::DuplexStream>,
-    ) -> Result<(), super::Error> {
+    ) -> Result<(), Error> {
         loop {
             let mut buf = vec![0; config::READ_BUF_SIZE];
             let n = stream.read(&mut buf).await?;

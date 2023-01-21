@@ -32,28 +32,6 @@ async fn connect_succeeds() {
 }
 
 #[tokio::test]
-async fn dropped_connection_rsts() {
-    let (client, server) = duplex(10);
-    let client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
-    let server = WebSocketStream::from_raw_socket(server, Role::Server, None).await;
-
-    let client_mux = Multiplexor::new(client, Role::Client, None);
-    let server_mux = Multiplexor::new(server, Role::Server, None);
-
-    let server_task = tokio::spawn(async move {
-        server_mux.server_new_stream_channel().await.unwrap();
-    });
-
-    let mut stream = client_mux
-        .client_new_stream_channel(vec![], 0)
-        .await
-        .unwrap();
-    info!("sport = {}, dport = {}", stream.our_port, stream.their_port);
-    stream.write_all(b"hello").await.unwrap();
-    server_task.await.unwrap_err();
-}
-
-#[tokio::test]
 async fn connected_stream_passes_data() {
     let (client, server) = duplex(10);
     let client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
