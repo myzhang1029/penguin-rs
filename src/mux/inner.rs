@@ -134,7 +134,7 @@ where
                 }
                 Some(msg) = self.next_message() => {
                     let msg = msg?;
-                    trace!("received message: {}", msg.len());
+                    trace!("received message length = {}", msg.len());
                     if self.clone().process_message(msg, &mut datagram_tx, &mut stream_tx).await? {
                         break;
                     }
