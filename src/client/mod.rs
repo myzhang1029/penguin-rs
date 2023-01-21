@@ -152,14 +152,11 @@ pub(crate) async fn client_main(args: &'static ClientArgs) -> Result<(), Error> 
                 current_retry_interval = 200;
                 // Now retry
             }
-            Err(ws_connect::Error::Tungstenite(tungstenite::error::Error::Io(e))) => {
-                if !retryable_errors(&e) {
+            Err(e) => {
+                if !e.retryable() {
                     return Err(e.into());
                 }
                 // If we get here, retry.
-            }
-            Err(e) => {
-                return Err(e.into());
             }
         };
 
@@ -273,8 +270,8 @@ async fn get_send_stream_chan_or_put_back(
             trace!("sent stream to handler (or handler died)");
             Ok(true)
         }
-        Err(crate::mux::Error::Io(e)) => {
-            if retryable_errors(&e) {
+        Err(e) => {
+            if e.retryable() {
                 warn!("Connection error: {e}");
                 stream_command_tx.send(stream_command).await?;
                 Ok(false)
@@ -282,10 +279,6 @@ async fn get_send_stream_chan_or_put_back(
                 error!("Connection error: {e}");
                 Err(e.into())
             }
-        }
-        Err(e) => {
-            error!("{e}");
-            Err(e.into())
         }
     }
 }
@@ -301,10 +294,45 @@ async fn prune_client_id_map_task(udp_client_id_map: Arc<RwLock<HashMap<u32, Cli
     }
 }
 
-/// Returns true if we should retry the connection.
-fn retryable_errors(e: &std::io::Error) -> bool {
-    e.kind() == std::io::ErrorKind::AddrNotAvailable
-        || e.kind() == std::io::ErrorKind::BrokenPipe
-        || e.kind() == std::io::ErrorKind::ConnectionReset
-        || e.kind() == std::io::ErrorKind::ConnectionRefused
+pub(super) trait MaybeRetryableError: std::error::Error {
+    /// Returns true if we should retry the connection.
+    fn retryable(&self) -> bool;
+}
+
+impl MaybeRetryableError for std::io::Error {
+    fn retryable(&self) -> bool {
+        self.kind() == std::io::ErrorKind::AddrNotAvailable
+            || self.kind() == std::io::ErrorKind::BrokenPipe
+            || self.kind() == std::io::ErrorKind::ConnectionReset
+            || self.kind() == std::io::ErrorKind::ConnectionRefused
+    }
+}
+
+impl MaybeRetryableError for tungstenite::Error {
+    fn retryable(&self) -> bool {
+        match self {
+            tungstenite::Error::Io(e) => e.retryable(),
+            tungstenite::Error::AlreadyClosed => true,
+            _ => false,
+        }
+    }
+}
+
+impl MaybeRetryableError for crate::mux::Error {
+    fn retryable(&self) -> bool {
+        match self {
+            crate::mux::Error::Io(e) => e.retryable(),
+            crate::mux::Error::Tungstenite(e) => e.retryable(),
+            _ => false,
+        }
+    }
+}
+
+impl MaybeRetryableError for ws_connect::Error {
+    fn retryable(&self) -> bool {
+        match self {
+            ws_connect::Error::Tungstenite(e) => e.retryable(),
+            _ => false,
+        }
+    }
 }

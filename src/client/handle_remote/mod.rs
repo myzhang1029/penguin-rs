@@ -41,7 +41,7 @@ macro_rules! complete_or_continue_if_retryable {
         match $e {
             Ok(v) => v,
             Err(err) => {
-                if crate::client::retryable_errors(&err) {
+                if err.retryable() {
                     warn!("Remote error: {err}");
                     continue;
                 }
