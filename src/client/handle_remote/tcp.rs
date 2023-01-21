@@ -45,22 +45,15 @@ pub(super) async fn handle_tcp(
     let listener = TcpListener::bind((lhost, lport)).await?;
     info!("Listening on {lhost}:{lport}");
     loop {
-        let (tcp_stream, _) = listener.accept().await?;
+        let (mut tcp_stream, _) = listener.accept().await?;
         // A new channel is created for each incoming TCP connection.
         // It's already TCP, anyways.
-        let channel = super::complete_or_continue!(
+        let mut channel = super::complete_or_continue!(
             request_tcp_channel(&handler_resources.stream_command_tx, rhost.into(), rport).await
         );
-        // Make sure we don't nest `BufReader`s
-        tokio::spawn(async move {
-            let (tcp_rx, tcp_tx) = tokio::io::split(tcp_stream);
-            let tcp_rx = BufReader::new(tcp_rx);
-            let tcp_tx = BufWriter::new(tcp_tx);
-            let (channel_rx, channel_tx) = tokio::io::split(channel);
-            let channel_rx = BufReader::new(channel_rx);
-            let channel_tx = BufWriter::new(channel_tx);
-            pipe_streams(channel_rx, channel_tx, tcp_rx, tcp_tx).await
-        });
+        tokio::spawn(
+            async move { tokio::io::copy_bidirectional(&mut channel, &mut tcp_stream).await },
+        );
     }
 }
 

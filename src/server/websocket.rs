@@ -35,8 +35,7 @@ pub async fn handle_websocket(ws_stream: WebSocket) {
             Some(result) = mux.server_new_stream_channel() => {
                 if let Ok(rhost) = String::from_utf8(result.dest_host.clone()) {
                     let rport = result.dest_port;
-                    let (rx, tx) = tokio::io::split(result);
-                    jobs.spawn(start_forwarder_on_channel(rx, tx, rhost, rport));
+                    jobs.spawn(start_forwarder_on_channel(result, rhost, rport));
                 } else {
                     warn!("Invalid host name");
                 }

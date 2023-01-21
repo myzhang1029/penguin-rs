@@ -180,6 +180,15 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>
     }
 }
 
+impl<Sink, Stream> Drop for Multiplexor<Sink, Stream> {
+    fn drop(&mut self) {
+        self.inner
+            .may_close_ports_tx
+            .send(0)
+            .unwrap_or_else(|_| warn!("Failed to notify task of dropped mux"));
+    }
+}
+
 /// Read/write to and from (i.e. bidirectionally forward) a pair of streams
 #[tracing::instrument(skip_all, level = "debug")]
 pub async fn pipe_streams<R1, W1, R2, W2>(
