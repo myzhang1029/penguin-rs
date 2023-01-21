@@ -10,6 +10,7 @@ mod inner;
 #[cfg(test)]
 mod test;
 
+use crate::config;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{pin_mut, FutureExt, Sink as FutureSink, Stream as FutureStream, StreamExt};
 use inner::MultiplexorInner;
@@ -23,27 +24,11 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::RwLock;
 use tokio_tungstenite::WebSocketStream;
 use tracing::{error, trace, warn};
-use tungstenite::protocol::WebSocketConfig;
 use tungstenite::Message;
 
 pub use frame::{DatagramFrame, Frame, StreamFlag, StreamFrame};
 pub use inner::MuxStream;
 pub use tungstenite::protocol::Role;
-
-pub const DEFAULT_WS_CONFIG: WebSocketConfig = WebSocketConfig {
-    max_send_queue: None,
-    max_message_size: Some(64 << 20),
-    max_frame_size: Some(2 << 23),
-    accept_unmasked_frames: false,
-};
-
-/// Number of frames to buffer in the channels before blocking
-const DATAGRAM_BUFFER_SIZE: usize = 2 << 8;
-const STREAM_BUFFER_SIZE: usize = 2 << 8;
-/// Size of the `n` in `duplex(n)`
-const DUPLEX_SIZE: usize = 2 << 21;
-/// Less than `max_frame_size` - header size
-const READ_BUF_SIZE: usize = 2 << 22;
 
 /// Multiplexor error
 #[derive(Debug, Error)]
@@ -82,8 +67,8 @@ where
         keepalive_interval: Option<std::time::Duration>,
         role: Role,
     ) -> Self {
-        let (datagram_tx, datagram_rx) = tokio::sync::mpsc::channel(DATAGRAM_BUFFER_SIZE);
-        let (stream_tx, stream_rx) = tokio::sync::mpsc::channel(STREAM_BUFFER_SIZE);
+        let (datagram_tx, datagram_rx) = tokio::sync::mpsc::channel(config::DATAGRAM_BUFFER_SIZE);
+        let (stream_tx, stream_rx) = tokio::sync::mpsc::channel(config::STREAM_BUFFER_SIZE);
         let (may_close_ports_tx, may_close_ports_rx) = tokio::sync::mpsc::unbounded_channel();
 
         let inner = Arc::new(MultiplexorInner {

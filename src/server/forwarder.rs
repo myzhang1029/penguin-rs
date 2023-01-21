@@ -1,0 +1,99 @@
+//! Server-side forwarding implementation.
+//! Pipes TCP streams or forwards UDP Datagrams to and from another host.
+//! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
+
+use crate::config;
+use crate::mux::DatagramFrame;
+use thiserror::Error;
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    net::TcpStream,
+};
+use tokio::{
+    net::{lookup_host, UdpSocket},
+    sync::mpsc::Sender,
+};
+use tracing::{debug, trace};
+
+/// Error type for the forwarder.
+#[derive(Error, Debug)]
+pub(super) enum Error {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("invalid host: {0}")]
+    Host(#[from] std::str::Utf8Error),
+    #[error("cannot send `DatagramFrame` to main loop: {0}")]
+    DatagramSend(#[from] tokio::sync::mpsc::error::SendError<crate::mux::DatagramFrame>),
+}
+
+/// Send a UDP datagram to the given host and port and wait for a response
+/// in the following `UDP_PRUNE_TIMEOUT` seconds.
+#[tracing::instrument(skip(datagram_tx), level = "debug")]
+pub(super) async fn udp_forward_to(
+    datagram_frame: DatagramFrame,
+    datagram_tx: Sender<DatagramFrame>,
+) -> Result<(), Error> {
+    trace!("got datagram frame: {datagram_frame:?}");
+    let rhost = datagram_frame.host;
+    let rhost_str = std::str::from_utf8(&rhost)?;
+    let rport = datagram_frame.port;
+    let data = datagram_frame.data;
+    let client_id = datagram_frame.sid;
+    let target = lookup_host((rhost_str, rport)).await?.next().unwrap();
+    let socket = if target.is_ipv4() {
+        debug!("binding to 0.0.0.0:0");
+        UdpSocket::bind(("0.0.0.0", 0)).await?
+    } else {
+        debug!("binding to [::]:0");
+        UdpSocket::bind(("::", 0)).await?
+    };
+    socket.send_to(&data, target).await?;
+    trace!("sent UDP packet to {target}");
+    loop {
+        let mut buf = [0u8; 65536];
+        match tokio::time::timeout(config::UDP_PRUNE_TIMEOUT, socket.recv_from(&mut buf)).await {
+            Ok(Ok((len, addr))) => {
+                if addr == target {
+                    trace!("got UDP response from {addr}");
+                    let datagram_frame = DatagramFrame {
+                        sid: client_id,
+                        host: rhost.clone(),
+                        port: rport,
+                        data: buf[..len].to_vec(),
+                    };
+                    datagram_tx.send(datagram_frame).await?;
+                }
+            }
+            Ok(Err(e)) => {
+                return Err(e.into());
+            }
+            Err(_) => {
+                trace!("UDP prune timeout");
+                break;
+            }
+        };
+    }
+    debug!("UDP forwarding finished");
+    Ok(())
+}
+
+/// Start a TCP forwarding server on the given listener.
+///
+/// This forwarder is trivial: it just pipes the TCP stream to and from the
+/// channel.
+///
+/// # Errors
+/// It carries the errors from the underlying TCP or channel IO functions.
+#[tracing::instrument(skip(channel), level = "debug")]
+pub(super) async fn tcp_forwarder_on_channel<RW>(
+    mut channel: RW,
+    rhost: String,
+    rport: u16,
+) -> Result<(), Error>
+where
+    RW: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let mut rstream = TcpStream::connect((rhost, rport)).await?;
+    tokio::io::copy_bidirectional(&mut channel, &mut rstream).await?;
+    Ok(())
+}

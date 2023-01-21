@@ -7,7 +7,7 @@ mod websocket;
 use std::sync::Arc;
 
 use crate::arg::{BackendUrl, ServerArgs};
-use crate::mux::DEFAULT_WS_CONFIG;
+use crate::config;
 use crate::proto_version::PROTOCOL_VERSION;
 use crate::tls::make_rustls_server_config;
 use axum::async_trait;
@@ -223,7 +223,7 @@ impl StealthWebSocketUpgrade {
                     let ws = WebSocketStream::from_raw_socket(
                         upgraded,
                         Role::Server,
-                        Some(DEFAULT_WS_CONFIG),
+                        Some(config::DEFAULT_WS_CONFIG),
                     )
                     .await;
                     callback(ws).await;

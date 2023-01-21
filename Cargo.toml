@@ -46,13 +46,14 @@ tempfile = "3"
 rcgen = "0.10"
 
 [features]
-default = ["rustls-native-roots", "tests-real-internet"]
+default = ["rustls-native-roots", "tests-real-internet4", "tests-real-internet6"]
 # Note that it does not make sense to use rustls-webpki-roots and
 # rustls-native-roots at the same time, but there must be at least one. 
 rustls-webpki-roots = ["webpki-roots", "tokio-tungstenite/rustls-tls-webpki-roots", "tungstenite/rustls-tls-webpki-roots", "hyper-rustls/webpki-tokio"]
 rustls-native-roots = ["rustls-native-certs", "tokio-tungstenite/rustls-tls-native-roots", "tungstenite/rustls-tls-native-roots", "hyper-rustls/native-tokio"]
 # Allows some tests that require real internet connection
-tests-real-internet = []
+tests-real-internet4 = []
+tests-real-internet6 = []
 more-verbose = []
 
 [profile.release]

@@ -4,14 +4,14 @@
 mod handle_remote;
 pub(crate) mod ws_connect;
 
-use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::sync::Arc;
-
 use crate::arg::ClientArgs;
+use crate::config;
 use crate::mux::{DatagramFrame, Multiplexor, MuxStream as GMuxStream, Role};
 use futures_util::stream::{SplitSink, SplitStream};
 use handle_remote::handle_remote;
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::sync::Arc;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpStream, UdpSocket};
@@ -42,8 +42,6 @@ pub(crate) enum Error {
 type Sink = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
 type Stream = SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>;
 type MuxStream = GMuxStream<Sink, Stream>;
-
-const UDP_PRUNE_TIMEOUT: time::Duration = time::Duration::from_secs(60);
 
 // Send the information about how to send the stream to the listener
 /// Type that local listeners send to the main loop to request a connection
@@ -86,7 +84,7 @@ impl ClientIdMapEntry {
             addr,
             socket,
             socks5,
-            expires: time::Instant::now() + UDP_PRUNE_TIMEOUT,
+            expires: time::Instant::now() + config::UDP_PRUNE_TIMEOUT,
         }
     }
 }
@@ -296,7 +294,7 @@ async fn get_send_stream_chan_or_put_back(
 #[tracing::instrument(skip_all, level = "trace")]
 async fn prune_client_id_map_task(udp_client_id_map: Arc<RwLock<HashMap<u32, ClientIdMapEntry>>>) {
     loop {
-        tokio::time::sleep(2 * UDP_PRUNE_TIMEOUT).await;
+        tokio::time::sleep(2 * config::UDP_PRUNE_TIMEOUT).await;
         let mut udp_client_id_map = udp_client_id_map.write().await;
         let now = time::Instant::now();
         udp_client_id_map.retain(|_, entry| entry.expires > now);

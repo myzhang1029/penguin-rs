@@ -3,6 +3,7 @@
 
 use super::frame::{DatagramFrame, Frame, StreamFlag, StreamFrame};
 use super::{IntKey, Role};
+use crate::config;
 use bytes::Buf;
 use futures_util::{Sink as FutureSink, SinkExt, Stream as FutureStream, StreamExt};
 use std::collections::HashMap;
@@ -96,7 +97,7 @@ pub(super) struct MultiplexorInner<Sink, Stream> {
     pub(super) datagram_rx: RwLock<tokio::sync::mpsc::Receiver<DatagramFrame>>,
     /// Channel of established streams for processing
     pub(super) stream_rx: RwLock<tokio::sync::mpsc::Receiver<MuxStream<Sink, Stream>>>,
-    /// Channel for notifying the task of a dropped port
+    /// Channel for notifying the task of a dropped port. Sending 0 means that the task should exit.
     pub(super) may_close_ports_tx: tokio::sync::mpsc::UnboundedSender<u16>,
 }
 
@@ -122,6 +123,10 @@ where
         loop {
             tokio::select! {
                 Some(port) = may_close_ports_rx.recv() => {
+                    if port == 0 {
+                        debug!("mux dropped");
+                        break;
+                    }
                     debug!("freeing port: {}", port);
                     self.streams.write().await.remove(&port);
                 }
@@ -185,7 +190,7 @@ where
                 let our_port = u16::next_available_key(&*self.streams.read().await);
                 trace!("port: {}", our_port);
                 // `our` is our end, `their` is the user's end
-                let (our, their) = tokio::io::duplex(super::DUPLEX_SIZE);
+                let (our, their) = tokio::io::duplex(config::DUPLEX_SIZE);
                 let (our_rx, our_tx) = tokio::io::split(our);
                 // Save the TX end of the stream so we can write to it when subsequent frames arrive
                 let mut streams = self.streams.write().await;
@@ -226,7 +231,7 @@ where
                     "`Ack` flag should not be received by server"
                 );
                 // See `server.rs`
-                let (our, their) = tokio::io::duplex(super::DUPLEX_SIZE);
+                let (our, their) = tokio::io::duplex(config::DUPLEX_SIZE);
                 let (our_rx, our_tx) = tokio::io::split(our);
                 // Save the TX end of the stream so we can write to it when subsequent frames arrive
                 let mut streams = self.streams.write().await;
@@ -329,7 +334,7 @@ where
         mut stream: tokio::io::ReadHalf<tokio::io::DuplexStream>,
     ) -> Result<(), super::Error> {
         loop {
-            let mut buf = vec![0; super::READ_BUF_SIZE];
+            let mut buf = vec![0; config::READ_BUF_SIZE];
             let n = stream.read(&mut buf).await?;
             if n == 0 {
                 // Send a Fin
@@ -371,9 +376,10 @@ where
     async fn close_all_write(&self) {
         debug!("closing all connections");
         let streams = self.streams.read().await;
-        let ports = streams.keys();
+        let ports: Vec<_> = streams.keys().copied().collect();
+        drop(streams);
         for port in ports {
-            self.close_write(*port).await;
+            self.close_write(port).await;
         }
     }
 }
