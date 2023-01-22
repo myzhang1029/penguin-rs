@@ -2,7 +2,7 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use crate::parse_remote::Remote;
-use clap::{arg, command, Args, Parser, Subcommand};
+use clap::{arg, command, ArgAction, Args, Parser, Subcommand};
 use http::{
     header::HeaderName,
     uri::{Authority, PathAndQuery, Scheme},
@@ -18,10 +18,10 @@ use thiserror::Error;
 pub struct PenguinCli {
     #[clap(subcommand)]
     pub(crate) subcommand: Commands,
-    #[arg(short, long, conflicts_with = "quiet")]
-    pub(crate) verbose: bool,
-    #[arg(short, long, conflicts_with = "verbose")]
-    pub(crate) quiet: bool,
+    #[arg(short, long, conflicts_with = "quiet", action = ArgAction::Count, global = true)]
+    pub(crate) verbose: u8,
+    #[arg(short, long, conflicts_with = "verbose", action = ArgAction::Count, global = true)]
+    pub(crate) quiet: u8,
 }
 
 /// Global args to avoid cloning

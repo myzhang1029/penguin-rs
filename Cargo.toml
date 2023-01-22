@@ -54,7 +54,6 @@ rustls-native-roots = ["rustls-native-certs", "tokio-tungstenite/rustls-tls-nati
 # Allows some tests that require real internet connection
 tests-real-internet4 = []
 tests-real-internet6 = []
-more-verbose = []
 
 [profile.release]
 debug = true

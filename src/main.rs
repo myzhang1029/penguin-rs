@@ -26,18 +26,11 @@ pub(crate) enum Error {
     Server(#[from] server::Error),
 }
 
-#[cfg(not(feature = "more-verbose"))]
+const QUIET_QUIET_LOG_LEVEL: filter::LevelFilter = filter::LevelFilter::ERROR;
 const QUIET_LOG_LEVEL: filter::LevelFilter = filter::LevelFilter::WARN;
-#[cfg(not(feature = "more-verbose"))]
 const DEFAULT_LOG_LEVEL: filter::LevelFilter = filter::LevelFilter::INFO;
-#[cfg(not(feature = "more-verbose"))]
 const VERBOSE_LOG_LEVEL: filter::LevelFilter = filter::LevelFilter::DEBUG;
-#[cfg(feature = "more-verbose")]
-const QUIET_LOG_LEVEL: filter::LevelFilter = filter::LevelFilter::INFO;
-#[cfg(feature = "more-verbose")]
-const DEFAULT_LOG_LEVEL: filter::LevelFilter = filter::LevelFilter::DEBUG;
-#[cfg(feature = "more-verbose")]
-const VERBOSE_LOG_LEVEL: filter::LevelFilter = filter::LevelFilter::TRACE;
+const VERBOSE_VERBOSE_LOG_LEVEL: filter::LevelFilter = filter::LevelFilter::TRACE;
 
 /// Real entry point
 async fn main_real() -> Result<(), Error> {
@@ -60,15 +53,24 @@ async fn main_real() -> Result<(), Error> {
     arg::PenguinCli::parse_global();
     let cli_args = arg::PenguinCli::get_global();
     trace!("cli_args = {cli_args:?}");
-    if cli_args.verbose {
-        reload_handle
+    match cli_args.verbose {
+        0 => {}
+        1 => reload_handle
             .reload(VERBOSE_LOG_LEVEL)
-            .expect("Resetting log level failed");
-    } else if cli_args.quiet {
-        reload_handle
+            .expect("Resetting log level failed"),
+        _ => reload_handle
+            .reload(VERBOSE_VERBOSE_LOG_LEVEL)
+            .expect("Resetting log level failed"),
+    };
+    match cli_args.quiet {
+        0 => {}
+        1 => reload_handle
             .reload(QUIET_LOG_LEVEL)
-            .expect("Resetting log level failed");
-    }
+            .expect("Resetting log level failed"),
+        _ => reload_handle
+            .reload(QUIET_QUIET_LOG_LEVEL)
+            .expect("Resetting log level failed"),
+    };
     match &cli_args.subcommand {
         arg::Commands::Client(args) => client::client_main(args).await?,
         arg::Commands::Server(args) => server::server_main(args).await?,
