@@ -51,6 +51,8 @@ pub enum Error {
     SendDatagramToClient(#[from] tokio::sync::mpsc::error::SendError<DatagramFrame>),
     #[error("cannot send stream to client: {0}")]
     SendStreamToClient(String),
+    #[error("Mux received no stream")]
+    StreamTxClosed,
 }
 
 #[derive(Clone, Debug)]
@@ -109,8 +111,7 @@ where
         self.inner.send_frame(Frame::Stream(syn_frame)).await?;
         trace!("sending stream to user");
         let mut stream_rx = self.inner.stream_rx.write().await;
-        // `unwrap`. Panic implies my logic is wrong
-        let stream = stream_rx.recv().await.unwrap();
+        let stream = stream_rx.recv().await.ok_or(Error::StreamTxClosed)?;
         Ok(stream)
     }
 
