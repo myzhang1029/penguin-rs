@@ -9,8 +9,8 @@ use crate::config;
 use bytes::Buf;
 use futures_util::{Sink as FutureSink, Stream as FutureStream, StreamExt};
 use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-pub use tokio::io::DuplexStream;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, error, trace};
 use tungstenite::Message;
@@ -153,7 +153,7 @@ where
                     their_port,
                     dest_host,
                     dest_port,
-                    fin_sent: false,
+                    fin_sent: AtomicBool::new(false),
                     buf: None,
                     inner: self.clone(),
                 };
@@ -186,7 +186,7 @@ where
                     their_port,
                     dest_host: vec![],
                     dest_port: 0,
-                    fin_sent: false,
+                    fin_sent: AtomicBool::new(false),
                     buf: None,
                     inner: self.clone(),
                 };

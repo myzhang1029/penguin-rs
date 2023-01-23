@@ -8,6 +8,7 @@ use bytes::{Buf, Bytes};
 use futures_util::{Sink as FutureSink, Stream as FutureStream};
 use std::io;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -28,7 +29,7 @@ pub struct MuxStream<Sink, Stream> {
     /// Forwarding destination port. Only used on `Role::Server`
     pub dest_port: u16,
     /// Whether `Fin` has been sent
-    pub fin_sent: bool,
+    pub fin_sent: AtomicBool,
     /// Remaining bytes to be read
     pub(super) buf: Option<Bytes>,
     pub(super) inner: Arc<MultiplexorInner<Sink, Stream>>,
@@ -154,15 +155,19 @@ where
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Result<(), std::io::Error>> {
-        if !self.fin_sent {
+        if !self.fin_sent.load(Ordering::Relaxed) {
             let message = Frame::Stream(StreamFrame::new_fin(self.our_port, self.their_port))
                 .try_into()
                 .expect("Frame should be representable as a message");
             ready!(self.inner.sink.poll_send_message(cx, &message))
                 .map_err(tungstenite_error_to_io_error)?;
+            self.fin_sent.store(true, Ordering::Relaxed);
         }
         // We don't want to `close()` the sink here!!!
-        ready!(self.inner.sink.poll_flush(cx)).map_err(tungstenite_error_to_io_error)?;
+        // This line is allowed to fail, because the sink might have been closed altogether
+        ready!(self.inner.sink.poll_flush(cx))
+            .map_err(tungstenite_error_to_io_error)
+            .ok();
         Poll::Ready(Ok(()))
     }
 }

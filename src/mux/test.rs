@@ -44,7 +44,7 @@ async fn connected_stream_passes_data() {
     let len = input_bytes.len();
     let input_bytes_clone = input_bytes.to_owned();
 
-    tokio::spawn(async move {
+    let server_task = tokio::spawn(async move {
         let mut conn = server_mux.server_new_stream_channel().await.unwrap();
         let mut i = 0;
         while i < input_bytes_clone.len() {
@@ -68,10 +68,12 @@ async fn connected_stream_passes_data() {
             break;
         }
         output_bytes.extend_from_slice(&buf[..bytes]);
-        debug!("Read {} bytes", output_bytes.len());
+        info!("Read {} bytes", output_bytes.len());
     }
 
     assert_eq!(input_bytes, output_bytes);
+    debug!("Waiting for server task to finish");
+    server_task.await.unwrap();
 }
 
 #[tokio::test]
@@ -87,7 +89,7 @@ async fn test_early_eof_detected() {
     let len = input_bytes.len();
     let input_bytes_clone = input_bytes.to_owned();
 
-    tokio::spawn(async move {
+    let server_task = tokio::spawn(async move {
         let mut conn = server_mux.server_new_stream_channel().await.unwrap();
         conn.write_all(&input_bytes_clone).await.unwrap();
         info!("Done send");
@@ -106,8 +108,66 @@ async fn test_early_eof_detected() {
             break;
         }
         output_bytes.extend_from_slice(&buf[..bytes]);
-        debug!("Read {} bytes", output_bytes.len());
+        info!("Read {} bytes", output_bytes.len());
     }
 
     assert_eq!(input_bytes, output_bytes);
+    debug!("Waiting for server task to finish");
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn test_several_channels() {
+    let (client, server) = duplex(10);
+    let client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
+    let server = WebSocketStream::from_raw_socket(server, Role::Server, None).await;
+
+    let client_mux = Multiplexor::new(client, Role::Client, None);
+    let server_mux = Multiplexor::new(server, Role::Server, None);
+
+    let server_task = tokio::spawn(async move {
+        let mut conn1 = server_mux.server_new_stream_channel().await.unwrap();
+        info!("server conn1 = {:?}", conn1);
+        let mut conn2 = server_mux.server_new_stream_channel().await.unwrap();
+        info!("server conn2 = {:?}", conn2);
+        let mut conn3 = server_mux.server_new_stream_channel().await.unwrap();
+        info!("server conn3 = {:?}", conn3);
+        let mut buf = [0u8; 32];
+        let bytes = conn3.read(&mut buf).await.unwrap();
+        assert_eq!(buf[..bytes], b"!"[..]);
+        info!("server conn3 read = {:?}", bytes);
+        let bytes = conn2.read(&mut buf).await.unwrap();
+        assert_eq!(buf[..bytes], b"world"[..]);
+        info!("server conn2 read = {:?}", bytes);
+        let bytes = conn1.read(&mut buf).await.unwrap();
+        assert_eq!(buf[..bytes], b"hello"[..]);
+        info!("server conn1 read = {:?}", bytes);
+    });
+    let mut conn1 = client_mux
+        .client_new_stream_channel(vec![], 0)
+        .await
+        .unwrap();
+    info!("client conn1 = {:?}", conn1);
+    let mut conn2 = client_mux
+        .client_new_stream_channel(vec![], 0)
+        .await
+        .unwrap();
+    info!("client conn2 = {:?}", conn2);
+    let mut conn3 = client_mux
+        .client_new_stream_channel(vec![], 0)
+        .await
+        .unwrap();
+    info!("client conn3 = {:?}", conn3);
+    conn1.write(b"hello").await.unwrap();
+    conn1.shutdown().await.unwrap();
+    info!("client conn1 wrote");
+    conn2.write(b"world").await.unwrap();
+    conn2.shutdown().await.unwrap();
+    info!("client conn2 wrote");
+    conn3.write(b"!").await.unwrap();
+    conn3.shutdown().await.unwrap();
+    info!("client conn3 wrote");
+
+    debug!("Waiting for server task to finish");
+    server_task.await.unwrap();
 }
