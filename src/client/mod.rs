@@ -161,7 +161,7 @@ pub(crate) async fn client_main(args: &'static ClientArgs) -> Result<(), Error> 
         };
 
         // If we get here, retry.
-        warn!("Control channel not connected, retrying in {current_retry_interval} ms");
+        warn!("Reconnecting in {current_retry_interval} ms");
         current_retry_count += 1;
         if args.max_retry_count != 0 && current_retry_count > args.max_retry_count {
             warn!("Max retry count reached, giving up");

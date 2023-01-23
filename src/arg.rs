@@ -103,9 +103,9 @@ pub struct ClientArgs {
     ///         user@example.com
     ///   to connect to an SSH server through the tunnel.
     // The underlying port is a u16, which gives 0..=65535; 0 is not allowed,
-    // 1 is the control channel, so the range of available ports is 2..=65535,
-    // giving 65534 available remotes.
-    #[arg(num_args=1..65535, required = true)]
+    // so the range of available ports is 1..=65535,
+    // giving 65535 available remotes.
+    #[arg(num_args=1..=65535, required = true)]
     pub(crate) remote: Vec<Remote>,
     /// An optional Pre-Shared Key for WebSocket upgrade to present
     /// to the server in the HTTP header X-Penguin-PSK. If the server requires

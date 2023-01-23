@@ -155,14 +155,14 @@ where
         cx: &mut Context<'_>,
     ) -> Poll<Result<(), std::io::Error>> {
         if !self.fin_sent {
-            let message =
-                Frame::Stream(StreamFrame::new_psh(self.our_port, self.their_port, vec![]))
-                    .try_into()
-                    .expect("Frame should be representable as a message");
-            ready!(self.inner.sink.poll_send_message(cx, message))
+            let message = Frame::Stream(StreamFrame::new_fin(self.our_port, self.their_port))
+                .try_into()
+                .expect("Frame should be representable as a message");
+            ready!(self.inner.sink.poll_send_message(cx, &message))
                 .map_err(tungstenite_error_to_io_error)?;
         }
-        ready!(self.inner.sink.poll_close(cx)).map_err(tungstenite_error_to_io_error)?;
+        // We don't want to `close()` the sink here!!!
+        ready!(self.inner.sink.poll_flush(cx)).map_err(tungstenite_error_to_io_error)?;
         Poll::Ready(Ok(()))
     }
 }

@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 pub use tokio::io::DuplexStream;
 use tokio::sync::{mpsc, RwLock};
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, trace};
 use tungstenite::Message;
 
 /// Multiplexor inner
@@ -108,12 +108,13 @@ where
     /// Does the following:
     /// - If `flag` is `Syn`,
     ///   - Find an available `dport` and send a `Ack`.
-    ///   - Create a new `DuplexStream` and send it to the `stream_tx` channel.
+    ///   - Create a new `MuxStream` and send it to the `stream_tx` channel.
     /// - If `flag` is `Ack`,
-    ///   - Create a `DuplexStream` and send it to the `stream_tx` channel.
-    /// - Otherwise, we find the `DuplexStream` with the matching `dport` and
-    ///   - Send the data to the `DuplexStream`.
-    ///   - If the `DuplexStream` is closed, send a `Fin` frame.
+    ///   - Create a `MuxStream` and send it to the `stream_tx` channel.
+    /// - Otherwise, we find the sender with the matching `dport` and
+    ///   - Send the data to the sender.
+    ///   - If the receiver is closed or the port does not exist, send back a
+    ///     `Rst` frame.
     #[tracing::instrument(skip(stream_frame, stream_tx), level = "trace")]
     async fn process_stream_frame(
         self: Arc<Self>,
@@ -162,7 +163,7 @@ where
                     .send(stream)
                     .await
                     .map_err(|e| Error::SendStreamToClient(e.to_string()))?;
-                // Send a Ack
+                // Send a `Ack`
                 let ack_frame = Frame::Stream(StreamFrame::new_ack(our_port, their_port));
                 trace!("sending ack");
                 self.send_frame(ack_frame).await?;
@@ -202,12 +203,13 @@ where
             StreamFlag::Psh => {
                 let mut streams = self.streams.write().await;
                 if let Some(frame_sender) = streams.get_mut(&our_port) {
-                    frame_sender.send(data).await?;
-                } else {
-                    let rst_frame = Frame::Stream(StreamFrame::new_rst(our_port, their_port));
-                    warn!("Port {our_port} not found, sending RST");
-                    self.send_frame(rst_frame).await?;
+                    if frame_sender.send(data).await.is_ok() {
+                        return Ok(());
+                    }
                 }
+                // else, the receiver is closed or the port does not exist
+                let rst_frame = Frame::Stream(StreamFrame::new_rst(our_port, their_port));
+                self.send_frame(rst_frame).await?;
             }
         }
         Ok(())
@@ -221,8 +223,20 @@ where
     #[tracing::instrument(level = "trace")]
     pub(super) async fn send_frame(&self, frame: Frame) -> Result<(), Error> {
         self.sink.send_message(frame.try_into()?).await?;
-        self.sink.flush().await?;
-        Ok(())
+        match self.sink.flush().await {
+            Ok(()) => Ok(()),
+            Err(tungstenite::Error::Io(ioerror)) => {
+                if ioerror.kind() == std::io::ErrorKind::BrokenPipe {
+                    // The other side closed the connection, which is acceptable
+                    // here. The user should only discover this when they try to
+                    // work with the stream for the next time.
+                    Ok(())
+                } else {
+                    Err(ioerror.into())
+                }
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Process an incoming message

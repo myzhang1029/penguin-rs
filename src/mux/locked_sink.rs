@@ -76,6 +76,7 @@ impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedMessag
         if self.in_use.swap(true, Ordering::Acquire) {
             // Someone else is using the sink, so we need to wait.
             // `unwrap`: panic if the lock is poisoned
+            trace!("waiting for the lock");
             self.waiters.lock().unwrap().push_back(cx.waker().clone());
             Poll::Pending
         } else {
@@ -106,9 +107,36 @@ impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedMessag
         our_port: u16,
         their_port: u16,
     ) -> Poll<Result<(), SinkError>> {
+        // These code need to be duplicated instead of calling `self.poll_send_message`
+        // because we want to create `Frame`s only when `sink.poll_ready` succeeds.
+        // `ready`: if we return here, nothing happens
+        ready!(self.try_lock(cx));
+        // Safety: access protected by `self.in_use`
+        let sink = unsafe { &mut *self.sink.get() };
+        match sink.poll_ready_unpin(cx) {
+            Poll::Ready(Ok(())) => {}
+            Poll::Ready(Err(e)) => {
+                self.unlock();
+                return Poll::Ready(Err(e.into()));
+            }
+            Poll::Pending => {
+                self.unlock();
+                return Poll::Pending;
+            }
+        }
         let frame = Frame::Stream(StreamFrame::new_psh(our_port, their_port, buf.to_owned()));
-        self.poll_send_message(cx, frame.try_into()?)
-            .map_err(std::convert::Into::into)
+        let message: Message = match frame.try_into() {
+            Ok(message) => message,
+            Err(e) => {
+                self.unlock();
+                return Poll::Ready(Err(e.into()));
+            }
+        };
+        let result = sink
+            .start_send_unpin(message)
+            .map_err(std::convert::Into::into);
+        self.unlock();
+        Poll::Ready(result)
     }
 
     /// Lock and send a message
@@ -116,11 +144,11 @@ impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedMessag
     pub fn poll_send_message(
         &self,
         cx: &mut std::task::Context<'_>,
-        msg: Message,
+        msg: &Message,
     ) -> Poll<Result<(), tungstenite::Error>> {
         // `ready`: if we return here, nothing happens
         ready!(self.try_lock(cx));
-        // Safety: access protected by `semaphore`
+        // Safety: access protected by `self.in_use`
         let sink = unsafe { &mut *self.sink.get() };
         match sink.poll_ready_unpin(cx) {
             Poll::Ready(Ok(())) => {}
@@ -133,7 +161,7 @@ impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedMessag
                 return Poll::Pending;
             }
         }
-        let result = sink.start_send_unpin(msg);
+        let result = sink.start_send_unpin(msg.to_owned());
         trace!("message sent");
         self.unlock();
         Poll::Ready(result)
@@ -142,7 +170,7 @@ impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedMessag
     /// Lock and send a message
     #[tracing::instrument(skip_all, level = "trace")]
     pub async fn send_message(&self, msg: Message) -> Result<(), tungstenite::Error> {
-        std::future::poll_fn(move |cx| self.poll_send_message(cx, msg.to_owned())).await
+        std::future::poll_fn(move |cx| self.poll_send_message(cx, &msg)).await
     }
 
     /// Lock and run `sink.poll_flush` on the underlying `Sink`.
@@ -153,7 +181,7 @@ impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedMessag
     ) -> Poll<Result<(), tungstenite::Error>> {
         // `ready`: if we return here, nothing happens
         ready!(self.try_lock(cx));
-        // Safety: access protected by `semaphore`
+        // Safety: access protected by `self.in_use`
         let sink = unsafe { &mut *self.sink.get() };
         let result = sink.poll_flush_unpin(cx);
         self.unlock();
@@ -167,6 +195,7 @@ impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedMessag
     }
 
     /// Lock and run `sink.poll_close` on the underlying `Sink`.
+    /// Note that we should not close the sink if we only want to close one connection.
     #[tracing::instrument(skip(self, cx), level = "trace")]
     pub fn poll_close(
         &self,
@@ -174,7 +203,7 @@ impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedMessag
     ) -> Poll<Result<(), tungstenite::Error>> {
         // `ready`: if we return here, nothing happens
         ready!(self.try_lock(cx));
-        // Safety: access protected by `semaphore`
+        // Safety: access protected by `self.in_use`
         let sink = unsafe { &mut *self.sink.get() };
         let result = sink.poll_close_unpin(cx);
         self.unlock();
@@ -182,6 +211,7 @@ impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedMessag
     }
 
     /// Lock and run `sink.poll_close` on the underlying `Sink`.
+    /// Note that we should not close the sink if we only want to close one connection.
     #[tracing::instrument(skip(self), level = "trace")]
     pub async fn close(&self) -> Result<(), tungstenite::Error> {
         std::future::poll_fn(|cx| self.poll_close(cx)).await

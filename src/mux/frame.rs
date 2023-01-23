@@ -44,7 +44,6 @@ pub enum Error {
 /// Stream frame flags
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
-#[non_exhaustive]
 pub enum StreamFlag {
     /// New connection
     Syn = 0,
