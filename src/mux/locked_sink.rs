@@ -4,12 +4,12 @@
 
 use super::frame::{Frame, StreamFrame};
 use futures_util::{Sink as FutureSink, SinkExt};
-use std::collections::LinkedList;
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::task::{ready, Waker};
 use std::{cell::UnsafeCell, task::Poll};
 use thiserror::Error;
-use tokio::sync::{Semaphore, SemaphorePermit, TryAcquireError};
 use tracing::{debug, trace};
 use tungstenite::Message;
 
@@ -42,12 +42,12 @@ pub(super) fn tungstenite_error_to_io_error(e: tungstenite::Error) -> std::io::E
 pub(super) struct LockedMessageSink<Sink> {
     /// The sink to write to.
     sink: UnsafeCell<Sink>,
-    /// Semaphore to ensure that only one task is writing to the sink at a time.
-    semaphore: Semaphore,
+    /// To ensure that only one task is writing to the sink at a time.
+    in_use: AtomicBool,
     /// List of wakers to wake when the lock is available.
     /// There is no need to use `tokio::sync::Mutex` here, since we don't need
     /// to hold the lock across an `.await`.
-    waiters: Mutex<LinkedList<Waker>>,
+    waiters: Mutex<VecDeque<Waker>>,
 }
 
 // As long as `Sink: Send + Sync`, it's fine to send and share
@@ -61,36 +61,33 @@ unsafe impl<T> Sync for LockedMessageSink<T> where T: Send + Sync {}
 impl<Sink> LockedMessageSink<Sink> {
     /// Create a new `LockedMessageSink` from a `Sink`.
     pub fn new(sink: Sink) -> Self {
-        let semaphore = Semaphore::new(1);
         Self {
             sink: UnsafeCell::new(sink),
-            semaphore,
-            waiters: Mutex::new(LinkedList::new()),
+            in_use: AtomicBool::new(false),
+            waiters: Mutex::new(VecDeque::new()),
         }
     }
 }
 
+// N.B.: Make sure all return paths call `unlock`!
 impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedMessageSink<Sink> {
     /// Lock, or wake when lock is available.
-    fn try_lock(&self, cx: &mut std::task::Context<'_>) -> Poll<SemaphorePermit> {
-        match self.semaphore.try_acquire() {
-            Ok(guard) => {
-                trace!("acquired the lock");
-                Poll::Ready(guard)
-            }
-            Err(TryAcquireError::NoPermits) => {
-                trace!("waiting for the lock");
-                // `unwrap`: panic if the lock is poisoned
-                self.waiters.lock().unwrap().push_back(cx.waker().clone());
-                // `pending`: if we return here, `cx` is woken up
-                Poll::Pending
-            }
-            Err(TryAcquireError::Closed) => unreachable!("Semaphore lives through `self`"),
+    fn try_lock(&self, cx: &mut std::task::Context<'_>) -> Poll<()> {
+        if self.in_use.swap(true, Ordering::Acquire) {
+            // Someone else is using the sink, so we need to wait.
+            // `unwrap`: panic if the lock is poisoned
+            self.waiters.lock().unwrap().push_back(cx.waker().clone());
+            Poll::Pending
+        } else {
+            // `ready`: if we return here, `cx` is not woken up
+            trace!("acquired the lock");
+            Poll::Ready(())
         }
     }
 
-    /// Wake the next waiter if there is one.
-    fn wake_next_waiter(&self) {
+    /// Unlock and wake the next waiter if there is one.
+    fn unlock(&self) {
+        self.in_use.store(false, Ordering::Release);
         trace!("lock released");
         // `unwrap`: panic if the lock is poisoned
         let mut waiters = self.waiters.lock().unwrap();
@@ -111,7 +108,7 @@ impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedMessag
     ) -> Poll<Result<(), SinkError>> {
         let frame = Frame::Stream(StreamFrame::new_psh(our_port, their_port, buf.to_owned()));
         self.poll_send_message(cx, frame.try_into()?)
-            .map_err(|e| e.into())
+            .map_err(std::convert::Into::into)
     }
 
     /// Lock and send a message
@@ -122,27 +119,23 @@ impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedMessag
         msg: Message,
     ) -> Poll<Result<(), tungstenite::Error>> {
         // `ready`: if we return here, nothing happens
-        let guard = ready!(self.try_lock(cx));
+        ready!(self.try_lock(cx));
         // Safety: access protected by `semaphore`
         let sink = unsafe { &mut *self.sink.get() };
         match sink.poll_ready_unpin(cx) {
             Poll::Ready(Ok(())) => {}
             result @ Poll::Ready(Err(_)) => {
-                // `guard` is implicitly dropped here
-                self.wake_next_waiter();
+                self.unlock();
                 return result;
             }
             Poll::Pending => {
-                // `guard` is implicitly dropped here
-                self.wake_next_waiter();
+                self.unlock();
                 return Poll::Pending;
             }
         }
         let result = sink.start_send_unpin(msg);
         trace!("message sent");
-        // So that `guard` is not dead code
-        drop(guard);
-        self.wake_next_waiter();
+        self.unlock();
         Poll::Ready(result)
     }
 
@@ -159,13 +152,11 @@ impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedMessag
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<(), tungstenite::Error>> {
         // `ready`: if we return here, nothing happens
-        let guard = ready!(self.try_lock(cx));
+        ready!(self.try_lock(cx));
         // Safety: access protected by `semaphore`
         let sink = unsafe { &mut *self.sink.get() };
         let result = sink.poll_flush_unpin(cx);
-        // So that `guard` is not dead code
-        drop(guard);
-        self.wake_next_waiter();
+        self.unlock();
         result
     }
 
@@ -182,13 +173,11 @@ impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedMessag
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<(), tungstenite::Error>> {
         // `ready`: if we return here, nothing happens
-        let guard = ready!(self.try_lock(cx));
+        ready!(self.try_lock(cx));
         // Safety: access protected by `semaphore`
         let sink = unsafe { &mut *self.sink.get() };
         let result = sink.poll_close_unpin(cx);
-        // So that `guard` is not dead code
-        drop(guard);
-        self.wake_next_waiter();
+        self.unlock();
         result
     }
 
