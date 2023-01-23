@@ -87,26 +87,23 @@ where
         }
         trace!("polling the stream");
         let next = ready!(self.stream_rx.poll_recv(cx));
-        match next {
-            Some(frame) => {
-                // We have received a new frame. Copy it into `buf`
-                if remaining < frame.len() {
-                    // The buffer is too small. Fill it and advance `self.buf`
-                    let mut our_buf = Bytes::from(frame);
-                    buf.put_slice(&our_buf[..remaining]);
-                    our_buf.advance(remaining);
-                    self.buf = Some(our_buf);
-                } else {
-                    // The buffer is large enough. Copy the frame into it
-                    buf.put_slice(&frame);
-                }
-                Poll::Ready(Ok(()))
+        if let Some(frame) = next {
+            // We have received a new frame. Copy it into `buf`
+            if remaining < frame.len() {
+                // The buffer is too small. Fill it and advance `self.buf`
+                let mut our_buf = Bytes::from(frame);
+                buf.put_slice(&our_buf[..remaining]);
+                our_buf.advance(remaining);
+                self.buf = Some(our_buf);
+            } else {
+                // The buffer is large enough. Copy the frame into it
+                buf.put_slice(&frame);
             }
+            Poll::Ready(Ok(()))
+        } else {
             // The stream has been closed, just return 0 bytes read
-            None => {
-                trace!("stream has been closed");
-                Poll::Ready(Ok(()))
-            }
+            trace!("stream has been closed");
+            Poll::Ready(Ok(()))
         }
     }
 }

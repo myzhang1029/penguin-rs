@@ -191,6 +191,7 @@ async fn backend_or_404_handler(
 }
 
 /// 404 handler
+#[allow(clippy::unused_async)]
 async fn not_found_handler(State(state): State<ServerState<'static>>) -> Response {
     (StatusCode::NOT_FOUND, state.not_found_resp).into_response()
 }

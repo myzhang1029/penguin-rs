@@ -177,6 +177,7 @@ pub struct ClientArgs {
 
 /// Penguin server arguments.
 #[derive(Args, Debug)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct ServerArgs {
     /// Defines the HTTP listening host - the network interface
     /// (defaults to ::).

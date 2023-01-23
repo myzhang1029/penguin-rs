@@ -127,10 +127,10 @@ impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedMessag
         let sink = unsafe { &mut *self.sink.get() };
         match sink.poll_ready_unpin(cx) {
             Poll::Ready(Ok(())) => {}
-            Poll::Ready(Err(e)) => {
+            result @ Poll::Ready(Err(_)) => {
                 // `guard` is implicitly dropped here
                 self.wake_next_waiter();
-                return Poll::Ready(Err(e.into()));
+                return result;
             }
             Poll::Pending => {
                 // `guard` is implicitly dropped here
@@ -138,7 +138,7 @@ impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedMessag
                 return Poll::Pending;
             }
         }
-        let result = sink.start_send_unpin(msg).map_err(|e| e.into());
+        let result = sink.start_send_unpin(msg);
         trace!("message sent");
         // So that `guard` is not dead code
         drop(guard);
@@ -162,7 +162,7 @@ impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedMessag
         let guard = ready!(self.try_lock(cx));
         // Safety: access protected by `semaphore`
         let sink = unsafe { &mut *self.sink.get() };
-        let result = sink.poll_flush_unpin(cx).map_err(|e| e.into());
+        let result = sink.poll_flush_unpin(cx);
         // So that `guard` is not dead code
         drop(guard);
         self.wake_next_waiter();
@@ -189,7 +189,7 @@ impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedMessag
         // So that `guard` is not dead code
         drop(guard);
         self.wake_next_waiter();
-        result.map_err(|e| e.into())
+        result
     }
 
     /// Lock and run `sink.poll_close` on the underlying `Sink`.

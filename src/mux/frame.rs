@@ -81,7 +81,6 @@ impl Debug for StreamFrame {
 
 impl StreamFrame {
     /// Create a new `Syn` frame.
-    #[must_use]
     pub fn new_syn(dest_host: &[u8], dest_port: u16, sport: u16) -> Result<Self, Error> {
         let host_len = dest_host.len();
         let mut syn_payload =

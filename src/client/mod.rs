@@ -332,7 +332,7 @@ impl MaybeRetryableError for ws_connect::Error {
     fn retryable(&self) -> bool {
         match self {
             ws_connect::Error::Tungstenite(e) => e.retryable(),
-            _ => false,
+            ws_connect::Error::Tls(_) => false,
         }
     }
 }
