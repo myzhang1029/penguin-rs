@@ -37,10 +37,10 @@ jobs:
       run: cargo build --release
 
     - name: Remove interferring files
-      run: bash -c "rm -rf target/release/sibsecsh.d"
+      run: bash -c "rm -rf target/release/rusty-penguin.d"
 
     - name: Upload binary
       uses: actions/upload-artifact@v2.2.4
       with:
         name: penguin-${{ matrix.config.name }}
-        path: target/release/penguin*
+        path: target/release/rusty-penguin*
