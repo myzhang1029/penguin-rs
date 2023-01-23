@@ -173,8 +173,8 @@ async fn backend_or_404_handler(
         let uri = Uri::builder()
             // `unwrap()` should not panic because `BackendUrl` is validated
             // by clap.
-            .scheme(backend.scheme.clone())
-            .authority(backend.authority.clone())
+            .scheme(backend.scheme.to_owned())
+            .authority(backend.authority.to_owned())
             .path_and_query(format!("{}{path_query}", backend.path.path()))
             .build()
             .unwrap();
@@ -278,26 +278,26 @@ impl FromRequest<ServerState<'static>, Body> for StealthWebSocketUpgrade {
         // `clone` should be cheap
         if req.method() != Method::GET {
             warn!("Invalid WebSocket request: not a GET request");
-            return Err(backend_or_404_handler(State(state.clone()), req).await);
+            return Err(backend_or_404_handler(State(state.to_owned()), req).await);
         }
         if state.ws_psk.is_some() && x_penguin_psk != state.ws_psk {
             warn!("Invalid WebSocket request: invalid PSK {x_penguin_psk:?}");
-            return Err(backend_or_404_handler(State(state.clone()), req).await);
+            return Err(backend_or_404_handler(State(state.to_owned()), req).await);
         }
         if sec_websocket_key.is_none() {
             warn!("Invalid WebSocket request: no sec-websocket-key header");
-            return Err(backend_or_404_handler(State(state.clone()), req).await);
+            return Err(backend_or_404_handler(State(state.to_owned()), req).await);
         }
         if !header_matches!(connection, UPGRADE)
             || !header_matches!(upgrade, WEBSOCKET)
             || !header_matches!(sec_websocket_version, WEBSOCKET_VERSION)
             || !header_matches!(sec_websocket_protocol, WANTED_PROTOCOL)
         {
-            return Err(backend_or_404_handler(State(state.clone()), req).await);
+            return Err(backend_or_404_handler(State(state.to_owned()), req).await);
         }
         if on_upgrade.is_none() {
             error!("Empty `on_upgrade`");
-            return Err(backend_or_404_handler(State(state.clone()), req).await);
+            return Err(backend_or_404_handler(State(state.to_owned()), req).await);
         }
         // We can `unwrap()` here because we checked that the header is present
         let sec_websocket_accept = make_sec_websocket_accept(sec_websocket_key.unwrap());

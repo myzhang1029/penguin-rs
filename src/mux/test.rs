@@ -7,6 +7,16 @@ use tracing::{debug, info};
 
 #[tokio::test]
 async fn connect_succeeds() {
+    use tracing_subscriber::{filter, fmt, prelude::*};
+    let fmt_layer = fmt::Layer::default()
+        .compact()
+        .with_thread_ids(true)
+        .with_timer(fmt::time::time())
+        .with_writer(std::io::stderr);
+    tracing_subscriber::registry()
+        .with(filter::LevelFilter::TRACE)
+        .with(fmt_layer)
+        .init();
     let (client, server) = duplex(10);
     let client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
     let server = WebSocketStream::from_raw_socket(server, Role::Server, None).await;
@@ -42,7 +52,7 @@ async fn connected_stream_passes_data() {
 
     let input_bytes: Vec<u8> = (0..(1024 * 1024)).map(|_| rand::random::<u8>()).collect();
     let len = input_bytes.len();
-    let input_bytes_clone = input_bytes.clone();
+    let input_bytes_clone = input_bytes.to_owned();
 
     tokio::spawn(async move {
         let mut conn = server_mux.server_new_stream_channel().await.unwrap();
@@ -68,6 +78,45 @@ async fn connected_stream_passes_data() {
             break;
         }
         output_bytes.extend_from_slice(&buf[..bytes]);
+        debug!("Read {} bytes", output_bytes.len());
+    }
+
+    assert_eq!(input_bytes, output_bytes);
+}
+
+#[tokio::test]
+async fn test_early_eof_detected() {
+    let (client, server) = duplex(10);
+    let client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
+    let server = WebSocketStream::from_raw_socket(server, Role::Server, None).await;
+
+    let client_mux = Multiplexor::new(client, Role::Client, None);
+    let server_mux = Multiplexor::new(server, Role::Server, None);
+
+    let input_bytes: Vec<u8> = (0..1024).map(|_| rand::random::<u8>()).collect();
+    let len = input_bytes.len();
+    let input_bytes_clone = input_bytes.to_owned();
+
+    tokio::spawn(async move {
+        let mut conn = server_mux.server_new_stream_channel().await.unwrap();
+        conn.write_all(&input_bytes_clone).await.unwrap();
+        info!("Done send");
+    });
+
+    let mut output_bytes: Vec<u8> = vec![];
+
+    let mut conn = client_mux
+        .client_new_stream_channel(vec![], 0)
+        .await
+        .unwrap();
+    while output_bytes.len() < len + 2 {
+        let mut buf = [0u8; 2048];
+        let bytes = conn.read(&mut buf).await.unwrap();
+        if bytes == 0 {
+            break;
+        }
+        output_bytes.extend_from_slice(&buf[..bytes]);
+        debug!("Read {} bytes", output_bytes.len());
     }
 
     assert_eq!(input_bytes, output_bytes);

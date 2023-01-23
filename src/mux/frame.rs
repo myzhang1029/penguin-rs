@@ -81,7 +81,6 @@ impl Debug for StreamFrame {
 
 impl StreamFrame {
     /// Create a new `Syn` frame.
-    #[tracing::instrument(skip_all, level = "trace")]
     #[must_use]
     pub fn new_syn(dest_host: &[u8], dest_port: u16, sport: u16) -> Result<Self, Error> {
         let host_len = dest_host.len();
@@ -98,9 +97,8 @@ impl StreamFrame {
         })
     }
     /// Create a new `Ack` frame.
-    #[tracing::instrument(skip_all, level = "trace")]
     #[must_use]
-    pub fn new_ack(sport: u16, dport: u16) -> Self {
+    pub const fn new_ack(sport: u16, dport: u16) -> Self {
         Self {
             sport,
             dport,
@@ -109,14 +107,33 @@ impl StreamFrame {
         }
     }
     /// Create a new `Rst` frame.
-    #[tracing::instrument(skip_all, level = "trace")]
     #[must_use]
-    pub fn new_rst(sport: u16, dport: u16) -> Self {
+    pub const fn new_rst(sport: u16, dport: u16) -> Self {
         Self {
             sport,
             dport,
             flag: StreamFlag::Rst,
             data: vec![],
+        }
+    }
+    /// Create a new `Fin` frame.
+    #[must_use]
+    pub const fn new_fin(sport: u16, dport: u16) -> Self {
+        Self {
+            sport,
+            dport,
+            flag: StreamFlag::Fin,
+            data: vec![],
+        }
+    }
+    /// Create a new `Psh` frame.
+    #[must_use]
+    pub const fn new_psh(sport: u16, dport: u16, data: Vec<u8>) -> Self {
+        Self {
+            sport,
+            dport,
+            flag: StreamFlag::Psh,
+            data,
         }
     }
 }
@@ -160,7 +177,7 @@ impl TryFrom<Frame> for Vec<u8> {
 
     /// Convert a `Frame` to bytes. Gives an error when
     /// `DatagramFrame::host` is longer than 255 octets.
-    #[tracing::instrument(skip_all, level = "trace")]
+    #[tracing::instrument(level = "trace")]
     fn try_from(frame: Frame) -> Result<Vec<u8>, Self::Error> {
         match frame {
             Frame::Stream(mut frame) => {
@@ -265,13 +282,17 @@ mod tests {
 
     #[test]
     fn test_stream_frame() {
-        let frame = Frame::Stream(StreamFrame {
-            sport: 1234,
-            dport: 5678,
-            flag: StreamFlag::Syn,
-            data: vec![1, 2, 3, 4],
-        });
-        let bytes = Vec::try_from(frame.clone()).unwrap();
+        let frame = Frame::Stream(StreamFrame::new_syn(&[], 5678, 1234).unwrap());
+        assert_eq!(
+            frame,
+            Frame::Stream(StreamFrame {
+                sport: 1234,
+                dport: 0,
+                flag: StreamFlag::Syn,
+                data: vec![0x00, 0x16, 0x2e]
+            })
+        );
+        let bytes = Vec::try_from(frame.to_owned()).unwrap();
         let decoded = Frame::try_from(bytes).unwrap();
         assert_eq!(frame, decoded);
     }
@@ -284,7 +305,7 @@ mod tests {
             sid: 5678,
             data: vec![1, 2, 3, 4],
         });
-        let bytes = Vec::try_from(frame.clone()).unwrap();
+        let bytes = Vec::try_from(frame.to_owned()).unwrap();
         let decoded = Frame::try_from(bytes).unwrap();
         assert_eq!(frame, decoded);
     }
@@ -293,12 +314,19 @@ mod tests {
     /// frames does not change without a protocol version bump.
     #[test]
     fn test_frame_repr() {
-        let frame = Frame::Stream(StreamFrame {
-            sport: 1234,
-            dport: 5678,
-            flag: StreamFlag::Psh,
-            data: vec![1, 2, 3, 4],
-        });
+        let frame = Frame::Stream(StreamFrame::new_rst(1234, 5678));
+        let bytes = Vec::try_from(frame).unwrap();
+        assert_eq!(
+            bytes,
+            vec![
+                0x01, // frame type (u8)
+                0x04, 0xd2, // sport (u16)
+                0x16, 0x2e, // dport (u16)
+                0x03, // flag (u8)
+            ]
+        );
+
+        let frame = Frame::Stream(StreamFrame::new_psh(1234, 5678, vec![1, 2, 3, 4]));
         let bytes = Vec::try_from(frame).unwrap();
         assert_eq!(
             bytes,
@@ -311,12 +339,7 @@ mod tests {
             ]
         );
 
-        let frame = Frame::Stream(StreamFrame {
-            sport: 5678,
-            dport: 1234,
-            flag: StreamFlag::Fin,
-            data: vec![],
-        });
+        let frame = Frame::Stream(StreamFrame::new_fin(5678, 1234));
         let bytes = Vec::try_from(frame).unwrap();
         assert_eq!(
             bytes,

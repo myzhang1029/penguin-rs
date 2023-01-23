@@ -56,7 +56,7 @@ pub(super) async fn udp_forward_to(
                 trace!("got UDP response from {target}");
                 let datagram_frame = DatagramFrame {
                     sid: client_id,
-                    host: rhost.clone(),
+                    host: rhost.to_owned(),
                     port: rport,
                     data: buf[..len].to_vec(),
                 };

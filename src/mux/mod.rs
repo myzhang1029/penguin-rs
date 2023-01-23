@@ -7,10 +7,13 @@
 
 mod frame;
 mod inner;
+mod locked_sink;
+mod stream;
 #[cfg(test)]
 mod test;
 
 use crate::config;
+use crate::mux::locked_sink::LockedMessageSink;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{pin_mut, FutureExt, Sink as FutureSink, Stream as FutureStream, StreamExt};
 use inner::MultiplexorInner;
@@ -27,7 +30,7 @@ use tracing::{error, trace, warn};
 use tungstenite::Message;
 
 pub use frame::{DatagramFrame, Frame, StreamFlag, StreamFrame};
-pub use inner::MuxStream;
+pub use stream::MuxStream;
 pub use tungstenite::protocol::Role;
 
 /// Multiplexor error
@@ -39,6 +42,8 @@ pub enum Error {
     Tungstenite(#[from] tungstenite::Error),
     #[error("invalid message: {0}")]
     InvalidMessage(#[from] frame::Error),
+    #[error(transparent)]
+    LockedSink(#[from] locked_sink::SinkError),
     #[error("received `Text` message")]
     TextMessage,
     #[error("server received `Ack` frame")]
@@ -46,7 +51,7 @@ pub enum Error {
     #[error("client received `Syn` frame")]
     ClientReceivedSyn,
     #[error(transparent)]
-    SendFrameToChannel(#[from] tokio::sync::mpsc::error::SendError<Frame>),
+    SendFrameToChannel(#[from] tokio::sync::mpsc::error::SendError<Vec<u8>>),
     #[error(transparent)]
     SendDatagramToClient(#[from] tokio::sync::mpsc::error::SendError<DatagramFrame>),
     #[error("cannot send stream to client: {0}")]
@@ -79,7 +84,7 @@ where
 
         let inner = Arc::new(MultiplexorInner {
             role,
-            sink: RwLock::new(sink),
+            sink: LockedMessageSink::new(sink),
             stream: RwLock::new(stream),
             keepalive_interval,
             streams: RwLock::new(HashMap::new()),

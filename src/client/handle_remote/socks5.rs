@@ -333,8 +333,6 @@ async fn handle_udp_relay_header<'buf>(
     socket: &UdpSocket,
     buf: &'buf mut [u8],
 ) -> Result<Option<(String, u16, &'buf [u8], usize, IpAddr, u16)>, Error> {
-    // XXX: Note that we block on reading from the channel. This means that
-    // only one client can use the channel at a time.
     let (len, addr) = socket.recv_from(buf).await?;
     // let _reserved = &buf[..2];
     let frag = buf[2];

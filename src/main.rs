@@ -1,6 +1,5 @@
 //! A fast TCP/UDP tunnel, transported over HTTP WebSockets.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
-#![forbid(unsafe_code)]
 
 mod arg;
 mod client;

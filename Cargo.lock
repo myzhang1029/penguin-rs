@@ -920,6 +920,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-tungstenite",
+ "tokio-util",
  "tower-http",
  "tracing",
  "tracing-subscriber",

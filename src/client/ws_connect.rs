@@ -42,7 +42,7 @@ pub async fn handshake(
     let is_tls = url.scheme().unwrap().as_str() == "wss";
 
     // Use a request to allow additional headers
-    let mut req: Request = url.0.clone().into_client_request()?;
+    let mut req: Request = url.0.to_owned().into_client_request()?;
     let req_headers = req.headers_mut();
     // Add protocol version
     req_headers.insert(
@@ -51,15 +51,15 @@ pub async fn handshake(
     );
     // Add PSK
     if let Some(ws_psk) = ws_psk {
-        req_headers.insert("x-penguin-psk", ws_psk.clone());
+        req_headers.insert("x-penguin-psk", ws_psk.to_owned());
     }
     // Add potentially custom hostname
     if let Some(hostname) = override_hostname {
-        req_headers.insert("host", hostname.clone());
+        req_headers.insert("host", hostname.to_owned());
     }
     // Now add custom headers
     for header in extra_headers {
-        req_headers.insert(header.name.clone(), header.value.clone());
+        req_headers.insert(header.name.to_owned(), header.value.to_owned());
     }
 
     let connector = if is_tls {

@@ -10,12 +10,11 @@ pub const DEFAULT_WS_CONFIG: WebSocketConfig = WebSocketConfig {
     accept_unmasked_frames: false,
 };
 
-/// Number of frames to buffer in the channels before blocking
+/// Number of datagram frames to buffer in the channels before blocking
 pub const DATAGRAM_BUFFER_SIZE: usize = 2 << 8;
+/// Number of `MuxStream`s to buffer in the channels before blocking
 pub const STREAM_BUFFER_SIZE: usize = 2 << 8;
-/// Size of the `n` in `duplex(n)`
-pub const DUPLEX_SIZE: usize = 2 << 21;
-/// Less than `max_frame_size` - header size
-pub const READ_BUF_SIZE: usize = 2 << 22;
+/// Number of `StreamFrame`s to buffer in `MuxStream`'s channels before blocking
+pub const STREAM_FRAME_BUFFER_SIZE: usize = 2 << 8;
 
 pub const UDP_PRUNE_TIMEOUT: time::Duration = time::Duration::from_secs(60);

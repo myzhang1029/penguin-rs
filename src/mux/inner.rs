@@ -2,104 +2,48 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::frame::{DatagramFrame, Frame, StreamFlag, StreamFrame};
+use super::locked_sink::LockedMessageSink;
+use super::stream::MuxStream;
 use super::{Error, IntKey, Role};
 use crate::config;
 use bytes::Buf;
-use futures_util::{Sink as FutureSink, SinkExt, Stream as FutureStream, StreamExt};
+use futures_util::{Sink as FutureSink, Stream as FutureStream, StreamExt};
 use std::collections::HashMap;
 use std::sync::Arc;
 pub use tokio::io::DuplexStream;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, WriteHalf};
-use tokio::sync::RwLock;
+use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, error, trace, warn};
 use tungstenite::Message;
 
-/// All parameters of a stream channel
-#[derive(Debug)]
-pub struct MuxStream<Sink, Stream> {
-    /// Communication happens here
-    stream: DuplexStream,
-    /// Our port
-    pub our_port: u16,
-    /// Port of the other end
-    pub their_port: u16,
-    /// Forwarding destination. Only used on `Role::Server`
-    pub dest_host: Vec<u8>,
-    /// Forwarding destination port. Only used on `Role::Server`
-    pub dest_port: u16,
-    inner: Arc<MultiplexorInner<Sink, Stream>>,
-}
-
-impl<Sink, Stream> Drop for MuxStream<Sink, Stream> {
-    fn drop(&mut self) {
-        // Notify the task that this port is no longer in use
-        self.inner
-            .dropped_ports_tx
-            .send(self.our_port)
-            // Maybe the task has already exited, who knows
-            .unwrap_or_else(|_| warn!("Failed to notify task of dropped port"));
-    }
-}
-
-// Proxy the AsyncRead trait to the underlying stream so that users don't access `stream`
-impl<Sink, Stream> AsyncRead for MuxStream<Sink, Stream> {
-    #[inline]
-    fn poll_read(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> std::task::Poll<Result<(), std::io::Error>> {
-        std::pin::Pin::new(&mut self.stream).poll_read(cx, buf)
-    }
-}
-
-impl<Sink, Stream> AsyncWrite for MuxStream<Sink, Stream> {
-    #[inline]
-    fn poll_write(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> std::task::Poll<Result<usize, std::io::Error>> {
-        std::pin::Pin::new(&mut self.stream).poll_write(cx, buf)
-    }
-
-    #[inline]
-    fn poll_flush(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), std::io::Error>> {
-        std::pin::Pin::new(&mut self.stream).poll_flush(cx)
-    }
-
-    #[inline]
-    fn poll_shutdown(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), std::io::Error>> {
-        std::pin::Pin::new(&mut self.stream).poll_shutdown(cx)
-    }
-}
-
 /// Multiplexor inner
-#[derive(Debug)]
 pub(super) struct MultiplexorInner<Sink, Stream> {
     /// The role of this multiplexor
     pub(super) role: Role,
     /// The underlying `Sink` of messages
-    pub(super) sink: RwLock<Sink>,
+    pub(super) sink: LockedMessageSink<Sink>,
     /// The underlying `Stream` of messages
     pub(super) stream: RwLock<Stream>,
     /// Interval between keepalive `Ping`s
     pub(super) keepalive_interval: Option<std::time::Duration>,
-    /// Open stream channels
-    pub(super) streams: RwLock<HashMap<u16, WriteHalf<DuplexStream>>>,
+    /// Open stream channels: our_port -> writer
+    pub(super) streams: RwLock<HashMap<u16, mpsc::Sender<Vec<u8>>>>,
     /// Channel of received datagram frames for processing
-    pub(super) datagram_rx: RwLock<tokio::sync::mpsc::Receiver<DatagramFrame>>,
+    pub(super) datagram_rx: RwLock<mpsc::Receiver<DatagramFrame>>,
     /// Channel of established streams for processing
-    pub(super) stream_rx: RwLock<tokio::sync::mpsc::Receiver<MuxStream<Sink, Stream>>>,
-    /// Channel for notifying the task of a dropped port. Sending 0 means that the
-    /// multiplexor is being dropped and the task should exit.
-    pub(super) dropped_ports_tx: tokio::sync::mpsc::UnboundedSender<u16>,
+    pub(super) stream_rx: RwLock<mpsc::Receiver<MuxStream<Sink, Stream>>>,
+    /// Channel for notifying the task of a dropped `MuxStream`.
+    /// Sending 0 means that the multiplexor is being dropped and the
+    /// task should exit.
+    pub(super) dropped_ports_tx: mpsc::UnboundedSender<u16>,
+}
+
+impl<Sink, Stream> std::fmt::Debug for MultiplexorInner<Sink, Stream> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MultiplexorInner")
+            .field("role", &self.role)
+            .field("keepalive_interval", &self.keepalive_interval)
+            .finish()
+    }
 }
 
 impl<Sink, Stream> MultiplexorInner<Sink, Stream>
@@ -113,12 +57,12 @@ where
     /// - Sends received datagrams to the `datagram_tx` channel
     /// - Sends received streams to the appropriate handler
     /// - Responds to ping/pong messages
-    #[tracing::instrument(skip_all, level = "trace")]
+    #[tracing::instrument(skip(datagram_tx, stream_tx, dropped_ports_rx), level = "trace")]
     pub(super) async fn task(
         self: Arc<Self>,
-        mut datagram_tx: tokio::sync::mpsc::Sender<DatagramFrame>,
-        mut stream_tx: tokio::sync::mpsc::Sender<MuxStream<Sink, Stream>>,
-        mut dropped_ports_rx: tokio::sync::mpsc::UnboundedReceiver<u16>,
+        mut datagram_tx: mpsc::Sender<DatagramFrame>,
+        mut stream_tx: mpsc::Sender<MuxStream<Sink, Stream>>,
+        mut dropped_ports_rx: mpsc::UnboundedReceiver<u16>,
     ) -> Result<(), Error> {
         let mut keepalive_interval = MaybeInterval::new(self.keepalive_interval);
         loop {
@@ -129,7 +73,7 @@ where
                         debug!("mux dropped");
                         break;
                     }
-                    debug!("freeing port: {}", port);
+                    debug!("freeing port {}", port);
                     self.streams.write().await.remove(&port);
                 }
                 Some(msg) = self.next_message() => {
@@ -140,21 +84,20 @@ where
                     }
                 }
                 _ = keepalive_interval.tick() => {
-                    let mut sink = self.sink.write().await;
                     trace!("sending ping");
-                    sink.send(Message::Ping(vec![])).await?;
+                    self.sink.send_message(Message::Ping(vec![])).await?;
                 }
                 else => {
                     break;
                 }
             }
         }
-        self.close_all_write().await;
+        self.shutdown().await;
         Ok(())
     }
 
     /// Get the next message
-    #[tracing::instrument(skip_all, level = "trace")]
+    #[tracing::instrument(level = "trace")]
     #[inline]
     async fn next_message(&self) -> Option<tungstenite::Result<Message>> {
         let mut stream = self.stream.write().await;
@@ -171,11 +114,11 @@ where
     /// - Otherwise, we find the `DuplexStream` with the matching `dport` and
     ///   - Send the data to the `DuplexStream`.
     ///   - If the `DuplexStream` is closed, send a `Fin` frame.
-    #[tracing::instrument(skip_all, level = "trace")]
+    #[tracing::instrument(skip(stream_frame, stream_tx), level = "trace")]
     async fn process_stream_frame(
         self: Arc<Self>,
         stream_frame: StreamFrame,
-        stream_tx: &mut tokio::sync::mpsc::Sender<MuxStream<Sink, Stream>>,
+        stream_tx: &mut mpsc::Sender<MuxStream<Sink, Stream>>,
     ) -> Result<(), Error> {
         let StreamFrame {
             dport: our_port,
@@ -195,21 +138,22 @@ where
                 let dest_port = syn_data.get_u16();
                 let our_port = u16::next_available_key(&*self.streams.read().await);
                 trace!("port: {}", our_port);
-                // `our` is our end, `their` is the user's end
-                let (our, their) = tokio::io::duplex(config::DUPLEX_SIZE);
-                let (our_rx, our_tx) = tokio::io::split(our);
+                // `tx` is our end, `rx` is the user's end
+                let (tx, rx) = mpsc::channel(config::STREAM_FRAME_BUFFER_SIZE);
                 // Save the TX end of the stream so we can write to it when subsequent frames arrive
                 let mut streams = self.streams.write().await;
-                streams.insert(our_port, our_tx);
+                streams.insert(our_port, tx);
                 drop(streams);
                 let stream = MuxStream {
-                    stream: their,
+                    stream_rx: rx,
                     // "we" is `role == Server`
                     our_port,
                     // "they" is `role == Client`
                     their_port,
                     dest_host,
                     dest_port,
+                    fin_sent: false,
+                    buf: None,
                     inner: self.clone(),
                 };
                 trace!("sending stream to user");
@@ -222,28 +166,27 @@ where
                 let ack_frame = Frame::Stream(StreamFrame::new_ack(our_port, their_port));
                 trace!("sending ack");
                 self.send_frame(ack_frame).await?;
-                // Read from the stream and pack frames
-                tokio::spawn(self.stream_task(our_port, their_port, our_rx));
             }
             StreamFlag::Ack => {
                 if self.role == Role::Server {
                     return Err(Error::ServerReceivedAck);
                 }
-                // See `server.rs`
-                let (our, their) = tokio::io::duplex(config::DUPLEX_SIZE);
-                let (our_rx, our_tx) = tokio::io::split(our);
+                // `tx` is our end, `rx` is the user's end
+                let (tx, rx) = mpsc::channel(config::STREAM_FRAME_BUFFER_SIZE);
                 // Save the TX end of the stream so we can write to it when subsequent frames arrive
                 let mut streams = self.streams.write().await;
-                streams.insert(our_port, our_tx);
+                streams.insert(our_port, tx);
                 drop(streams);
                 let stream = MuxStream {
-                    stream: their,
+                    stream_rx: rx,
                     // "we" is `role == Client`
                     our_port,
                     // "they" is `role == Server`
                     their_port,
                     dest_host: vec![],
                     dest_port: 0,
+                    fin_sent: false,
+                    buf: None,
                     inner: self.clone(),
                 };
                 // This goes to the user
@@ -251,16 +194,15 @@ where
                     .send(stream)
                     .await
                     .map_err(|e| Error::SendStreamToClient(e.to_string()))?;
-                // Read from the stream and pack frames
-                tokio::spawn(self.stream_task(our_port, their_port, our_rx));
             }
             StreamFlag::Rst | StreamFlag::Fin => {
-                self.close_write(our_port).await;
+                // So subsequent reads will return EOF
+                self.streams.write().await.remove(&our_port);
             }
             StreamFlag::Psh => {
                 let mut streams = self.streams.write().await;
-                if let Some(stream) = streams.get_mut(&our_port) {
-                    stream.write_all(&data).await?;
+                if let Some(frame_sender) = streams.get_mut(&our_port) {
+                    frame_sender.send(data).await?;
                 } else {
                     let rst_frame = Frame::Stream(StreamFrame::new_rst(our_port, their_port));
                     warn!("Port {our_port} not found, sending RST");
@@ -271,22 +213,26 @@ where
         Ok(())
     }
 
-    /// Send a frame
-    #[tracing::instrument(skip_all, level = "trace")]
+    /// Send a frame.
+    ///
+    /// This method flushes the sink immediately after sending the frame,
+    /// so it is designed to be used for control frames or frames that
+    /// require immediate delivery.
+    #[tracing::instrument(level = "trace")]
     pub(super) async fn send_frame(&self, frame: Frame) -> Result<(), Error> {
-        let mut sink = self.sink.write().await;
-        sink.send(frame.try_into()?).await?;
+        self.sink.send_message(frame.try_into()?).await?;
+        self.sink.flush().await?;
         Ok(())
     }
 
     /// Process an incoming message
     /// Returns `Ok(true)` if we should close
-    #[tracing::instrument(skip_all, level = "trace")]
+    #[tracing::instrument(skip(msg, datagram_tx, stream_tx), level = "trace")]
     async fn process_message(
         self: Arc<Self>,
         msg: Message,
-        datagram_tx: &mut tokio::sync::mpsc::Sender<DatagramFrame>,
-        stream_tx: &mut tokio::sync::mpsc::Sender<MuxStream<Sink, Stream>>,
+        datagram_tx: &mut mpsc::Sender<DatagramFrame>,
+        stream_tx: &mut mpsc::Sender<MuxStream<Sink, Stream>>,
     ) -> Result<bool, Error> {
         match msg {
             Message::Binary(data) => {
@@ -305,8 +251,7 @@ where
             }
             Message::Ping(data) => {
                 trace!("Received ping: {:?}", data);
-                let mut sink = self.sink.write().await;
-                sink.send(Message::Pong(data)).await?;
+                self.sink.send_message(Message::Pong(data)).await?;
                 Ok(false)
             }
             Message::Pong(data) => {
@@ -327,62 +272,14 @@ where
         }
     }
 
-    /// Spawn a reader task on a stream
-    #[tracing::instrument(skip(self, stream), level = "trace")]
-    async fn stream_task(
-        self: Arc<Self>,
-        sport: u16,
-        dport: u16,
-        mut stream: tokio::io::ReadHalf<tokio::io::DuplexStream>,
-    ) -> Result<(), Error> {
-        loop {
-            let mut buf = vec![0; config::READ_BUF_SIZE];
-            let n = stream.read(&mut buf).await?;
-            if n == 0 {
-                // Send a Fin
-                self.send_frame(Frame::Stream(StreamFrame {
-                    sport,
-                    dport,
-                    data: vec![],
-                    flag: StreamFlag::Fin,
-                }))
-                .await?;
-                return Ok(());
-            }
-            self.send_frame(Frame::Stream(StreamFrame {
-                sport,
-                dport,
-                data: buf[..n].to_vec(),
-                flag: StreamFlag::Psh,
-            }))
-            .await?;
-        }
-    }
-
-    /// Close a port's write end.
-    #[tracing::instrument(skip(self), level = "trace")]
-    async fn close_write(&self, port: u16) {
-        let mut streams = self.streams.write().await;
-        if let Some(stream) = streams.get_mut(&port) {
-            stream.shutdown().await.unwrap_or_else(|e| {
-                warn!("Failed to shutdown stream: {:?}", e);
-            });
-            // Which should still allow `ReadHalf` to read the remaining data
-            // Wait until it is `Drop`ped before removing the port from the map,
-            // which is done in `task`
-        }
-    }
-
-    /// Close all write ends of the streams
-    #[tracing::instrument(skip_all, level = "trace")]
-    async fn close_all_write(&self) {
+    /// Should really only be called when the muxer is dropped
+    #[tracing::instrument(level = "trace")]
+    async fn shutdown(&self) {
         debug!("closing all connections");
-        let streams = self.streams.read().await;
-        let ports: Vec<_> = streams.keys().copied().collect();
+        let mut streams = self.streams.write().await;
+        streams.clear();
         drop(streams);
-        for port in ports {
-            self.close_write(port).await;
-        }
+        self.sink.close().await.ok();
     }
 }
 

@@ -259,7 +259,7 @@ async fn get_send_stream_chan_or_put_back(
 ) -> Result<bool, Error> {
     trace!("requesting a new TCP channel");
     match mux
-        .client_new_stream_channel(stream_command.host.clone(), stream_command.port)
+        .client_new_stream_channel(stream_command.host.to_owned(), stream_command.port)
         .await
     {
         Ok(stream) => {
