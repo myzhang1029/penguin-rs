@@ -15,6 +15,10 @@ license = "Apache-2.0 OR GPL-3.0-or-later"
 keywords = ["cli", "web", "websocket"]
 categories = ["asynchronous", "command-line-utilities", "network-programming"]
 
+[[bin]]
+name = "penguin"
+path = "src/main.rs"
+
 [dependencies]
 axum = { version = "0.6", features = ["headers", "tokio", "ws"] }
 axum-server = { version = "0.4", features = ["tls-rustls"] }

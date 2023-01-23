@@ -170,7 +170,7 @@ impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedMessag
     /// Lock and send a message
     #[tracing::instrument(skip_all, level = "trace")]
     pub async fn send_message(&self, msg: Message) -> Result<(), tungstenite::Error> {
-        std::future::poll_fn(move |cx| self.poll_send_message(cx, &msg)).await
+        std::future::poll_fn(|cx| self.poll_send_message(cx, &msg)).await
     }
 
     /// Lock and run `sink.poll_flush` on the underlying `Sink`.
