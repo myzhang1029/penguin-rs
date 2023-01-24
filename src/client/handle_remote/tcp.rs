@@ -57,7 +57,7 @@ pub(super) async fn handle_tcp(
         );
         tokio::spawn(async move {
             if let Err(error) = tokio::io::copy_bidirectional(&mut channel, &mut tcp_stream).await {
-                error!("TCP forwarder failed: {error}");
+                warn!("TCP forwarder failed: {error}");
             }
         });
     }
