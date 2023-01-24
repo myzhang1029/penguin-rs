@@ -15,7 +15,7 @@ mod test;
 use crate::config;
 use crate::mux::locked_sink::LockedMessageSink;
 use futures_util::stream::{SplitSink, SplitStream};
-use futures_util::{pin_mut, FutureExt, Sink as FutureSink, Stream as FutureStream, StreamExt};
+use futures_util::{Sink as FutureSink, Stream as FutureStream, StreamExt};
 use inner::MultiplexorInner;
 use rand::distributions::uniform::SampleUniform;
 use rand::Rng;
@@ -166,31 +166,6 @@ impl<Sink, Stream> Drop for Multiplexor<Sink, Stream> {
             .dropped_ports_tx
             .send((0, 0, false))
             .unwrap_or_else(|_| warn!("Failed to notify task of dropped mux"));
-    }
-}
-
-/// Read/write to and from (i.e. bidirectionally forward) a pair of streams
-#[tracing::instrument(skip_all, level = "debug")]
-pub async fn pipe_streams<R1, W1, R2, W2>(
-    mut reader1: R1,
-    mut writer1: W1,
-    mut reader2: R2,
-    mut writer2: W2,
-) -> std::io::Result<u64>
-where
-    R1: AsyncRead + Unpin,
-    W1: AsyncWrite + Unpin,
-    R2: AsyncRead + Unpin,
-    W2: AsyncWrite + Unpin,
-{
-    let pipe1 = tokio::io::copy(&mut reader1, &mut writer2).fuse();
-    let pipe2 = tokio::io::copy(&mut reader2, &mut writer1).fuse();
-
-    pin_mut!(pipe1, pipe2);
-
-    tokio::select! {
-        res = pipe1 => res,
-        res = pipe2 => res
     }
 }
 

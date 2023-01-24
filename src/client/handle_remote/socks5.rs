@@ -2,9 +2,9 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::tcp::request_tcp_channel;
-use super::{Error, HandlerResources};
+use super::{pipe_streams, Error, HandlerResources};
 use crate::client::ClientIdMapEntry;
-use crate::mux::{pipe_streams, DatagramFrame, IntKey};
+use crate::mux::{DatagramFrame, IntKey};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use tokio::io::BufWriter;

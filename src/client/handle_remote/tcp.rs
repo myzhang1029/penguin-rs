@@ -2,12 +2,9 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::super::MaybeRetryableError;
-use super::Error;
+use super::{pipe_streams, Error};
 use crate::client::HandlerResources;
-use crate::{
-    client::{MuxStream, StreamCommand},
-    mux::pipe_streams,
-};
+use crate::client::{MuxStream, StreamCommand};
 use tokio::{
     io::{BufReader, BufWriter},
     net::TcpListener,
@@ -33,6 +30,21 @@ pub(super) async fn request_tcp_channel(
     Ok(rx.await?)
 }
 
+/// Open a TCP listener.
+#[inline]
+#[tracing::instrument(level = "trace")]
+pub(super) async fn open_tcp_listener(
+    lhost: &str,
+    lport: u16,
+) -> std::io::Result<TcpListener> {
+    let listener = TcpListener::bind((lhost, lport)).await?;
+    let local_addr = listener
+        .local_addr()
+        .map_or(format!("{lhost}:{lport}"), |addr| addr.to_string());
+    info!("Listening on {local_addr}");
+    Ok(listener)
+}
+
 /// Handle a TCP Inet->Inet remote.
 #[inline]
 #[tracing::instrument(skip(handler_resources), level = "debug")]
@@ -43,11 +55,7 @@ pub(super) async fn handle_tcp(
     rport: u16,
     handler_resources: &HandlerResources,
 ) -> Result<(), Error> {
-    let listener = TcpListener::bind((lhost, lport)).await?;
-    let local_addr = listener
-        .local_addr()
-        .map_or(format!("{lhost}:{lport}"), |addr| addr.to_string());
-    info!("Listening on {local_addr}");
+    let listener = open_tcp_listener(lhost, lport).await?;
     loop {
         let (mut tcp_stream, _) = listener.accept().await?;
         // A new channel is created for each incoming TCP connection.

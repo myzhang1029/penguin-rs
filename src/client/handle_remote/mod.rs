@@ -17,9 +17,9 @@ use crate::parse_remote::{Protocol, Remote};
 use socks5::handle_socks_connection;
 use tcp::{handle_tcp, handle_tcp_stdio};
 use thiserror::Error;
-use tokio::net::TcpListener;
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 use udp::{handle_udp, handle_udp_stdio};
 
 /// Do something or continue
@@ -107,11 +107,7 @@ pub(super) async fn handle_remote(
         }
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Socks, _) => {
             // The parser guarantees that the protocol is TCP
-            let listener = TcpListener::bind((lhost.as_str(), *lport)).await?;
-            let local_addr = listener
-                .local_addr()
-                .map_or(format!("{lhost}:{lport}"), |a| a.to_string());
-            info!("Listening on {local_addr}");
+            let listener = tcp::open_tcp_listener(lhost.as_str(), *lport).await?;
             loop {
                 let (tcp_stream, _) = listener.accept().await?;
                 let (tcp_rx, tcp_tx) = tokio::io::split(tcp_stream);
@@ -132,4 +128,32 @@ pub(super) async fn handle_remote(
             .await?)
         }
     }
+}
+
+/// Read/write to and from (i.e. bidirectionally forward) a pair of streams
+#[tracing::instrument(skip_all, level = "debug")]
+pub async fn pipe_streams<R1, W1, R2, W2>(
+    mut reader1: R1,
+    mut writer1: W1,
+    mut reader2: R2,
+    mut writer2: W2,
+) -> std::io::Result<(u64, u64)>
+where
+    R1: AsyncRead + Unpin,
+    W1: AsyncWrite + Unpin,
+    R2: AsyncRead + Unpin,
+    W2: AsyncWrite + Unpin,
+{
+    let pipe1 = async {
+        let result = tokio::io::copy(&mut reader1, &mut writer2).await;
+        writer2.shutdown().await.ok();
+        result
+    };
+    let pipe2 = async {
+        let result = tokio::io::copy(&mut reader2, &mut writer1).await;
+        writer1.shutdown().await.ok();
+        result
+    };
+
+    tokio::try_join!(pipe1, pipe2)
 }
