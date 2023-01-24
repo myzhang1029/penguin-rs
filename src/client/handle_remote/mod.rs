@@ -108,7 +108,10 @@ pub(super) async fn handle_remote(
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Socks, _) => {
             // The parser guarantees that the protocol is TCP
             let listener = TcpListener::bind((lhost.as_str(), *lport)).await?;
-            info!("Listening on port {lport}");
+            let local_addr = listener
+                .local_addr()
+                .map_or(format!("{lhost}:{lport}"), |a| a.to_string());
+            info!("Listening on {local_addr}");
             loop {
                 let (tcp_stream, _) = listener.accept().await?;
                 let (tcp_rx, tcp_tx) = tokio::io::split(tcp_stream);

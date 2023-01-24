@@ -117,7 +117,7 @@ pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
         // specified if either is specified.
         let tls_cert = args.tls_cert.as_ref().unwrap();
         trace!("Enabling TLS");
-        info!("Listening on wss://{}:{}/ws", args.host, args.port);
+        info!("Listening on wss://{sockaddr}/ws");
         let config = make_rustls_server_config(tls_cert, tls_key, args.tls_ca.as_deref()).await?;
         let config = RustlsConfig::from_config(Arc::new(config));
 
@@ -132,7 +132,7 @@ pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
             .serve(app.into_make_service())
             .await?;
     } else {
-        info!("Listening on ws://{}:{}/ws", args.host, args.port);
+        info!("Listening on ws://{sockaddr}/ws");
         axum::Server::bind(&sockaddr)
             .serve(app.into_make_service())
             .await?;

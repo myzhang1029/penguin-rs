@@ -12,9 +12,9 @@ use rustls_pemfile::Item;
 use thiserror::Error;
 
 /// Skip TLS verification
-pub struct TlsEmptyVerifier {}
+pub struct EmptyVerifier {}
 
-impl ServerCertVerifier for TlsEmptyVerifier {
+impl ServerCertVerifier for EmptyVerifier {
     fn verify_server_cert(
         &self,
         _: &Certificate,
@@ -80,10 +80,10 @@ pub async fn make_rustls_client_config(
     // Whether to skip TLS verification and whether there is a client certificate
     let mut config = match (tls_skip_verify, client_certificate) {
         (true, Some((cert_chain, key_der))) => config
-            .with_custom_certificate_verifier(Arc::new(TlsEmptyVerifier {}))
+            .with_custom_certificate_verifier(Arc::new(EmptyVerifier {}))
             .with_single_cert(cert_chain, key_der)?,
         (true, None) => config
-            .with_custom_certificate_verifier(Arc::new(TlsEmptyVerifier {}))
+            .with_custom_certificate_verifier(Arc::new(EmptyVerifier {}))
             .with_no_client_auth(),
         (false, Some((cert_chain, key_der))) => config
             .with_root_certificates(roots)
@@ -153,9 +153,8 @@ async fn try_load_certificate(
         let certs = certs.into_iter().map(Certificate).collect();
         // Load private key
         let key = tokio::fs::read(key).await?;
-        let key = match rustls_pemfile::read_one(&mut key.as_ref())? {
-            Some(Item::RSAKey(key) | Item::PKCS8Key(key) | Item::ECKey(key)) => key,
-            _ => return Err(Error::PrivateKeyNotSupported),
+        let Some(Item::RSAKey(key) | Item::PKCS8Key(key) | Item::ECKey(key)) = rustls_pemfile::read_one(&mut key.as_ref())? else {
+            return Err(Error::PrivateKeyNotSupported)
         };
         let key = rustls::PrivateKey(key);
         Ok(Some((certs, key)))

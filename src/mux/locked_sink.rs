@@ -4,11 +4,13 @@
 
 use super::frame::{Frame, StreamFrame};
 use futures_util::{Sink as FutureSink, SinkExt};
+use std::cell::UnsafeCell;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
-use std::task::{ready, Waker};
-use std::{cell::UnsafeCell, task::Poll};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Mutex,
+};
+use std::task::{ready, Poll, Waker};
 use thiserror::Error;
 use tracing::{debug, trace};
 use tungstenite::Message;

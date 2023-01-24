@@ -23,6 +23,7 @@
 //! Source ID, and the frame also carries its intended target.
 //! When the server receives datagrams from that target, it will
 //! send them back to the client with the same Source ID.
+#![allow(clippy::similar_names)]
 
 use bytes::{Buf, Bytes};
 use std::{fmt::Debug, num::TryFromIntError};

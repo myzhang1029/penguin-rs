@@ -297,6 +297,7 @@ where
 }
 
 /// UDP task spawned by the TCP connection
+#[allow(clippy::similar_names)]
 async fn udp_relay(
     _rhost: String,
     _rport: u16,
@@ -306,11 +307,9 @@ async fn udp_relay(
     let socket = Arc::new(socket);
     loop {
         let mut buf = [0; 65536];
-        let (dst, dport, data, len, src, sport) =
-            match handle_udp_relay_header(&socket, &mut buf).await? {
-                Some(x) => x,
-                None => continue,
-            };
+        let Some((dst, dport, data, len, src, sport)) = handle_udp_relay_header(&socket, &mut buf).await? else {
+            continue
+        };
         let mut udp_client_id_map = handler_resources.udp_client_id_map.write().await;
         let client_id = u32::next_available_key(&*udp_client_id_map);
         udp_client_id_map.insert(

@@ -92,7 +92,7 @@ where
     RW: AsyncRead + AsyncWrite + Unpin + Send,
 {
     let mut rstream = TcpStream::connect((&*rhost, rport)).await?;
-    trace!("connected to {rhost}:{rport}");
+    trace!("connected to {:?}", rstream.peer_addr());
     tokio::io::copy_bidirectional(&mut channel, &mut rstream).await?;
     trace!("TCP forwarding finished");
     Ok(())

@@ -4,7 +4,7 @@
 use super::frame::{Frame, StreamFrame};
 use super::inner::MultiplexorInner;
 use super::locked_sink::tungstenite_error_to_io_error;
-use bytes::{Buf, Bytes};
+use bytes::Bytes;
 use futures_util::{Sink as FutureSink, Stream as FutureStream};
 use std::io;
 use std::pin::Pin;
@@ -31,7 +31,7 @@ pub struct MuxStream<Sink, Stream> {
     /// Whether `Fin` has been sent
     pub fin_sent: AtomicBool,
     /// Remaining bytes to be read
-    pub(super) buf: Option<Bytes>,
+    pub(super) buf: Bytes,
     pub(super) inner: Arc<MultiplexorInner<Sink, Stream>>,
 }
 
@@ -64,6 +64,10 @@ where
     Stream: FutureStream<Item = tungstenite::Result<Message>> + Send + Sync + Unpin + 'static,
     Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Sync + Unpin + 'static,
 {
+    /// Read data from the stream.
+    /// There are two cases where this function gives EOF:
+    /// 1. One `Message` contains an empty payload.
+    /// 2. `Sink`'s sender is dropped.
     #[tracing::instrument(skip(cx, buf), level = "trace")]
     #[inline]
     fn poll_read(
@@ -72,17 +76,17 @@ where
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<Result<(), std::io::Error>> {
         let remaining = buf.remaining();
-        if let Some(mut our_buf) = self.buf.take() {
+        if !self.buf.is_empty() {
             // There is some data left in `self.buf`. Copy it into `buf`
             trace!("using the remaining buffer");
-            if remaining < our_buf.len() {
+            if remaining < self.buf.len() {
                 // The buffer is too small. Fill it and advance `self.buf`
-                buf.put_slice(&our_buf[..remaining]);
-                our_buf.advance(remaining);
-                self.buf = Some(our_buf);
+                let to_write = self.buf.split_to(remaining);
+                buf.put_slice(&to_write);
             } else {
                 // The buffer is large enough. Copy the frame into it
-                buf.put_slice(&our_buf);
+                buf.put_slice(&self.buf);
+                self.buf.clear();
             }
             return Poll::Ready(Ok(()));
         }
@@ -92,20 +96,17 @@ where
             // We have received a new frame. Copy it into `buf`
             if remaining < frame.len() {
                 // The buffer is too small. Fill it and advance `self.buf`
-                let mut our_buf = Bytes::from(frame);
-                buf.put_slice(&our_buf[..remaining]);
-                our_buf.advance(remaining);
-                self.buf = Some(our_buf);
+                let our_buf = Bytes::from(frame);
+                let to_write = self.buf.split_to(remaining);
+                buf.put_slice(&to_write);
+                self.buf = our_buf;
             } else {
                 // The buffer is large enough. Copy the frame into it
                 buf.put_slice(&frame);
             }
-            Poll::Ready(Ok(()))
-        } else {
-            // The stream has been closed, just return 0 bytes read
-            trace!("stream has been closed");
-            Poll::Ready(Ok(()))
         }
+        // else: The stream has been closed, just return 0 bytes read
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -165,9 +166,7 @@ where
         }
         // We don't want to `close()` the sink here!!!
         // This line is allowed to fail, because the sink might have been closed altogether
-        ready!(self.inner.sink.poll_flush(cx))
-            .map_err(tungstenite_error_to_io_error)
-            .ok();
+        ready!(self.inner.sink.poll_flush(cx)).ok();
         Poll::Ready(Ok(()))
     }
 }

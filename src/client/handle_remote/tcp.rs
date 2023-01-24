@@ -44,7 +44,10 @@ pub(super) async fn handle_tcp(
     handler_resources: &HandlerResources,
 ) -> Result<(), Error> {
     let listener = TcpListener::bind((lhost, lport)).await?;
-    info!("Listening on {lhost}:{lport}");
+    let local_addr = listener
+        .local_addr()
+        .map_or(format!("{lhost}:{lport}"), |addr| addr.to_string());
+    info!("Listening on {local_addr}");
     loop {
         let (mut tcp_stream, _) = listener.accept().await?;
         // A new channel is created for each incoming TCP connection.

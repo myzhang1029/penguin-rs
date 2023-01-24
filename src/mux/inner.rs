@@ -6,7 +6,7 @@ use super::locked_sink::LockedMessageSink;
 use super::stream::MuxStream;
 use super::{Error, IntKey, Role};
 use crate::config;
-use bytes::Buf;
+use bytes::{Buf, Bytes};
 use futures_util::{Sink as FutureSink, Stream as FutureStream, StreamExt};
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
@@ -154,7 +154,7 @@ where
                     dest_host,
                     dest_port,
                     fin_sent: AtomicBool::new(false),
-                    buf: None,
+                    buf: Bytes::new(),
                     inner: self.clone(),
                 };
                 trace!("sending stream to user");
@@ -187,7 +187,7 @@ where
                     dest_host: vec![],
                     dest_port: 0,
                     fin_sent: AtomicBool::new(false),
-                    buf: None,
+                    buf: Bytes::new(),
                     inner: self.clone(),
                 };
                 // This goes to the user

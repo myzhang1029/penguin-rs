@@ -22,7 +22,10 @@ pub(super) async fn handle_udp(
 ) -> Result<(), Error> {
     let socket = UdpSocket::bind((lhost, lport)).await?;
     let socket = Arc::new(socket);
-    info!("Bound on {lhost}:{lport}");
+    let local_addr = socket
+        .local_addr()
+        .map_or(format!("{lhost}:{lport}"), |addr| addr.to_string());
+    info!("Bound on {local_addr}");
     loop {
         let mut buf = [0u8; 65536];
         let (len, addr) = socket.recv_from(&mut buf).await?;
