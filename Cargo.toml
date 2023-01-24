@@ -22,7 +22,7 @@ path = "src/main.rs"
 [dependencies]
 axum = { version = "0.6", features = ["headers", "tokio", "ws"] }
 axum-server = { version = "0.4", features = ["tls-rustls"] }
-base64 = "0.20"
+base64 = "0.21"
 bytes = "1"
 clap = { version = "4", features = ["cargo", "derive"] }
 futures-util = { version = "0.3", default-features = false }
@@ -36,7 +36,7 @@ rustls-native-certs = { version = "0.6", optional = true }
 rustls-pemfile = "1"
 sha1 = "0.10"
 thiserror = "1"
-tokio = { version = ">=1.13.1", features = ["io-std", "macros", "rt-multi-thread", "signal"] }
+tokio = { version = ">=1.23.1", features = ["io-std", "macros", "rt-multi-thread", "signal"] }
 tokio-tungstenite = "0.18"
 tower-http = { version = "0.3.0", features = ["fs", "trace"] }
 tracing = "0.1"

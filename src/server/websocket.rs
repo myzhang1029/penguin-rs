@@ -5,8 +5,18 @@ use super::forwarder::tcp_forwarder_on_channel;
 use super::forwarder::udp_forward_to;
 use super::WebSocket;
 use crate::mux::{DatagramFrame, Multiplexor, Role};
+use futures_util::stream::SplitSink;
+use futures_util::stream::SplitStream;
+use hyper::upgrade::Upgraded;
 use tokio::{sync::mpsc, task::JoinSet};
-use tracing::{debug, error, warn};
+use tokio_tungstenite::WebSocketStream;
+use tracing::{debug, error, trace, warn};
+use tungstenite::Message;
+
+type WSStream = WebSocketStream<Upgraded>;
+pub(super) type Sink = SplitSink<WSStream, Message>;
+pub(super) type Stream = SplitStream<WSStream>;
+pub(super) type MuxStream = crate::mux::MuxStream<Sink, Stream>;
 
 /// Multiplex the `WebSocket` connection and handle the forwarding requests.
 #[tracing::instrument(skip(ws_stream), level = "debug")]
@@ -17,11 +27,19 @@ pub async fn handle_websocket(ws_stream: WebSocket) {
     // Channel for listeners to send UDP datagrams to the main loop
     let (datagram_send_tx, mut datagram_send_rx) = mpsc::channel::<DatagramFrame>(32);
     loop {
+        trace!("server WebSocket loop");
         tokio::select! {
             // Check if any of the jobs have finished
-            Some(Err(err)) = jobs.join_next() => {
-                assert!(!err.is_panic(), "Panic in a forwarder: {err}");
-                debug!("forwarder finished with error: {err}");
+            Some(result) = jobs.join_next() => {
+                match result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(err)) => {
+                        warn!("Forwarder finished with error: {err}");
+                    }
+                    Err(err) => {
+                        assert!(!err.is_panic(), "Panic in a forwarder: {err}");
+                    }
+                }
             }
             // Check if the multiplexor has received a new stream request
             Some(result) = mux.server_new_stream_channel() => {

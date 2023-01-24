@@ -164,7 +164,7 @@ impl<Sink, Stream> Drop for Multiplexor<Sink, Stream> {
     fn drop(&mut self) {
         self.inner
             .dropped_ports_tx
-            .send(0)
+            .send((0, 0, false))
             .unwrap_or_else(|_| warn!("Failed to notify task of dropped mux"));
     }
 }

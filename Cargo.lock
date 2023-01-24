@@ -902,7 +902,7 @@ version = "0.3.3"
 dependencies = [
  "axum",
  "axum-server",
- "base64 0.20.0",
+ "base64 0.21.0",
  "bytes",
  "clap",
  "futures-util",

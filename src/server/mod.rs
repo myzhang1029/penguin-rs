@@ -21,6 +21,8 @@ use axum::{
     Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
+use base64::engine::general_purpose::STANDARD as B64_STANDARD_ENGINE;
+use base64::Engine;
 use http::header::SEC_WEBSOCKET_VERSION;
 use http::HeaderValue;
 use http::Method;
@@ -313,7 +315,7 @@ fn make_sec_websocket_accept(key: &HeaderValue) -> HeaderValue {
     let mut hasher = Sha1::new();
     hasher.update(key.as_bytes());
     hasher.update(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
-    let accept = base64::encode(hasher.finalize().as_slice());
+    let accept = B64_STANDARD_ENGINE.encode(hasher.finalize().as_slice());
     // Shouldn't panic
     accept.parse().expect("Broken header value")
 }

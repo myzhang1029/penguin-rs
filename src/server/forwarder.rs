@@ -5,10 +5,7 @@
 use crate::config;
 use crate::mux::DatagramFrame;
 use thiserror::Error;
-use tokio::{
-    io::{AsyncRead, AsyncWrite},
-    net::TcpStream,
-};
+use tokio::net::TcpStream;
 use tokio::{
     net::{lookup_host, UdpSocket},
     sync::mpsc::Sender,
@@ -83,14 +80,12 @@ pub(super) async fn udp_forward_to(
 /// # Errors
 /// It carries the errors from the underlying TCP or channel IO functions.
 #[tracing::instrument(skip(channel), level = "debug")]
-pub(super) async fn tcp_forwarder_on_channel<RW>(
-    mut channel: RW,
+pub(super) async fn tcp_forwarder_on_channel(
+    mut channel: super::websocket::MuxStream,
     rhost: String,
     rport: u16,
-) -> Result<(), Error>
-where
-    RW: AsyncRead + AsyncWrite + Unpin + Send,
-{
+) -> Result<(), Error> {
+    tracing::info!("TCP forwarding to {}:{}", rhost, rport);
     let mut rstream = TcpStream::connect((&*rhost, rport)).await?;
     trace!("connected to {:?}", rstream.peer_addr());
     tokio::io::copy_bidirectional(&mut channel, &mut rstream).await?;

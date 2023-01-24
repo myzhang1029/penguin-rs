@@ -31,10 +31,13 @@ pub(super) struct MultiplexorInner<Sink, Stream> {
     pub(super) datagram_rx: RwLock<mpsc::Receiver<DatagramFrame>>,
     /// Channel of established streams for processing
     pub(super) stream_rx: RwLock<mpsc::Receiver<MuxStream<Sink, Stream>>>,
-    /// Channel for notifying the task of a dropped `MuxStream`.
-    /// Sending 0 means that the multiplexor is being dropped and the
+    /// Channel for notifying the task of a dropped `MuxStream`
+    /// (in the form (our_port, their_port, fin_sent)).
+    /// Sending (0, _, _) means that the multiplexor is being dropped and the
     /// task should exit.
-    pub(super) dropped_ports_tx: mpsc::UnboundedSender<u16>,
+    /// The reason we need `their_port` is to ensure the connection is `Rst`ed
+    /// if the user did not call `poll_shutdown` on the `MuxStream`.
+    pub(super) dropped_ports_tx: mpsc::UnboundedSender<(u16, u16, bool)>,
 }
 
 impl<Sink, Stream> std::fmt::Debug for MultiplexorInner<Sink, Stream> {
@@ -62,19 +65,29 @@ where
         self: Arc<Self>,
         mut datagram_tx: mpsc::Sender<DatagramFrame>,
         mut stream_tx: mpsc::Sender<MuxStream<Sink, Stream>>,
-        mut dropped_ports_rx: mpsc::UnboundedReceiver<u16>,
+        mut dropped_ports_rx: mpsc::UnboundedReceiver<(u16, u16, bool)>,
     ) -> Result<(), Error> {
         let mut keepalive_interval = MaybeInterval::new(self.keepalive_interval);
         loop {
             trace!("task loop");
             tokio::select! {
-                Some(port) = dropped_ports_rx.recv() => {
-                    if port == 0 {
+                Some((our_port, their_port, fin_sent)) = dropped_ports_rx.recv() => {
+                    if our_port == 0 {
                         debug!("mux dropped");
                         break;
                     }
-                    debug!("freeing port {}", port);
-                    self.shutdown_port(port).await;
+                    debug!("freeing port {}", our_port);
+                    // If the user did not call `poll_shutdown`, we need to send a `Rst` frame
+                    // i.e. `Shutdown::Write`
+                    if !fin_sent {
+                        self.sink.send_message(
+                            Frame::Stream(StreamFrame::new_rst(our_port, their_port))
+                            .try_into()
+                            .expect("Frame should be representable as a message")
+                        ).await.ok();
+                    }
+                    // and this is `Shutdown::Read`
+                    self.shutdown_port(our_port).await;
                 }
                 Some(msg) = self.next_message() => {
                     let msg = msg?;
@@ -286,6 +299,7 @@ where
     }
 
     /// Send EOF to a stream and remove it from the map
+    /// Like `Shutdown::Read`. `Shutdown::Write` is `poll_shutdown` of `MuxStream`.
     #[tracing::instrument(level = "trace")]
     pub async fn shutdown_port(&self, port: u16) {
         let sender = self.streams.write().await.remove(&port);
@@ -296,15 +310,17 @@ where
         }
     }
 
-    /// Should really only be called when the muxer is dropped
+    /// Should really only be called when the mux is dropped
     #[tracing::instrument(level = "trace")]
     async fn shutdown(&self) {
         debug!("closing all connections");
         let mut streams = self.streams.write().await;
+        // See `shutdown_port`
         for (_, tx) in streams.drain() {
             tx.send(vec![]).await.ok();
         }
         drop(streams);
+        // This also effectively `Rst`s all streams
         self.sink.close().await.ok();
     }
 }

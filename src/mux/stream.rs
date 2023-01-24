@@ -52,7 +52,11 @@ impl<Sink, Stream> Drop for MuxStream<Sink, Stream> {
         // Notify the task that this port is no longer in use
         self.inner
             .dropped_ports_tx
-            .send(self.our_port)
+            .send((
+                self.our_port,
+                self.their_port,
+                self.fin_sent.load(Ordering::Relaxed),
+            ))
             // Maybe the task has already exited, who knows
             .unwrap_or_else(|_| warn!("Failed to notify task of dropped port"));
     }
