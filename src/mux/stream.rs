@@ -93,6 +93,12 @@ where
         trace!("polling the stream");
         let next = ready!(self.stream_rx.poll_recv(cx));
         if let Some(frame) = next {
+            if frame.is_empty() {
+                // See `tokio::sync::mpsc`#clean-shutdown
+                self.stream_rx.close();
+                // The stream has been closed, just return 0 bytes read
+                return Poll::Ready(Ok(()));
+            }
             // We have received a new frame. Copy it into `buf`
             if remaining < frame.len() {
                 // The buffer is too small. Fill it and advance `self.buf`

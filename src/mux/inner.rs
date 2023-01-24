@@ -74,7 +74,7 @@ where
                         break;
                     }
                     debug!("freeing port {}", port);
-                    self.streams.write().await.remove(&port);
+                    self.shutdown_port(port).await;
                 }
                 Some(msg) = self.next_message() => {
                     let msg = msg?;
@@ -197,8 +197,7 @@ where
                     .map_err(|e| Error::SendStreamToClient(e.to_string()))?;
             }
             StreamFlag::Rst | StreamFlag::Fin => {
-                // So subsequent reads will return EOF
-                self.streams.write().await.remove(&our_port);
+                self.shutdown_port(our_port).await;
             }
             StreamFlag::Psh => {
                 let mut streams = self.streams.write().await;
@@ -286,12 +285,25 @@ where
         }
     }
 
+    /// Send EOF to a stream and remove it from the map
+    #[tracing::instrument(level = "trace")]
+    pub async fn shutdown_port(&self, port: u16) {
+        let sender = self.streams.write().await.remove(&port);
+        if let Some(sender) = sender {
+            // Sometimes the receiver fails to notice that the sender is dropped
+            // and hangs forever. This is a workaround.
+            sender.send(vec![]).await.ok();
+        }
+    }
+
     /// Should really only be called when the muxer is dropped
     #[tracing::instrument(level = "trace")]
     async fn shutdown(&self) {
         debug!("closing all connections");
         let mut streams = self.streams.write().await;
-        streams.clear();
+        for (_, tx) in streams.drain() {
+            tx.send(vec![]).await.ok();
+        }
         drop(streams);
         self.sink.close().await.ok();
     }
