@@ -1,56 +1,87 @@
 //! Run a remote TCP connection.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
+use super::super::MaybeRetryableError;
 use super::Error;
-use crate::mux::pipe_streams;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tracing::debug;
+use crate::client::HandlerResources;
+use crate::{
+    client::{MuxStream, StreamCommand},
+    mux::pipe_streams,
+};
+use tokio::{
+    io::{BufReader, BufWriter},
+    net::TcpListener,
+    sync::{mpsc, oneshot},
+};
+use tracing::{error, info, warn};
 
-/// Handshaking stuff. See `server/forwarder/mod.rs`.
+/// Request a channel from the mux
 #[inline]
-pub(crate) async fn channel_tcp_handshake<R, W>(
-    mut channel_rx: R,
-    mut channel_tx: W,
+#[tracing::instrument(skip(stream_command_tx), level = "debug")]
+pub(super) async fn request_tcp_channel(
+    stream_command_tx: &mpsc::Sender<StreamCommand>,
+    dest_host: Vec<u8>,
+    dest_port: u16,
+) -> Result<MuxStream, Error> {
+    let (tx, rx) = oneshot::channel();
+    let stream_request = StreamCommand {
+        tx,
+        host: dest_host,
+        port: dest_port,
+    };
+    stream_command_tx.send(stream_request).await?;
+    Ok(rx.await?)
+}
+
+/// Handle a TCP Inet->Inet remote.
+#[inline]
+#[tracing::instrument(skip(handler_resources), level = "debug")]
+pub(super) async fn handle_tcp(
+    lhost: &str,
+    lport: u16,
     rhost: &str,
     rport: u16,
-) -> Result<(), Error>
-where
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin,
-{
-    let command = 0x01;
-    let rhost_len = u8::try_from(rhost.len())?;
-    let mut encoded_rhost = rhost.into();
-    let mut data = vec![command, rhost_len];
-    data.append(&mut encoded_rhost);
-    channel_tx.write_all(&data).await?;
-    channel_tx.write_u16(rport).await?;
-    channel_tx.flush().await?;
-    if channel_rx.read_u8().await? != 0x03 {
-        Err(Error::ServerHandshake)
-    } else {
-        Ok(())
+    handler_resources: &HandlerResources,
+) -> Result<(), Error> {
+    let listener = TcpListener::bind((lhost, lport)).await?;
+    let local_addr = listener
+        .local_addr()
+        .map_or(format!("{lhost}:{lport}"), |addr| addr.to_string());
+    info!("Listening on {local_addr}");
+    loop {
+        let (mut tcp_stream, _) = listener.accept().await?;
+        // A new channel is created for each incoming TCP connection.
+        // It's already TCP, anyways.
+        let mut channel = super::complete_or_continue!(
+            request_tcp_channel(&handler_resources.stream_command_tx, rhost.into(), rport).await
+        );
+        tokio::spawn(async move {
+            if let Err(error) = tokio::io::copy_bidirectional(&mut channel, &mut tcp_stream).await {
+                warn!("TCP forwarder failed: {error}");
+            }
+        });
     }
 }
 
-/// Handle a TCP connection.
-#[tracing::instrument(skip(channel_rx, channel_tx, tcp_rx, tcp_tx), level = "debug")]
-pub(crate) async fn handle_tcp_connection<ReadChan, WriteChan, ReadTcp, WriteTcp>(
-    mut channel_rx: ReadChan,
-    mut channel_tx: WriteChan,
+/// Handle a TCP Stdio->Inet remote.
+#[tracing::instrument(skip(handler_resources))]
+pub(crate) async fn handle_tcp_stdio(
     rhost: &str,
     rport: u16,
-    mut tcp_rx: ReadTcp,
-    mut tcp_tx: WriteTcp,
-) -> Result<(), Error>
-where
-    ReadChan: AsyncRead + Unpin,
-    ReadTcp: AsyncRead + Unpin,
-    WriteChan: AsyncWrite + Unpin,
-    WriteTcp: AsyncWrite + Unpin,
-{
-    channel_tcp_handshake(&mut channel_rx, &mut channel_tx, rhost, rport).await?;
-    pipe_streams(&mut tcp_rx, &mut tcp_tx, &mut channel_rx, &mut channel_tx).await?;
-    debug!("TCP connection closed");
-    Ok(())
+    handler_resources: &HandlerResources,
+) -> Result<(), Error> {
+    let mut stdin = tokio::io::stdin();
+    let mut stdout = tokio::io::stdout();
+    // We want `loop` to be able to continue after a connection failure
+    loop {
+        let channel = super::complete_or_continue!(
+            request_tcp_channel(&handler_resources.stream_command_tx, rhost.into(), rport).await
+        );
+        let (channel_rx, channel_tx) = tokio::io::split(channel);
+        let channel_rx = BufReader::new(channel_rx);
+        let channel_tx = BufWriter::new(channel_tx);
+        super::complete_or_continue_if_retryable!(
+            pipe_streams(&mut stdin, &mut stdout, channel_rx, channel_tx).await
+        );
+    }
 }

@@ -7,7 +7,7 @@ mod websocket;
 use std::sync::Arc;
 
 use crate::arg::{BackendUrl, ServerArgs};
-use crate::mux::DEFAULT_WS_CONFIG;
+use crate::config;
 use crate::proto_version::PROTOCOL_VERSION;
 use crate::tls::make_rustls_server_config;
 use axum::async_trait;
@@ -21,6 +21,8 @@ use axum::{
     Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
+use base64::engine::general_purpose::STANDARD as B64_STANDARD_ENGINE;
+use base64::Engine;
 use http::header::SEC_WEBSOCKET_VERSION;
 use http::HeaderValue;
 use http::Method;
@@ -117,7 +119,7 @@ pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
         // specified if either is specified.
         let tls_cert = args.tls_cert.as_ref().unwrap();
         trace!("Enabling TLS");
-        info!("Listening on wss://{}:{}/ws", args.host, args.port);
+        info!("Listening on wss://{sockaddr}/ws");
         let config = make_rustls_server_config(tls_cert, tls_key, args.tls_ca.as_deref()).await?;
         let config = RustlsConfig::from_config(Arc::new(config));
 
@@ -132,7 +134,7 @@ pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
             .serve(app.into_make_service())
             .await?;
     } else {
-        info!("Listening on ws://{}:{}/ws", args.host, args.port);
+        info!("Listening on ws://{sockaddr}/ws");
         axum::Server::bind(&sockaddr)
             .serve(app.into_make_service())
             .await?;
@@ -168,15 +170,14 @@ async fn backend_or_404_handler(
         let path_query = req
             .uri()
             .path_and_query()
-            .map(|v| v.as_str())
-            .unwrap_or(path);
+            .map_or(path, http::uri::PathAndQuery::as_str);
 
         let uri = Uri::builder()
             // `unwrap()` should not panic because `BackendUrl` is validated
             // by clap.
-            .scheme(backend.scheme.clone())
-            .authority(backend.authority.clone())
-            .path_and_query(format!("{}{}", backend.path.path(), path_query))
+            .scheme(backend.scheme.to_owned())
+            .authority(backend.authority.to_owned())
+            .path_and_query(format!("{}{path_query}", backend.path.path()))
             .build()
             .unwrap();
         *req.uri_mut() = uri;
@@ -192,25 +193,26 @@ async fn backend_or_404_handler(
 }
 
 /// 404 handler
+#[allow(clippy::unused_async)]
 async fn not_found_handler(State(state): State<ServerState<'static>>) -> Response {
     (StatusCode::NOT_FOUND, state.not_found_resp).into_response()
 }
 
-/// Check the PSK and protocol version and upgrade to a websocket if the PSK matches (if required).
+/// Check the PSK and protocol version and upgrade to a WebSocket if the PSK matches (if required).
 pub async fn ws_handler(ws: StealthWebSocketUpgrade) -> Response {
-    debug!("Upgrading to websocket");
+    debug!("Upgrading to WebSocket");
     ws.on_upgrade(handle_websocket).await
 }
 
 /// A variant of `WebSocketUpgrade` that does not leak information
-/// about the presence of a websocket endpoint if the upgrade fails.
+/// about the presence of a WebSocket endpoint if the upgrade fails.
 pub struct StealthWebSocketUpgrade {
     sec_websocket_accept: HeaderValue,
     on_upgrade: OnUpgrade,
 }
 
 impl StealthWebSocketUpgrade {
-    /// Upgrade to a websocket.
+    /// Upgrade to a WebSocket.
     pub async fn on_upgrade<F, Fut, T>(self, callback: F) -> Response
     where
         F: FnOnce(WebSocket) -> Fut + Send + 'static,
@@ -224,13 +226,13 @@ impl StealthWebSocketUpgrade {
                     let ws = WebSocketStream::from_raw_socket(
                         upgraded,
                         Role::Server,
-                        Some(DEFAULT_WS_CONFIG),
+                        Some(config::DEFAULT_WS_CONFIG),
                     )
                     .await;
                     callback(ws).await;
                 }
                 Err(err) => {
-                    error!("Failed to upgrade to websocket: {err}");
+                    error!("Failed to upgrade to WebSocket: {err}");
                 }
             };
         });
@@ -278,27 +280,27 @@ impl FromRequest<ServerState<'static>, Body> for StealthWebSocketUpgrade {
 
         // `clone` should be cheap
         if req.method() != Method::GET {
-            warn!("Invalid websocket request: not a GET request");
-            return Err(backend_or_404_handler(State(state.clone()), req).await);
+            warn!("Invalid WebSocket request: not a GET request");
+            return Err(backend_or_404_handler(State(state.to_owned()), req).await);
         }
         if state.ws_psk.is_some() && x_penguin_psk != state.ws_psk {
-            warn!("Invalid websocket request: invalid PSK {x_penguin_psk:?}");
-            return Err(backend_or_404_handler(State(state.clone()), req).await);
+            warn!("Invalid WebSocket request: invalid PSK {x_penguin_psk:?}");
+            return Err(backend_or_404_handler(State(state.to_owned()), req).await);
         }
         if sec_websocket_key.is_none() {
-            warn!("Invalid websocket request: no sec-websocket-key header");
-            return Err(backend_or_404_handler(State(state.clone()), req).await);
+            warn!("Invalid WebSocket request: no sec-websocket-key header");
+            return Err(backend_or_404_handler(State(state.to_owned()), req).await);
         }
         if !header_matches!(connection, UPGRADE)
             || !header_matches!(upgrade, WEBSOCKET)
             || !header_matches!(sec_websocket_version, WEBSOCKET_VERSION)
             || !header_matches!(sec_websocket_protocol, WANTED_PROTOCOL)
         {
-            return Err(backend_or_404_handler(State(state.clone()), req).await);
+            return Err(backend_or_404_handler(State(state.to_owned()), req).await);
         }
         if on_upgrade.is_none() {
             error!("Empty `on_upgrade`");
-            return Err(backend_or_404_handler(State(state.clone()), req).await);
+            return Err(backend_or_404_handler(State(state.to_owned()), req).await);
         }
         // We can `unwrap()` here because we checked that the header is present
         let sec_websocket_accept = make_sec_websocket_accept(sec_websocket_key.unwrap());
@@ -313,7 +315,7 @@ fn make_sec_websocket_accept(key: &HeaderValue) -> HeaderValue {
     let mut hasher = Sha1::new();
     hasher.update(key.as_bytes());
     hasher.update(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
-    let accept = base64::encode(hasher.finalize().as_slice());
+    let accept = B64_STANDARD_ENGINE.encode(hasher.finalize().as_slice());
     // Shouldn't panic
     accept.parse().expect("Broken header value")
 }

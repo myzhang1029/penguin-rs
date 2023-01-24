@@ -5,7 +5,7 @@
 
 [package]
 name = "rusty-penguin"
-version = "0.3.3"
+version = "0.4.0"
 authors = ["Zhang Maiyun <me@myzhangll.xyz>"]
 edition = "2021"
 description = "A fast TCP/UDP tunnel, transported over HTTP WebSocket"
@@ -19,26 +19,24 @@ categories = ["asynchronous", "command-line-utilities", "network-programming"]
 name = "penguin"
 path = "src/main.rs"
 
-[lib]
-name = "penguin_tokio_stream_multiplexor"
-path = "lib/tokio-stream-multiplexor/src/lib.rs"
-
 [dependencies]
 axum = { version = "0.6", features = ["headers", "tokio", "ws"] }
 axum-server = { version = "0.4", features = ["tls-rustls"] }
-base64 = "0.20"
+base64 = "0.21"
+bytes = "1"
 clap = { version = "4", features = ["cargo", "derive"] }
 futures-util = { version = "0.3", default-features = false }
 http = "0.2"
 hyper = ">=0.14.10"
 hyper-rustls = { version = "0.23", features = ["http1", "http2"] }
 once_cell = "1"
+rand = "0.8"
 rustls = "0.20"
 rustls-native-certs = { version = "0.6", optional = true }
 rustls-pemfile = "1"
 sha1 = "0.10"
 thiserror = "1"
-tokio = { version = ">=1.13.1", features = ["io-std", "macros", "rt-multi-thread", "signal"] }
+tokio = { version = ">=1.23.1", features = ["io-std", "macros", "rt-multi-thread", "signal"] }
 tokio-tungstenite = "0.18"
 tower-http = { version = "0.3.0", features = ["fs", "trace"] }
 tracing = "0.1"
@@ -47,30 +45,19 @@ tungstenite = "0.18"
 webpki = "0.22"
 webpki-roots = { version = "0.22", optional = true }
 
-# From tokio-stream-multiplexor
-async-channel = "1"
-bytes = "1"
-rand = "0.8"
-
 [dev-dependencies]
 tempfile = "3"
 rcgen = "0.10"
 
-# From tokio-stream-multiplexor
-criterion = { version = "0.4", features = ["async_tokio"] }
-ctor = "0.1"
-tokio = { version = ">=1.13.1", features = ["io-util", "io-std", "rt", "net", "macros", "time", "rt-multi-thread"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
 [features]
-default = ["rustls-native-roots", "tests-real-internet"]
+default = ["rustls-native-roots"]
 # Note that it does not make sense to use rustls-webpki-roots and
 # rustls-native-roots at the same time, but there must be at least one. 
 rustls-webpki-roots = ["webpki-roots", "tokio-tungstenite/rustls-tls-webpki-roots", "tungstenite/rustls-tls-webpki-roots", "hyper-rustls/webpki-tokio"]
 rustls-native-roots = ["rustls-native-certs", "tokio-tungstenite/rustls-tls-native-roots", "tungstenite/rustls-tls-native-roots", "hyper-rustls/native-tokio"]
 # Allows some tests that require real internet connection
-tests-real-internet = []
-more-verbose = []
+tests-real-internet4 = []
+tests-real-internet6 = []
 
 [profile.release]
 debug = true

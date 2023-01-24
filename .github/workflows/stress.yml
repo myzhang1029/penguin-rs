@@ -1,0 +1,39 @@
+name: Stress Tests
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        submodules: true
+
+    - name: Install Rust toolchain
+      uses: actions-rs/toolchain@16499b5e05bf2e26879000db0c1d13f7e13fa3af #@v1
+      with:
+        profile: minimal
+        toolchain: stable
+        components: llvm-tools-preview
+        override: true
+
+    - name: Install tcpgoon and tcptunnelchecker
+      run: |
+        go install github.com/dachad/tcpgoon@latest
+        cargo install --git https://github.com/vi/tcptunnelchecker
+
+    - name: Build
+      run: cargo build --quiet
+
+    - name: Run stress tests
+      run: .github/workflows/stress.sh

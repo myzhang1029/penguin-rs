@@ -35,11 +35,10 @@ jobs:
       env:
         RUSTFLAGS: -Cinstrument-coverage
 
-    - name: Run tests
+    - name: Run cargo tests
       run: cargo test --verbose
       env:
         RUSTFLAGS: -Cinstrument-coverage
-        LLVM_PROFILE_FILE: penguin-%p-%m.profraw
 
     - name: Process coverage data
       run: grcov . --binary-path ./target/debug/ -s . -t lcov --branch --ignore-not-existing --ignore "/*" -o lcov.info

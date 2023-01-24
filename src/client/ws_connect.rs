@@ -1,8 +1,8 @@
-//! WebSocket connection.
+//! `WebSocket` connection.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use crate::arg::ServerUrl;
-use crate::mux::DEFAULT_WS_CONFIG;
+use crate::config;
 use crate::proto_version::PROTOCOL_VERSION;
 use crate::tls::make_rustls_client_config;
 use http::header::HeaderValue;
@@ -14,7 +14,7 @@ use tokio_tungstenite::{
 use tracing::{debug, warn};
 use tungstenite::{client::IntoClientRequest, handshake::client::Request};
 
-/// Error type for WebSocket connection.
+/// Error type for `WebSocket` connection.
 #[derive(Error, Debug)]
 pub enum Error {
     /// Invalid URL
@@ -25,7 +25,7 @@ pub enum Error {
     Tls(#[from] crate::tls::Error),
 }
 
-/// Perform a WebSocket handshake.
+/// Perform a `WebSocket` handshake.
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(level = "debug", skip(extra_headers))]
 pub async fn handshake(
@@ -42,7 +42,7 @@ pub async fn handshake(
     let is_tls = url.scheme().unwrap().as_str() == "wss";
 
     // Use a request to allow additional headers
-    let mut req: Request = url.0.clone().into_client_request()?;
+    let mut req: Request = url.0.to_owned().into_client_request()?;
     let req_headers = req.headers_mut();
     // Add protocol version
     req_headers.insert(
@@ -51,15 +51,15 @@ pub async fn handshake(
     );
     // Add PSK
     if let Some(ws_psk) = ws_psk {
-        req_headers.insert("x-penguin-psk", ws_psk.clone());
+        req_headers.insert("x-penguin-psk", ws_psk.to_owned());
     }
     // Add potentially custom hostname
     if let Some(hostname) = override_hostname {
-        req_headers.insert("host", hostname.clone());
+        req_headers.insert("host", hostname.to_owned());
     }
     // Now add custom headers
     for header in extra_headers {
-        req_headers.insert(header.name.clone(), header.value.clone());
+        req_headers.insert(header.name.to_owned(), header.value.to_owned());
     }
 
     let connector = if is_tls {
@@ -71,7 +71,8 @@ pub async fn handshake(
         Connector::Plain
     };
     let (ws_stream, _response) =
-        connect_async_tls_with_config(req, Some(DEFAULT_WS_CONFIG), Some(connector)).await?;
+        connect_async_tls_with_config(req, Some(config::DEFAULT_WS_CONFIG), Some(connector))
+            .await?;
     // We don't need to check the response now...
     debug!("WebSocket handshake succeeded");
     Ok(ws_stream)

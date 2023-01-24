@@ -2,7 +2,7 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use crate::parse_remote::Remote;
-use clap::{arg, command, Args, Parser, Subcommand};
+use clap::{arg, command, ArgAction, Args, Parser, Subcommand};
 use http::{
     header::HeaderName,
     uri::{Authority, PathAndQuery, Scheme},
@@ -18,10 +18,10 @@ use thiserror::Error;
 pub struct PenguinCli {
     #[clap(subcommand)]
     pub(crate) subcommand: Commands,
-    #[arg(short, long, conflicts_with = "quiet")]
-    pub(crate) verbose: bool,
-    #[arg(short, long, conflicts_with = "verbose")]
-    pub(crate) quiet: bool,
+    #[arg(short, long, conflicts_with = "quiet", action = ArgAction::Count, global = true)]
+    pub(crate) verbose: u8,
+    #[arg(short, long, conflicts_with = "verbose", action = ArgAction::Count, global = true)]
+    pub(crate) quiet: u8,
 }
 
 /// Global args to avoid cloning
@@ -103,9 +103,9 @@ pub struct ClientArgs {
     ///         user@example.com
     ///   to connect to an SSH server through the tunnel.
     // The underlying port is a u16, which gives 0..=65535; 0 is not allowed,
-    // 1 is the control channel, so the range of available ports is 2..=65535,
-    // giving 65534 available remotes.
-    #[arg(num_args=1..65535)]
+    // so the range of available ports is 1..=65535,
+    // giving 65535 available remotes.
+    #[arg(num_args=1..=65535, required = true)]
     pub(crate) remote: Vec<Remote>,
     /// An optional Pre-Shared Key for WebSocket upgrade to present
     /// to the server in the HTTP header X-Penguin-PSK. If the server requires
@@ -177,6 +177,7 @@ pub struct ClientArgs {
 
 /// Penguin server arguments.
 #[derive(Args, Debug)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct ServerArgs {
     /// Defines the HTTP listening host - the network interface
     /// (defaults to ::).
@@ -276,7 +277,7 @@ impl FromStr for ServerUrl {
                     && !url.starts_with("ws://")
                     && !url.starts_with("wss://")
                 {
-                    let url = format!("ws://{}", url);
+                    let url = format!("ws://{url}");
                     Uri::from_str(&url)?.into_parts()
                 } else {
                     return Err(e.into());

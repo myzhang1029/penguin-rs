@@ -1,3 +1,0 @@
-[submodule "lib/tokio-stream-multiplexor"]
-	path = lib/tokio-stream-multiplexor
-	url = https://github.com/myzhang1029/tokio-stream-multiplexor

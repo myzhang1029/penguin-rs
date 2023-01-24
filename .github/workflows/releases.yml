@@ -37,7 +37,7 @@ jobs:
       run: cargo build --release
 
     - name: Remove interferring files
-      run: bash -c "rm -rf target/release/sibsecsh.d"
+      run: bash -c "rm -rf target/release/penguin.d"
 
     - name: Upload binary
       uses: actions/upload-artifact@v2.2.4
