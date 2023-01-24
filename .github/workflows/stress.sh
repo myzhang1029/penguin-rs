@@ -2,9 +2,6 @@
 
 set -o pipefail
 
-go install github.com/dachad/tcpgoon@latest || exit 1
-cargo install --git https://github.com/vi/tcptunnelchecker || exit 1
-
 # Start the tunnels
 cargo run -- -qq server &
 PID_SERVER=$!
