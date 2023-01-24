@@ -63,6 +63,7 @@ pub enum Error {
 
 /// Required state
 #[derive(Clone, Debug)]
+#[allow(clippy::module_name_repetitions)]
 pub struct ServerState<'a> {
     /// Backend URL
     pub backend: Option<&'a BackendUrl>,

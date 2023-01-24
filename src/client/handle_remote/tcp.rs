@@ -33,10 +33,7 @@ pub(super) async fn request_tcp_channel(
 /// Open a TCP listener.
 #[inline]
 #[tracing::instrument(level = "trace")]
-pub(super) async fn open_tcp_listener(
-    lhost: &str,
-    lport: u16,
-) -> std::io::Result<TcpListener> {
+pub(super) async fn open_tcp_listener(lhost: &str, lport: u16) -> std::io::Result<TcpListener> {
     let listener = TcpListener::bind((lhost, lport)).await?;
     let local_addr = listener
         .local_addr()

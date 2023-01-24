@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tokio::io::BufWriter;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::UdpSocket;
-use tracing::{debug, warn};
+use tracing::{debug, trace, warn};
 
 /// Execute an expression, and if it returns an error, write an error response to the client and return the error.
 ///
@@ -82,6 +82,7 @@ where
         "cannot read command",
         &mut bwriter
     );
+    trace!("command: {command}");
     let _reserved = execute_or_pass_error!(
         breader.read_u8().await,
         0x01,
@@ -94,6 +95,7 @@ where
         "cannot read address type",
         &mut bwriter
     );
+    trace!("address type: {address_type}");
     let rhost = match address_type {
         0x01 => {
             // IPv4

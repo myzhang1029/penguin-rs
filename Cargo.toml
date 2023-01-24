@@ -50,7 +50,7 @@ tempfile = "3"
 rcgen = "0.10"
 
 [features]
-default = ["rustls-native-roots"]
+default = ["rustls-native-roots", "tests-real-internet4"]
 # Note that it does not make sense to use rustls-webpki-roots and
 # rustls-native-roots at the same time, but there must be at least one. 
 rustls-webpki-roots = ["webpki-roots", "tokio-tungstenite/rustls-tls-webpki-roots", "tungstenite/rustls-tls-webpki-roots", "hyper-rustls/webpki-tokio"]

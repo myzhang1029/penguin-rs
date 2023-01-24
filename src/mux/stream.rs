@@ -17,6 +17,7 @@ use tracing::{debug, trace, warn};
 use tungstenite::Message;
 
 /// All parameters of a stream channel
+#[allow(clippy::module_name_repetitions)]
 pub struct MuxStream<Sink, Stream> {
     /// Receive stream frames
     pub stream_rx: mpsc::Receiver<Vec<u8>>,
