@@ -35,10 +35,14 @@ jobs:
       env:
         RUSTFLAGS: -Cinstrument-coverage
 
-    - name: Run tests
+    - name: Run cargo tests
       run: cargo test --verbose
       env:
         RUSTFLAGS: -Cinstrument-coverage
+
+    - name: Run stress tests
+      run: .github/workflows/stress.sh
+      env:
         LLVM_PROFILE_FILE: penguin-%p-%m.profraw
 
     - name: Process coverage data

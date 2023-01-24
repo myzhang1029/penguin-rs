@@ -33,12 +33,6 @@ const VERBOSE_VERBOSE_LOG_LEVEL: filter::LevelFilter = filter::LevelFilter::TRAC
 
 /// Real entry point
 async fn main_real() -> Result<(), Error> {
-    #[cfg(feature = "more-verbose")]
-    let fmt_layer = fmt::Layer::default()
-        .with_thread_ids(true)
-        .with_timer(fmt::time::time())
-        .with_writer(std::io::stderr);
-    #[cfg(not(feature = "more-verbose"))]
     let fmt_layer = fmt::Layer::default()
         .compact()
         .with_thread_ids(true)
