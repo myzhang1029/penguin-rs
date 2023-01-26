@@ -38,6 +38,8 @@ pub(crate) enum Error {
     Mux(#[from] crate::mux::Error),
     #[error("cannot put sender back to the queue: {0}")]
     CommandPutBack(#[from] mpsc::error::SendError<StreamCommand>),
+    #[error("remote handler exited: {0}")]
+    RemoteHandlerExited(#[from] handle_remote::Error),
 }
 
 type Sink = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
@@ -128,11 +130,7 @@ pub(crate) async fn client_main(args: &'static ClientArgs) -> Result<(), Error> 
             datagram_tx: datagram_send_tx.dupe(),
             udp_client_id_map: udp_client_id_map.dupe(),
         };
-        jobs.spawn(async move {
-            if let Err(error) = handle_remote(remote, handler_resources).await {
-                error!("Listener failed: {error}");
-            }
-        });
+        jobs.spawn(handle_remote(remote, handler_resources));
     }
     // Retry loop
     loop {
@@ -149,20 +147,31 @@ pub(crate) async fn client_main(args: &'static ClientArgs) -> Result<(), Error> 
         .await
         {
             Ok(ws_stream) => {
-                on_connected(
-                    ws_stream,
-                    &mut stream_cmd_rx,
-                    &mut stream_cmd_tx,
-                    &mut datagram_send_rx,
-                    udp_client_id_map.dupe(),
-                    args.keepalive,
-                )
-                .await?;
-                warn!("Disconnected from server");
-                // Since we once connected, reset the retry count
-                current_retry_count = 0;
-                current_retry_interval = 200;
-                // Now retry
+                tokio::select! {
+                    Some(result) = jobs.join_next() => {
+                        let Ok(result) = result else { panic!("JoinSet returned an error"); };
+                        if let Err(e) = result {
+                            // Quit immediately if any listener fails
+                            // so maybe `systemd` can restart it
+                            return Err(e.into());
+                        }
+                    }
+                    result = on_connected(
+                        ws_stream,
+                        &mut stream_cmd_rx,
+                        &mut stream_cmd_tx,
+                        &mut datagram_send_rx,
+                        udp_client_id_map.dupe(),
+                        args.keepalive,
+                    ) => {
+                        result?;
+                        warn!("Disconnected from server");
+                        // Since we once connected, reset the retry count
+                        current_retry_count = 0;
+                        current_retry_interval = 200;
+                        // Now retry
+                    }
+                };
             }
             Err(e) => {
                 if !e.retryable() {
@@ -335,6 +344,7 @@ impl MaybeRetryableError for crate::mux::Error {
         match self {
             crate::mux::Error::Io(e) => e.retryable(),
             crate::mux::Error::Tungstenite(e) => e.retryable(),
+            crate::mux::Error::StreamTxClosed => true,
             _ => false,
         }
     }

@@ -12,33 +12,8 @@ use std::sync::{
     Mutex,
 };
 use std::task::{ready, Poll, Waker};
-use thiserror::Error;
 use tracing::{debug, trace};
 use tungstenite::Message;
-
-#[derive(Debug, Error)]
-pub enum SinkError {
-    #[error(transparent)]
-    InvalidFrame(#[from] <Message as TryFrom<Frame>>::Error),
-    #[error(transparent)]
-    Tungstenite(#[from] tungstenite::Error),
-}
-
-impl From<SinkError> for std::io::Error {
-    fn from(e: SinkError) -> Self {
-        match e {
-            SinkError::InvalidFrame(e) => std::io::Error::new(std::io::ErrorKind::InvalidData, e),
-            SinkError::Tungstenite(e) => tungstenite_error_to_io_error(e),
-        }
-    }
-}
-
-pub(super) fn tungstenite_error_to_io_error(e: tungstenite::Error) -> std::io::Error {
-    match e {
-        tungstenite::Error::Io(e) => e,
-        e => std::io::Error::new(std::io::ErrorKind::Other, e),
-    }
-}
 
 /// `Sink` of frames with locking.
 #[derive(Debug)]
@@ -115,7 +90,7 @@ impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedMessag
         buf: &[u8],
         our_port: u16,
         their_port: u16,
-    ) -> Poll<Result<(), SinkError>> {
+    ) -> Poll<Result<(), super::Error>> {
         // These code need to be duplicated instead of calling `self.poll_send_message`
         // because we want to create `Frame`s only when `sink.poll_ready` succeeds.
         // `ready`: if we return here, nothing happens

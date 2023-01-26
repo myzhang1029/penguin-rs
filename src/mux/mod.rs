@@ -41,10 +41,8 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Tungstenite(#[from] tungstenite::Error),
-    #[error("invalid message: {0}")]
-    InvalidMessage(#[from] frame::Error),
-    #[error(transparent)]
-    LockedSink(#[from] locked_sink::SinkError),
+    #[error("invalid frame: {0}")]
+    InvalidFrame(#[from] <Message as TryFrom<Frame>>::Error),
     #[error("received `Text` message")]
     TextMessage,
     #[error("server received `Ack` frame")]
@@ -59,6 +57,23 @@ pub enum Error {
     SendStreamToClient(String),
     #[error("Mux received no stream")]
     StreamTxClosed,
+}
+
+impl From<Error> for std::io::Error {
+    fn from(e: Error) -> Self {
+        match e {
+            Error::Io(e) => e,
+            Error::Tungstenite(e) => tungstenite_error_to_io_error(e),
+            e => std::io::Error::new(std::io::ErrorKind::Other, e),
+        }
+    }
+}
+
+fn tungstenite_error_to_io_error(e: tungstenite::Error) -> std::io::Error {
+    match e {
+        tungstenite::Error::Io(e) => e,
+        e => std::io::Error::new(std::io::ErrorKind::Other, e),
+    }
 }
 
 #[derive(Clone, Debug)]

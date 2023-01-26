@@ -3,7 +3,7 @@
 
 use super::frame::{Frame, StreamFrame};
 use super::inner::MultiplexorInner;
-use super::locked_sink::tungstenite_error_to_io_error;
+use super::tungstenite_error_to_io_error;
 use bytes::Bytes;
 use futures_util::{Sink as FutureSink, Stream as FutureStream};
 use std::io;
