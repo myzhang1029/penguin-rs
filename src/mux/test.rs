@@ -42,7 +42,7 @@ async fn connected_stream_passes_data() {
 
     let input_bytes: Vec<u8> = (0..(1024 * 1024)).map(|_| rand::random::<u8>()).collect();
     let len = input_bytes.len();
-    let input_bytes_clone = input_bytes.to_owned();
+    let input_bytes_clone = input_bytes.clone();
 
     let server_task = tokio::spawn(async move {
         let mut conn = server_mux.server_new_stream_channel().await.unwrap();
@@ -87,7 +87,7 @@ async fn test_early_eof_detected() {
 
     let input_bytes: Vec<u8> = (0..1024).map(|_| rand::random::<u8>()).collect();
     let len = input_bytes.len();
-    let input_bytes_clone = input_bytes.to_owned();
+    let input_bytes_clone = input_bytes.clone();
 
     let server_task = tokio::spawn(async move {
         let mut conn = server_mux.server_new_stream_channel().await.unwrap();

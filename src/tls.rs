@@ -49,11 +49,11 @@ pub async fn make_rustls_server_config(
     client_ca_path: Option<&str>,
 ) -> Result<ServerConfig, Error> {
     // Load certificate
-    // `unwrap()` is safe because we only get `None` if `key_path` and `cert_path` are `None`,
+    // `expect`: we only get `None` if `key_path` and `cert_path` are `None`,
     // which is not the case here.
     let (certs, key) = try_load_certificate(Some(key_path), Some(cert_path))
         .await?
-        .unwrap();
+        .expect("`try_load_certificate` returned `None` (this is a bug)");
     // Build config
     let config = ServerConfig::builder().with_safe_defaults();
     let mut config = if let Some(client_ca_path) = client_ca_path {
@@ -164,7 +164,7 @@ async fn try_load_certificate(
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use super::*;
     use rcgen::generate_simple_self_signed;
     use tempfile::tempdir;

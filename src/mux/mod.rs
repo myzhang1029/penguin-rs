@@ -13,6 +13,7 @@ mod stream;
 mod test;
 
 use crate::config;
+use crate::dupe::Dupe;
 use crate::mux::locked_sink::LockedMessageSink;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{Sink as FutureSink, Stream as FutureStream, StreamExt};
@@ -93,7 +94,7 @@ where
             dropped_ports_tx,
         });
 
-        tokio::spawn(inner.clone().task(datagram_tx, stream_tx, dropped_ports_rx));
+        tokio::spawn(inner.dupe().task(datagram_tx, stream_tx, dropped_ports_rx));
         trace!("Multiplexor task spawned");
 
         Self { inner }

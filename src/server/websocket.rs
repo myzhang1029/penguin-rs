@@ -4,6 +4,7 @@
 use super::forwarder::tcp_forwarder_on_channel;
 use super::forwarder::udp_forward_to;
 use super::WebSocket;
+use crate::dupe::Dupe;
 use crate::mux::{DatagramFrame, Multiplexor, Role};
 use futures_util::stream::SplitSink;
 use futures_util::stream::SplitStream;
@@ -43,7 +44,7 @@ pub async fn handle_websocket(ws_stream: WebSocket) {
             }
             // Check if the multiplexor has received a new stream request
             Some(result) = mux.server_new_stream_channel() => {
-                if let Ok(rhost) = String::from_utf8(result.dest_host.to_owned()) {
+                if let Ok(rhost) = String::from_utf8(result.dest_host.clone()) {
                     let rport = result.dest_port;
                     jobs.spawn(tcp_forwarder_on_channel(result, rhost, rport));
                 } else {
@@ -52,7 +53,7 @@ pub async fn handle_websocket(ws_stream: WebSocket) {
             }
             // Check if the multiplexor has received a UDP datagram
             Some(datagram_frame) = mux.get_datagram() => {
-                jobs.spawn(udp_forward_to(datagram_frame, datagram_send_tx.clone()));
+                jobs.spawn(udp_forward_to(datagram_frame, datagram_send_tx.dupe()));
             }
             // Check if any of the listeners have sent a UDP datagram
             Some(datagram_frame) = datagram_send_rx.recv() => {

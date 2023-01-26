@@ -36,7 +36,15 @@ pub(super) async fn udp_forward_to(
     let rport = datagram_frame.port;
     let data = datagram_frame.data;
     let client_id = datagram_frame.sid;
-    let target = lookup_host((rhost_str, rport)).await?.next().unwrap();
+    let target = lookup_host((rhost_str, rport))
+        .await?
+        .next()
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "could not resolve to any address",
+            )
+        })?;
     let socket = if target.is_ipv4() {
         UdpSocket::bind(("0.0.0.0", 0)).await?
     } else {
@@ -53,7 +61,7 @@ pub(super) async fn udp_forward_to(
                 trace!("got UDP response from {target}");
                 let datagram_frame = DatagramFrame {
                     sid: client_id,
-                    host: rhost.to_owned(),
+                    host: rhost.clone(),
                     port: rport,
                     data: buf[..len].to_vec(),
                 };

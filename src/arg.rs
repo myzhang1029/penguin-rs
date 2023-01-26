@@ -29,12 +29,12 @@ pub(crate) static ARGS: OnceCell<PenguinCli> = OnceCell::new();
 
 impl PenguinCli {
     pub fn get_global() -> &'static Self {
-        ARGS.get().expect("ARGS is not initialized")
+        ARGS.get().expect("ARGS is not initialized (this is a bug)")
     }
 
     pub(crate) fn parse_global() {
         ARGS.set(PenguinCli::parse())
-            .expect("Should not be called twice");
+            .expect("`parse_global` should not be called twice (this is a bug)");
     }
 }
 
@@ -399,7 +399,7 @@ impl FromStr for Header {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use std::str::FromStr;
 
     use crate::parse_remote::{LocalSpec, Protocol, RemoteSpec};

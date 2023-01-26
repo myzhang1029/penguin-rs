@@ -6,6 +6,7 @@ use super::locked_sink::LockedMessageSink;
 use super::stream::MuxStream;
 use super::{Error, IntKey, Role};
 use crate::config;
+use crate::dupe::Dupe;
 use bytes::{Buf, Bytes};
 use futures_util::{Sink as FutureSink, Stream as FutureStream, StreamExt};
 use std::collections::HashMap;
@@ -83,7 +84,7 @@ where
                         self.sink.send_message(
                             Frame::Stream(StreamFrame::new_rst(our_port, their_port))
                             .try_into()
-                            .expect("Frame should be representable as a message")
+                            .expect("Frame should be representable as a message (this is a bug)")
                         ).await.ok();
                     }
                     // and this is `Shutdown::Read`
@@ -92,7 +93,7 @@ where
                 Some(msg) = self.next_message() => {
                     let msg = msg?;
                     trace!("received message length = {}", msg.len());
-                    if self.clone().process_message(msg, &mut datagram_tx, &mut stream_tx).await? {
+                    if self.dupe().process_message(msg, &mut datagram_tx, &mut stream_tx).await? {
                         break;
                     }
                 }
@@ -168,7 +169,7 @@ where
                     dest_port,
                     fin_sent: AtomicBool::new(false),
                     buf: Bytes::new(),
-                    inner: self.clone(),
+                    inner: self.dupe(),
                 };
                 trace!("sending stream to user");
                 // This goes to the user
@@ -201,7 +202,7 @@ where
                     dest_port: 0,
                     fin_sent: AtomicBool::new(false),
                     buf: Bytes::new(),
-                    inner: self.clone(),
+                    inner: self.dupe(),
                 };
                 // This goes to the user
                 stream_tx
@@ -288,8 +289,8 @@ where
                 debug!("Received close");
                 Ok(true)
             }
-            Message::Text(_) => {
-                error!("Received `Text` message: {:?}", msg);
+            Message::Text(text) => {
+                error!("Received `Text` message: `{text}'");
                 Err(Error::TextMessage)
             }
             Message::Frame(_) => {

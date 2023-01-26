@@ -278,7 +278,7 @@ impl TryFrom<Vec<u8>> for Frame {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use super::*;
 
     #[test]
@@ -293,7 +293,7 @@ mod tests {
                 data: vec![0x00, 0x16, 0x2e]
             })
         );
-        let bytes = Vec::try_from(frame.to_owned()).unwrap();
+        let bytes = Vec::try_from(frame.clone()).unwrap();
         let decoded = Frame::try_from(bytes).unwrap();
         assert_eq!(frame, decoded);
     }
@@ -306,7 +306,7 @@ mod tests {
             sid: 5678,
             data: vec![1, 2, 3, 4],
         });
-        let bytes = Vec::try_from(frame.to_owned()).unwrap();
+        let bytes = Vec::try_from(frame.clone()).unwrap();
         let decoded = Frame::try_from(bytes).unwrap();
         assert_eq!(frame, decoded);
     }

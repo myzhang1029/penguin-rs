@@ -170,7 +170,7 @@ where
         if !self.fin_sent.load(Ordering::Relaxed) {
             let message = Frame::Stream(StreamFrame::new_fin(self.our_port, self.their_port))
                 .try_into()
-                .expect("Frame should be representable as a message");
+                .expect("Frame should be representable as a message (this is a bug)");
             ready!(self.inner.sink.poll_send_message(cx, &message))
                 .map_err(tungstenite_error_to_io_error)?;
             self.fin_sent.store(true, Ordering::Relaxed);

@@ -5,6 +5,7 @@
 mod arg;
 mod client;
 mod config;
+mod dupe;
 mod mux;
 mod parse_remote;
 mod proto_version;
@@ -51,19 +52,19 @@ async fn main_real() -> Result<(), Error> {
         0 => {}
         1 => reload_handle
             .reload(VERBOSE_LOG_LEVEL)
-            .expect("Resetting log level failed"),
+            .expect("Resetting log level failed (this is a bug)"),
         _ => reload_handle
             .reload(VERBOSE_VERBOSE_LOG_LEVEL)
-            .expect("Resetting log level failed"),
+            .expect("Resetting log level failed (this is a bug)"),
     };
     match cli_args.quiet {
         0 => {}
         1 => reload_handle
             .reload(QUIET_LOG_LEVEL)
-            .expect("Resetting log level failed"),
+            .expect("Resetting log level failed (this is a bug)"),
         _ => reload_handle
             .reload(QUIET_QUIET_LOG_LEVEL)
-            .expect("Resetting log level failed"),
+            .expect("Resetting log level failed (this is a bug)"),
     };
     match &cli_args.subcommand {
         arg::Commands::Client(args) => client::client_main(args).await?,

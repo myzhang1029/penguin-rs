@@ -11,6 +11,7 @@ mod udp;
 
 use super::StreamCommand;
 use crate::client::HandlerResources;
+use crate::dupe::Dupe;
 use crate::mux::DatagramFrame;
 use crate::parse_remote::{LocalSpec, RemoteSpec};
 use crate::parse_remote::{Protocol, Remote};
@@ -111,7 +112,7 @@ pub(super) async fn handle_remote(
             loop {
                 let (tcp_stream, _) = listener.accept().await?;
                 let (tcp_rx, tcp_tx) = tokio::io::split(tcp_stream);
-                let handler_resources = handler_resources.clone();
+                let handler_resources = handler_resources.dupe();
                 tokio::spawn(async move {
                     handle_socks_connection(tcp_rx, tcp_tx, lhost, &handler_resources).await
                 });

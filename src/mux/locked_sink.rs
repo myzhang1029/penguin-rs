@@ -3,6 +3,7 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::frame::{Frame, StreamFrame};
+use crate::dupe::Dupe;
 use futures_util::{Sink as FutureSink, SinkExt};
 use std::cell::UnsafeCell;
 use std::collections::VecDeque;
@@ -77,9 +78,12 @@ impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedMessag
     fn try_lock(&self, cx: &mut std::task::Context<'_>) -> Poll<()> {
         if self.in_use.swap(true, Ordering::Acquire) {
             // Someone else is using the sink, so we need to wait.
-            // `unwrap`: panic if the lock is poisoned
+            // `expect`: panic if the lock is poisoned
             trace!("waiting for the lock");
-            self.waiters.lock().unwrap().push_back(cx.waker().clone());
+            self.waiters
+                .lock()
+                .expect("Sink `Mutex` is poisoned (this is a bug)")
+                .push_back(cx.waker().dupe());
             Poll::Pending
         } else {
             // `ready`: if we return here, `cx` is not woken up
@@ -92,8 +96,11 @@ impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedMessag
     fn unlock(&self) {
         self.in_use.store(false, Ordering::Release);
         trace!("lock released");
-        // `unwrap`: panic if the lock is poisoned
-        let mut waiters = self.waiters.lock().unwrap();
+        // `expect`: panic if the lock is poisoned
+        let mut waiters = self
+            .waiters
+            .lock()
+            .expect("Sink `Mutex` is poisoned (this is a bug)");
         if let Some(waker) = waiters.pop_front() {
             debug!("waking up a waiter");
             waker.wake();
@@ -126,7 +133,7 @@ impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedMessag
                 return Poll::Pending;
             }
         }
-        let frame = Frame::Stream(StreamFrame::new_psh(our_port, their_port, buf.to_owned()));
+        let frame = Frame::Stream(StreamFrame::new_psh(our_port, their_port, buf.to_vec()));
         let message: Message = match frame.try_into() {
             Ok(message) => message,
             Err(e) => {
@@ -163,7 +170,7 @@ impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedMessag
                 return Poll::Pending;
             }
         }
-        let result = sink.start_send_unpin(msg.to_owned());
+        let result = sink.start_send_unpin(msg.clone());
         trace!("message sent");
         self.unlock();
         Poll::Ready(result)

@@ -4,10 +4,9 @@
 mod forwarder;
 mod websocket;
 
-use std::sync::Arc;
-
 use crate::arg::{BackendUrl, ServerArgs};
 use crate::config;
+use crate::dupe::Dupe;
 use crate::proto_version::PROTOCOL_VERSION;
 use crate::tls::make_rustls_server_config;
 use axum::async_trait;
@@ -30,6 +29,7 @@ use hyper::upgrade::{OnUpgrade, Upgraded};
 use hyper::{client::HttpConnector, Body as HyperBody, Client as HyperClient};
 use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 use sha1::{Digest, Sha1};
+use std::sync::Arc;
 use thiserror::Error;
 use tokio_tungstenite::WebSocketStream;
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
@@ -75,6 +75,19 @@ pub struct ServerState<'a> {
     pub client: Arc<HyperClient<HttpsConnector<HttpConnector>, HyperBody>>,
 }
 
+impl<'a> Dupe for ServerState<'a> {
+    // Explicitly providing a `dupe` implementation to prove that everything
+    // can be cheaply cloned.
+    fn dupe(&self) -> Self {
+        Self {
+            backend: self.backend,
+            ws_psk: self.ws_psk,
+            not_found_resp: self.not_found_resp,
+            client: self.client.dupe(),
+        }
+    }
+}
+
 #[tracing::instrument(level = "trace")]
 pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
     let host = crate::parse_remote::remove_brackets(&args.host);
@@ -116,9 +129,12 @@ pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
     );
 
     if let Some(tls_key) = &args.tls_key {
-        // `unwrap()` is safe because `clap` ensures that both `--tls-cert` and `--tls-key` are
+        // `expect`: `clap` ensures that both `--tls-cert` and `--tls-key` are
         // specified if either is specified.
-        let tls_cert = args.tls_cert.as_ref().unwrap();
+        let tls_cert = args
+            .tls_cert
+            .as_ref()
+            .expect("`tls_cert` is `None` (this is a bug)");
         trace!("Enabling TLS");
         info!("Listening on wss://{sockaddr}/ws");
         let config = make_rustls_server_config(tls_cert, tls_key, args.tls_ca.as_deref()).await?;
@@ -126,7 +142,7 @@ pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
 
         #[cfg(unix)]
         tokio::spawn(reload_cert_on_signal(
-            config.clone(),
+            config.dupe(),
             tls_cert,
             tls_key,
             args.tls_ca.as_deref(),
@@ -174,23 +190,27 @@ async fn backend_or_404_handler(
             .map_or(path, http::uri::PathAndQuery::as_str);
 
         let uri = Uri::builder()
-            // `unwrap()` should not panic because `BackendUrl` is validated
-            // by clap.
-            .scheme(backend.scheme.to_owned())
-            .authority(backend.authority.to_owned())
+            // `expect`: `BackendUrl` is validated by clap.
+            .scheme(backend.scheme.clone())
+            .authority(backend.authority.clone())
             .path_and_query(format!("{}{path_query}", backend.path.path()))
             .build()
-            .unwrap();
+            .expect("Failed to build URI for backend (this is a bug)");
         *req.uri_mut() = uri;
         // This may not be the best way to do this, but to avoid panicking if
         // we have a HTTP/2 request, but `backend` does not support h2, let's
         // downgrade to HTTP/1.1 and let them upgrade if they want to.
         *req.version_mut() = http::version::Version::default();
-        // XXX: I don't really know what I am `unwrap`ping, but I think it's
-        // the best I can do in this situation.
-        return state.client.request(req).await.unwrap().into_response();
+        match state.client.request(req).await {
+            Ok(resp) => resp.into_response(),
+            Err(e) => {
+                error!("Failed to proxy request to backend: {}", e);
+                not_found_handler(State(state)).await
+            }
+        }
+    } else {
+        not_found_handler(State(state)).await
     }
-    not_found_handler(State(state)).await
 }
 
 /// 404 handler
@@ -246,7 +266,7 @@ impl StealthWebSocketUpgrade {
             .header("sec-websocket-protocol", &WANTED_PROTOCOL)
             .header("sec-websocket-accept", self.sec_websocket_accept)
             .body(axum::body::boxed(axum::body::Empty::new()))
-            .expect("Failed to build response")
+            .expect("Failed to build response (this is a bug)")
     }
 }
 
@@ -279,34 +299,35 @@ impl FromRequest<ServerState<'static>, Body> for StealthWebSocketUpgrade {
         let sec_websocket_version = headers.get(SEC_WEBSOCKET_VERSION);
         let x_penguin_psk = headers.get("x-penguin-psk");
 
-        // `clone` should be cheap
         if req.method() != Method::GET {
             warn!("Invalid WebSocket request: not a GET request");
-            return Err(backend_or_404_handler(State(state.to_owned()), req).await);
+            return Err(backend_or_404_handler(State(state.dupe()), req).await);
         }
         if state.ws_psk.is_some() && x_penguin_psk != state.ws_psk {
             warn!("Invalid WebSocket request: invalid PSK {x_penguin_psk:?}");
-            return Err(backend_or_404_handler(State(state.to_owned()), req).await);
+            return Err(backend_or_404_handler(State(state.dupe()), req).await);
         }
         if sec_websocket_key.is_none() {
             warn!("Invalid WebSocket request: no sec-websocket-key header");
-            return Err(backend_or_404_handler(State(state.to_owned()), req).await);
+            return Err(backend_or_404_handler(State(state.dupe()), req).await);
         }
         if !header_matches!(connection, UPGRADE)
             || !header_matches!(upgrade, WEBSOCKET)
             || !header_matches!(sec_websocket_version, WEBSOCKET_VERSION)
             || !header_matches!(sec_websocket_protocol, WANTED_PROTOCOL)
         {
-            return Err(backend_or_404_handler(State(state.to_owned()), req).await);
+            return Err(backend_or_404_handler(State(state.dupe()), req).await);
         }
         if on_upgrade.is_none() {
             error!("Empty `on_upgrade`");
-            return Err(backend_or_404_handler(State(state.to_owned()), req).await);
+            return Err(backend_or_404_handler(State(state.dupe()), req).await);
         }
-        // We can `unwrap()` here because we checked that the header is present
-        let sec_websocket_accept = make_sec_websocket_accept(sec_websocket_key.unwrap());
+        // `expect`: we checked that the header is present
+        let sec_websocket_accept = make_sec_websocket_accept(
+            sec_websocket_key.expect("Missing `sec-websocket-key` header (this is a bug)"),
+        );
         Ok(Self {
-            on_upgrade: on_upgrade.unwrap(),
+            on_upgrade: on_upgrade.expect("Missing `on_upgrade` (this is a bug)"),
             sec_websocket_accept,
         })
     }
@@ -317,12 +338,12 @@ fn make_sec_websocket_accept(key: &HeaderValue) -> HeaderValue {
     hasher.update(key.as_bytes());
     hasher.update(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
     let accept = B64_STANDARD_ENGINE.encode(hasher.finalize().as_slice());
-    // Shouldn't panic
-    accept.parse().expect("Broken header value")
+    // `expect`: Base64-encoded string should be valid UTF-8
+    accept.parse().expect("Broken header value (this is a bug)")
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use super::*;
 
     #[test]

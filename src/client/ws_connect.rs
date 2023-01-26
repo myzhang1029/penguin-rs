@@ -39,10 +39,14 @@ pub async fn handshake(
     tls_insecure: bool,
 ) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Error> {
     // We already sanitized https URLs to wss
-    let is_tls = url.scheme().unwrap().as_str() == "wss";
+    let is_tls = url
+        .scheme()
+        .expect("URL scheme should be present (this is a bug)")
+        .as_str()
+        == "wss";
 
     // Use a request to allow additional headers
-    let mut req: Request = url.0.to_owned().into_client_request()?;
+    let mut req: Request = url.0.clone().into_client_request()?;
     let req_headers = req.headers_mut();
     // Add protocol version
     req_headers.insert(
@@ -51,15 +55,15 @@ pub async fn handshake(
     );
     // Add PSK
     if let Some(ws_psk) = ws_psk {
-        req_headers.insert("x-penguin-psk", ws_psk.to_owned());
+        req_headers.insert("x-penguin-psk", ws_psk.clone());
     }
     // Add potentially custom hostname
     if let Some(hostname) = override_hostname {
-        req_headers.insert("host", hostname.to_owned());
+        req_headers.insert("host", hostname.clone());
     }
     // Now add custom headers
     for header in extra_headers {
-        req_headers.insert(header.name.to_owned(), header.value.to_owned());
+        req_headers.insert(header.name.clone(), header.value.clone());
     }
 
     let connector = if is_tls {

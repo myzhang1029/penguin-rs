@@ -6,6 +6,7 @@ pub(crate) mod ws_connect;
 
 use crate::arg::ClientArgs;
 use crate::config;
+use crate::dupe::Dupe;
 use crate::mux::{DatagramFrame, Multiplexor, MuxStream as GMuxStream, Role};
 use futures_util::stream::{SplitSink, SplitStream};
 use handle_remote::handle_remote;
@@ -65,6 +66,18 @@ pub(super) struct HandlerResources {
     pub udp_client_id_map: Arc<RwLock<HashMap<u32, ClientIdMapEntry>>>,
 }
 
+impl Dupe for HandlerResources {
+    // Explicitly providing a `dupe` implementation to prove that everything
+    // can be cheaply cloned.
+    fn dupe(&self) -> Self {
+        Self {
+            stream_command_tx: self.stream_command_tx.dupe(),
+            datagram_tx: self.datagram_tx.dupe(),
+            udp_client_id_map: self.udp_client_id_map.dupe(),
+        }
+    }
+}
+
 /// Type stored in the client ID map
 #[derive(Clone, Debug)]
 pub(super) struct ClientIdMapEntry {
@@ -106,15 +119,14 @@ pub(crate) async fn client_main(args: &'static ClientArgs) -> Result<(), Error> 
     // Map of client IDs to (source, UdpSocket, bool)
     let udp_client_id_map: HashMap<u32, ClientIdMapEntry> = HashMap::new();
     let udp_client_id_map = Arc::new(RwLock::new(udp_client_id_map));
-    tokio::spawn(prune_client_id_map_task(udp_client_id_map.clone()));
+    tokio::spawn(prune_client_id_map_task(udp_client_id_map.dupe()));
     let mut jobs = JoinSet::new();
     // Spawn listeners. See `handle_remote.rs` for the implementation considerations.
     for remote in &args.remote {
-        // According to the docs, we should clone the sender for each task
         let handler_resources = HandlerResources {
-            stream_command_tx: stream_cmd_tx.clone(),
-            datagram_tx: datagram_send_tx.clone(),
-            udp_client_id_map: udp_client_id_map.clone(),
+            stream_command_tx: stream_cmd_tx.dupe(),
+            datagram_tx: datagram_send_tx.dupe(),
+            udp_client_id_map: udp_client_id_map.dupe(),
         };
         jobs.spawn(async move {
             if let Err(error) = handle_remote(remote, handler_resources).await {
@@ -142,7 +154,7 @@ pub(crate) async fn client_main(args: &'static ClientArgs) -> Result<(), Error> 
                     &mut stream_cmd_rx,
                     &mut stream_cmd_tx,
                     &mut datagram_send_rx,
-                    udp_client_id_map.clone(),
+                    udp_client_id_map.dupe(),
                     args.keepalive,
                 )
                 .await?;
@@ -259,7 +271,7 @@ async fn get_send_stream_chan_or_put_back(
 ) -> Result<bool, Error> {
     trace!("requesting a new TCP channel");
     match mux
-        .client_new_stream_channel(stream_command.host.to_owned(), stream_command.port)
+        .client_new_stream_channel(stream_command.host.clone(), stream_command.port)
         .await
     {
         Ok(stream) => {

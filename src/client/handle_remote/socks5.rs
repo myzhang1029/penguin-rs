@@ -4,6 +4,7 @@
 use super::tcp::request_tcp_channel;
 use super::{pipe_streams, Error, HandlerResources};
 use crate::client::ClientIdMapEntry;
+use crate::dupe::Dupe;
 use crate::mux::{DatagramFrame, IntKey};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -242,7 +243,7 @@ where
     let relay_task = tokio::spawn(udp_relay(
         rhost.to_string(),
         rport,
-        handler_resources.clone(),
+        handler_resources.dupe(),
         socket,
     ));
     // Send back a successful response
@@ -316,7 +317,7 @@ async fn udp_relay(
         let client_id = u32::next_available_key(&*udp_client_id_map);
         udp_client_id_map.insert(
             client_id,
-            ClientIdMapEntry::new((src, sport).into(), socket.clone(), true),
+            ClientIdMapEntry::new((src, sport).into(), socket.dupe(), true),
         );
         drop(udp_client_id_map);
         let datagram_frame = DatagramFrame {

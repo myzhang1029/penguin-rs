@@ -216,7 +216,7 @@ pub fn remove_brackets(s: &str) -> &str {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use super::*;
 
     /// Simply jpillora's test cases and a few additions.
