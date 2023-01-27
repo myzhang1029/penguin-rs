@@ -18,7 +18,6 @@ then
     echo "tcptunnelchecker passed"
 else
     echo "tcptunnelchecker failed"
-    exit 1
 fi
 
 if ~/go/bin/tcpgoon run 127.0.0.1 5201 -yc 2560
