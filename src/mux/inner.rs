@@ -10,11 +10,14 @@ use crate::dupe::Dupe;
 use bytes::{Buf, Bytes};
 use futures_util::{Sink as FutureSink, Stream as FutureStream, StreamExt};
 use std::collections::HashMap;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, error, trace};
 use tungstenite::Message;
+
+/// (writer, notifier when `close_port` is called)
+type MuxStreamSenderData = (mpsc::Sender<Vec<u8>>, Arc<AtomicBool>);
 
 /// Multiplexor inner
 pub(super) struct MultiplexorInner<Sink, Stream> {
@@ -26,8 +29,8 @@ pub(super) struct MultiplexorInner<Sink, Stream> {
     pub(super) stream: RwLock<Stream>,
     /// Interval between keepalive `Ping`s
     pub(super) keepalive_interval: Option<std::time::Duration>,
-    /// Open stream channels: our_port -> writer
-    pub(super) streams: RwLock<HashMap<u16, mpsc::Sender<Vec<u8>>>>,
+    /// Open stream channels: our_port ->
+    pub(super) streams: RwLock<HashMap<u16, MuxStreamSenderData>>,
     /// Channel of received datagram frames for processing
     pub(super) datagram_rx: RwLock<mpsc::Receiver<DatagramFrame>>,
     /// Channel of established streams for processing
@@ -77,18 +80,7 @@ where
                         debug!("mux dropped");
                         break;
                     }
-                    debug!("freeing port {}", our_port);
-                    // If the user did not call `poll_shutdown`, we need to send a `Rst` frame
-                    // i.e. `Shutdown::Write`
-                    if !fin_sent {
-                        self.sink.send_message(
-                            Frame::Stream(StreamFrame::new_rst(our_port, their_port))
-                            .try_into()
-                            .expect("Frame should be representable as a message (this is a bug)")
-                        ).await.ok();
-                    }
-                    // and this is `Shutdown::Read`
-                    self.shutdown_port(our_port).await;
+                    self.close_port(our_port, their_port, fin_sent).await;
                 }
                 Some(msg) = self.next_message() => {
                     let msg = msg?;
@@ -153,30 +145,11 @@ where
                 let dest_port = syn_data.get_u16();
                 let our_port = u16::next_available_key(&*self.streams.read().await);
                 trace!("port: {}", our_port);
-                // `tx` is our end, `rx` is the user's end
-                let (tx, rx) = mpsc::channel(config::STREAM_FRAME_BUFFER_SIZE);
-                // Save the TX end of the stream so we can write to it when subsequent frames arrive
-                let mut streams = self.streams.write().await;
-                streams.insert(our_port, tx);
-                drop(streams);
-                let stream = MuxStream {
-                    stream_rx: rx,
-                    // "we" is `role == Server`
-                    our_port,
-                    // "they" is `role == Client`
-                    their_port,
-                    dest_host,
-                    dest_port,
-                    fin_sent: AtomicBool::new(false),
-                    buf: Bytes::new(),
-                    inner: self.dupe(),
-                };
-                trace!("sending stream to user");
-                // This goes to the user
-                stream_tx
-                    .send(stream)
-                    .await
-                    .map_err(|e| Error::SendStreamToClient(e.to_string()))?;
+                // "we" is `role == Server`
+                // "they" is `role == Client`
+                self.dupe()
+                    .new_stream(our_port, their_port, dest_host, dest_port, stream_tx)
+                    .await?;
                 // Send a `Ack`
                 let ack_frame = Frame::Stream(StreamFrame::new_ack(our_port, their_port));
                 trace!("sending ack");
@@ -186,37 +159,27 @@ where
                 if self.role == Role::Server {
                     return Err(Error::ServerReceivedAck);
                 }
-                // `tx` is our end, `rx` is the user's end
-                let (tx, rx) = mpsc::channel(config::STREAM_FRAME_BUFFER_SIZE);
-                // Save the TX end of the stream so we can write to it when subsequent frames arrive
-                let mut streams = self.streams.write().await;
-                streams.insert(our_port, tx);
-                drop(streams);
-                let stream = MuxStream {
-                    stream_rx: rx,
-                    // "we" is `role == Client`
-                    our_port,
-                    // "they" is `role == Server`
-                    their_port,
-                    dest_host: vec![],
-                    dest_port: 0,
-                    fin_sent: AtomicBool::new(false),
-                    buf: Bytes::new(),
-                    inner: self.dupe(),
-                };
-                // This goes to the user
-                stream_tx
-                    .send(stream)
-                    .await
-                    .map_err(|e| Error::SendStreamToClient(e.to_string()))?;
+                // "we" is `role == Client`
+                // "they" is `role == Server`
+                self.new_stream(our_port, their_port, vec![], 0, stream_tx)
+                    .await?;
             }
-            StreamFlag::Rst | StreamFlag::Fin => {
-                self.shutdown_port(our_port).await;
+            StreamFlag::Rst => {
+                // `true` because we don't want to reply `Rst` with `Rst`.
+                self.close_port(our_port, their_port, true).await;
+            }
+            StreamFlag::Fin => {
+                let sender = self.streams.write().await;
+                if let Some(sender) = sender.get(&our_port) {
+                    // Make sure the user receives `EOF`.
+                    sender.0.send(vec![]).await.ok();
+                }
+                // And our end can still send
             }
             StreamFlag::Psh => {
                 let mut streams = self.streams.write().await;
                 if let Some(frame_sender) = streams.get_mut(&our_port) {
-                    if frame_sender.send(data).await.is_ok() {
+                    if frame_sender.0.send(data).await.is_ok() {
                         return Ok(());
                     }
                 }
@@ -226,6 +189,41 @@ where
             }
         }
         Ok(())
+    }
+
+    /// Create a new `MuxStream` and add it into the map
+    async fn new_stream(
+        self: Arc<Self>,
+        our_port: u16,
+        their_port: u16,
+        dest_host: Vec<u8>,
+        dest_port: u16,
+        stream_tx: &mut mpsc::Sender<MuxStream<Sink, Stream>>,
+    ) -> Result<(), Error> {
+        // `tx` is our end, `rx` is the user's end
+        let (frame_tx, frame_rx) = mpsc::channel(config::STREAM_FRAME_BUFFER_SIZE);
+        let stream_removed = Arc::new(AtomicBool::new(false));
+        // Save the TX end of the stream so we can write to it when subsequent frames arrive
+        let mut streams = self.streams.write().await;
+        streams.insert(our_port, (frame_tx, stream_removed.clone()));
+        drop(streams);
+        let stream = MuxStream {
+            frame_rx,
+            our_port,
+            their_port,
+            dest_host,
+            dest_port,
+            fin_sent: AtomicBool::new(false),
+            stream_removed,
+            buf: Bytes::new(),
+            inner: self,
+        };
+        trace!("sending stream to user");
+        // This goes to the user
+        stream_tx
+            .send(stream)
+            .await
+            .map_err(|e| Error::SendStreamToClient(e.to_string()))
     }
 
     /// Send a frame.
@@ -299,16 +297,29 @@ where
         }
     }
 
-    /// Send EOF to a stream and remove it from the map
-    /// Like `Shutdown::Read`. `Shutdown::Write` is `poll_shutdown` of `MuxStream`.
+    /// Close a port. That is, send `Rst` if `Fin` is not sent,
+    /// and remove it from the map.
     #[tracing::instrument(level = "trace")]
-    pub async fn shutdown_port(&self, port: u16) {
-        let sender = self.streams.write().await.remove(&port);
-        if let Some(sender) = sender {
-            // Sometimes the receiver fails to notice that the sender is dropped
-            // and hangs forever. This is a workaround.
-            sender.send(vec![]).await.ok();
+    pub async fn close_port(&self, our_port: u16, their_port: u16, fin_sent: bool) {
+        // If the user did not call `poll_shutdown`, we need to send a `Rst` frame
+        if !fin_sent {
+            self.sink
+                .send_message(
+                    Frame::Stream(StreamFrame::new_rst(our_port, their_port))
+                        .try_into()
+                        .expect("Frame should be representable as a message (this is a bug)"),
+                )
+                .await
+                .ok();
+            self.sink.flush().await.ok();
         }
+        // Free the port for reuse
+        if let Some(sender) = self.streams.write().await.remove(&our_port) {
+            // Make sure the user receives `EOF`.
+            sender.0.send(vec![]).await.ok();
+            sender.1.store(true, Ordering::Relaxed);
+        }
+        debug!("freed port {}", our_port);
     }
 
     /// Should really only be called when the mux is dropped
@@ -316,9 +327,9 @@ where
     async fn shutdown(&self) {
         debug!("closing all connections");
         let mut streams = self.streams.write().await;
-        // See `shutdown_port`
         for (_, tx) in streams.drain() {
-            tx.send(vec![]).await.ok();
+            // Make sure the user receives `EOF`.
+            tx.0.send(vec![]).await.ok();
         }
         drop(streams);
         // This also effectively `Rst`s all streams

@@ -20,7 +20,7 @@ use tungstenite::Message;
 #[allow(clippy::module_name_repetitions)]
 pub struct MuxStream<Sink, Stream> {
     /// Receive stream frames
-    pub stream_rx: mpsc::Receiver<Vec<u8>>,
+    pub(super) frame_rx: mpsc::Receiver<Vec<u8>>,
     /// Our port
     pub our_port: u16,
     /// Port of the other end
@@ -31,6 +31,9 @@ pub struct MuxStream<Sink, Stream> {
     pub dest_port: u16,
     /// Whether `Fin` has been sent
     pub fin_sent: AtomicBool,
+    /// Whether our entry in `inner.streams` has been removed and
+    /// no more writes should succeed
+    pub(super) stream_removed: Arc<AtomicBool>,
     /// Remaining bytes to be read
     pub(super) buf: Bytes,
     pub(super) inner: Arc<MultiplexorInner<Sink, Stream>>,
@@ -49,6 +52,8 @@ impl<Sink, Stream> std::fmt::Debug for MuxStream<Sink, Stream> {
 }
 
 impl<Sink, Stream> Drop for MuxStream<Sink, Stream> {
+    /// Dropping the port should act like `close()` has been called.
+    /// Since `drop` is not async, this is handled by the mux task.
     fn drop(&mut self) {
         // Notify the task that this port is no longer in use
         self.inner
@@ -79,7 +84,7 @@ where
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> Poll<Result<(), std::io::Error>> {
+    ) -> Poll<std::io::Result<()>> {
         let remaining = buf.remaining();
         if !self.buf.is_empty() {
             // There is some data left in `self.buf`. Copy it into `buf`
@@ -96,11 +101,11 @@ where
             return Poll::Ready(Ok(()));
         }
         trace!("polling the stream");
-        let next = ready!(self.stream_rx.poll_recv(cx));
+        let next = ready!(self.frame_rx.poll_recv(cx));
         if let Some(frame) = next {
             if frame.is_empty() {
                 // See `tokio::sync::mpsc`#clean-shutdown
-                self.stream_rx.close();
+                self.frame_rx.close();
                 // The stream has been closed, just return 0 bytes read
                 return Poll::Ready(Ok(()));
             }
@@ -132,41 +137,31 @@ where
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
-    ) -> Poll<Result<usize, std::io::Error>> {
-        match self.inner.streams.try_read() {
-            Ok(streams) => {
-                if streams.contains_key(&self.our_port) {
-                    // The stream is open. Send the frame
-                    ready!(self.inner.sink.poll_send_stream_buf(
-                        cx,
-                        buf,
-                        self.our_port,
-                        self.their_port
-                    ))?;
-                    Poll::Ready(Ok(buf.len()))
-                } else {
-                    // The stream has been closed or does not exist. Return an error
-                    debug!("stream has been closed, returning `BrokenPipe`");
-                    Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()))
-                }
-            }
-            Err(_) => Poll::Pending,
+    ) -> Poll<std::io::Result<usize>> {
+        if self.fin_sent.load(Ordering::Relaxed) || self.stream_removed.load(Ordering::Relaxed) {
+            // The stream has been closed. Return an error
+            debug!("stream has been closed, returning `BrokenPipe`");
+            return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
         }
+        ready!(self
+            .inner
+            .sink
+            .poll_send_stream_buf(cx, buf, self.our_port, self.their_port))?;
+        Poll::Ready(Ok(buf.len()))
     }
 
     #[tracing::instrument(skip(cx), level = "trace")]
     #[inline]
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         ready!(self.inner.sink.poll_flush(cx)).map_err(tungstenite_error_to_io_error)?;
         Poll::Ready(Ok(()))
     }
 
+    /// Close the write end of the stream (`shutdown(SHUT_WR)`).
+    /// This function will send a `Fin` frame to the remote peer.
     #[tracing::instrument(skip(cx), level = "trace")]
     #[inline]
-    fn poll_shutdown(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<(), std::io::Error>> {
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         if !self.fin_sent.load(Ordering::Relaxed) {
             let message = Frame::Stream(StreamFrame::new_fin(self.our_port, self.their_port))
                 .try_into()

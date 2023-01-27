@@ -25,6 +25,7 @@ axum-server = { version = "0.4", features = ["tls-rustls"] }
 base64 = "0.21"
 bytes = "1"
 clap = { version = "4", features = ["cargo", "derive"] }
+console-subscriber = { version = "0.1", optional = true }
 futures-util = { version = "0.3", default-features = false }
 http = "0.2"
 hyper = ">=0.14.10"
@@ -58,6 +59,7 @@ rustls-native-roots = ["rustls-native-certs", "tokio-tungstenite/rustls-tls-nati
 # Allows some tests that require real internet connection
 tests-real-internet4 = []
 tests-real-internet6 = []
+tokio-console = ["console-subscriber"]
 
 [profile.release]
 debug = true

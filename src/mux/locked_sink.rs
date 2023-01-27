@@ -12,7 +12,7 @@ use std::sync::{
     Mutex,
 };
 use std::task::{ready, Poll, Waker};
-use tracing::{debug, trace};
+use tracing::trace;
 use tungstenite::Message;
 
 /// `Sink` of frames with locking.
@@ -77,7 +77,7 @@ impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedMessag
             .lock()
             .expect("Sink `Mutex` is poisoned (this is a bug)");
         if let Some(waker) = waiters.pop_front() {
-            debug!("waking up a waiter");
+            trace!("waking up a waiter");
             waker.wake();
         }
     }
