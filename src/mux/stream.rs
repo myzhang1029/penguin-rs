@@ -106,9 +106,9 @@ where
             }
             // We have received a new frame. Copy it into `buf`
             if remaining < frame.len() {
-                // The buffer is too small. Fill it and advance `self.buf`
-                let our_buf = Bytes::from(frame);
-                let to_write = self.buf.split_to(remaining);
+                // The buffer is too small. Fill it and advance buf
+                let mut our_buf = Bytes::from(frame);
+                let to_write = our_buf.split_to(remaining);
                 buf.put_slice(&to_write);
                 self.buf = our_buf;
             } else {
