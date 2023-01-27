@@ -108,8 +108,11 @@ where
             stream_rx: RwLock::new(stream_rx),
             dropped_ports_tx,
         });
-
-        tokio::spawn(inner.dupe().task(datagram_tx, stream_tx, dropped_ports_rx));
+        tokio::spawn(
+            inner
+                .dupe()
+                .task_wrapper(datagram_tx, stream_tx, dropped_ports_rx),
+        );
         trace!("Multiplexor task spawned");
 
         Self { inner }

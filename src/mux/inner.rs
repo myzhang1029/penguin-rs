@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
+use tokio::time::MissedTickBehavior;
 use tracing::{debug, error, trace};
 use tungstenite::Message;
 
@@ -58,27 +59,47 @@ where
     Stream: FutureStream<Item = tungstenite::Result<Message>> + Send + Sync + Unpin + 'static,
     Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Sync + Unpin + 'static,
 {
+    /// Wrapper for `task_inner` that makes sure `self.shutdown` is called
+    #[tracing::instrument(skip(datagram_tx, stream_tx, dropped_ports_rx), level = "trace")]
+    pub(super) async fn task_wrapper(
+        self: Arc<Self>,
+        datagram_tx: mpsc::Sender<DatagramFrame>,
+        stream_tx: mpsc::Sender<MuxStream<Sink, Stream>>,
+        dropped_ports_rx: mpsc::UnboundedReceiver<(u16, u16, bool)>,
+    ) -> Result<(), Error> {
+        let res = self
+            .task_inner(datagram_tx, stream_tx, dropped_ports_rx)
+            .await;
+        match &res {
+            Ok(()) => debug!("Multiplexor task exited"),
+            Err(e) => error!("Multiplexor task failed: {e}"),
+        }
+        self.shutdown().await;
+        res
+    }
     /// Processing task
     /// Does the following:
     /// - Receives messages from `WebSocket` and processes them
     /// - Sends received datagrams to the `datagram_tx` channel
     /// - Sends received streams to the appropriate handler
     /// - Responds to ping/pong messages
-    #[tracing::instrument(skip(datagram_tx, stream_tx, dropped_ports_rx), level = "trace")]
-    pub(super) async fn task(
-        self: Arc<Self>,
+    async fn task_inner(
+        self: &Arc<Self>,
         mut datagram_tx: mpsc::Sender<DatagramFrame>,
         mut stream_tx: mpsc::Sender<MuxStream<Sink, Stream>>,
         mut dropped_ports_rx: mpsc::UnboundedReceiver<(u16, u16, bool)>,
     ) -> Result<(), Error> {
         let mut keepalive_interval = MaybeInterval::new(self.keepalive_interval);
+        // If we missed a tick, it is probably doing networking, so we don't need to
+        // send a ping
+        keepalive_interval.maybe_set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
             trace!("task loop");
             tokio::select! {
                 Some((our_port, their_port, fin_sent)) = dropped_ports_rx.recv() => {
                     if our_port == 0 {
                         debug!("mux dropped");
-                        break;
+                        return Ok(());
                     }
                     self.close_port(our_port, their_port, fin_sent).await;
                 }
@@ -86,7 +107,8 @@ where
                     let msg = msg?;
                     trace!("received message length = {}", msg.len());
                     if self.dupe().process_message(msg, &mut datagram_tx, &mut stream_tx).await? {
-                        break;
+                        // If the message was a `Close` frame, we are done
+                        return Ok(());
                     }
                 }
                 _ = keepalive_interval.tick() => {
@@ -94,12 +116,11 @@ where
                     self.sink.send_message(Message::Ping(vec![])).await?;
                 }
                 else => {
-                    break;
+                    // Everything is closed, we are probably done
+                    return Ok(());
                 }
             }
         }
-        self.shutdown().await;
-        Ok(())
     }
 
     /// Get the next message
@@ -251,7 +272,7 @@ where
     }
 
     /// Process an incoming message
-    /// Returns `Ok(true)` if we should close
+    /// Returns `Ok(true)` if a `Close` message was received.
     #[tracing::instrument(skip(msg, datagram_tx, stream_tx), level = "trace")]
     async fn process_message(
         self: Arc<Self>,
@@ -314,10 +335,10 @@ where
             self.sink.flush().await.ok();
         }
         // Free the port for reuse
-        if let Some(sender) = self.streams.write().await.remove(&our_port) {
+        if let Some(tx) = self.streams.write().await.remove(&our_port) {
             // Make sure the user receives `EOF`.
-            sender.0.send(vec![]).await.ok();
-            sender.1.store(true, Ordering::Relaxed);
+            tx.0.send(vec![]).await.ok();
+            tx.1.store(true, Ordering::Relaxed);
         }
         debug!("freed port {}", our_port);
     }
@@ -330,6 +351,8 @@ where
         for (_, tx) in streams.drain() {
             // Make sure the user receives `EOF`.
             tx.0.send(vec![]).await.ok();
+            // Stop all streams form sending stuff
+            tx.1.store(true, Ordering::Relaxed);
         }
         drop(streams);
         // This also effectively `Rst`s all streams
@@ -347,6 +370,12 @@ impl MaybeInterval {
     fn new(interval: Option<tokio::time::Duration>) -> Self {
         Self {
             interval: interval.map(tokio::time::interval),
+        }
+    }
+
+    fn maybe_set_missed_tick_behavior(&mut self, behavior: MissedTickBehavior) {
+        if let Some(interval) = &mut self.interval {
+            interval.set_missed_tick_behavior(behavior);
         }
     }
 
