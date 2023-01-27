@@ -84,7 +84,7 @@ pub(crate) enum Error {
 
 /// Construct a TCP remote based on the description. These are simple because
 /// a new channel can be created for each new connection and they do not need
-/// to persist afther the connection.
+/// to persist after the connection.
 /// This should be spawned as tasks and they will remain as long as `client`
 /// is alive. Individual connection tasks are spawned as connections appear.
 #[tracing::instrument(skip(handler_resources), level = "debug")]

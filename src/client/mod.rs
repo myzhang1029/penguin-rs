@@ -149,12 +149,9 @@ pub(crate) async fn client_main(args: &'static ClientArgs) -> Result<(), Error> 
             Ok(ws_stream) => {
                 tokio::select! {
                     Some(result) = jobs.join_next() => {
-                        let Ok(result) = result else { panic!("JoinSet returned an error"); };
-                        if let Err(e) = result {
-                            // Quit immediately if any listener fails
-                            // so maybe `systemd` can restart it
-                            return Err(e.into());
-                        }
+                        // Quit immediately if any listener fails
+                        // so maybe `systemd` can restart it
+                        result.expect("JoinSet returned an error")?;
                     }
                     result = on_connected(
                         ws_stream,
