@@ -6,6 +6,7 @@
 [![Dependency Status](https://deps.rs/repo/github/myzhang1029/penguin-rs/status.svg)](https://deps.rs/repo/github/myzhang1029/penguin-rs)
 ![License](https://img.shields.io/crates/l/rusty-penguin.svg)
 
+## About
 A fast TCP/UDP tunnel, transported over HTTP WebSocket.
 You are right. This project is inspired by `jpillora/chisel` (and subsequently
 my fork `myzhang1029/penguin`), but completely rewritten in Rust without any
@@ -14,6 +15,20 @@ with the prompt ["a penguin standing behind a gear wheel, digital art, logo."](
   https://labs.openai.com/s/Et1VIeCBREIRHhF7MU9NoZL6
 )
 
+## Basic Usage
+### Server
+```bash
+$ penguin server --host ::1 --port 443 --tls-cert cert.pem --tls-key key.pem --ws-psk some-secret
+```
+See `penguin server --help` for more options.
+
+### Client
+```bash
+$ penguin client --ws-psk some-secret wss://server 1080:socks 80:example.com:80
+```
+See `penguin client --help` for more options.
+
+## Comparison
 Compared to the original `penguin` or `chisel`, this project stripped away
 some functionalities:
 
@@ -62,3 +77,11 @@ $ iperf3 -c 127.0.0.1 # penguin with TLS
 ```
 
 - All the safety Rust offers.
+
+## Protocol
+Servers and clients with the same protocol version are compatible with each other. However, for the best performance, it is recommended to use the same version of `penguin` on both sides.
+
+The current protocol version is `penguin-v5`.
+
+## License
+GPL v3.0 or later or Apache License 2.0.
