@@ -20,13 +20,13 @@ use tungstenite::Message;
 #[allow(clippy::module_name_repetitions)]
 pub struct MuxStream<Sink, Stream> {
     /// Receive stream frames
-    pub(super) frame_rx: mpsc::Receiver<Vec<u8>>,
+    pub(super) frame_rx: mpsc::Receiver<Bytes>,
     /// Our port
     pub our_port: u16,
     /// Port of the other end
     pub their_port: u16,
     /// Forwarding destination. Only used on `Role::Server`
-    pub dest_host: Vec<u8>,
+    pub dest_host: Bytes,
     /// Forwarding destination port. Only used on `Role::Server`
     pub dest_port: u16,
     /// Whether `Fin` has been sent
@@ -86,42 +86,29 @@ where
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
         let remaining = buf.remaining();
-        if !self.buf.is_empty() {
-            // There is some data left in `self.buf`. Copy it into `buf`
-            trace!("using the remaining buffer");
-            if remaining < self.buf.len() {
-                // The buffer is too small. Fill it and advance `self.buf`
-                let to_write = self.buf.split_to(remaining);
-                buf.put_slice(&to_write);
-            } else {
-                // The buffer is large enough. Copy the frame into it
-                buf.put_slice(&self.buf);
-                self.buf.clear();
-            }
-            return Poll::Ready(Ok(()));
-        }
-        trace!("polling the stream");
-        let next = ready!(self.frame_rx.poll_recv(cx));
-        if let Some(frame) = next {
-            if frame.is_empty() {
+        if self.buf.is_empty() {
+            trace!("polling the stream");
+            let next = ready!(self.frame_rx.poll_recv(cx));
+            if next.is_none() || next.as_ref().unwrap().is_empty() {
                 // See `tokio::sync::mpsc`#clean-shutdown
                 self.frame_rx.close();
                 // The stream has been closed, just return 0 bytes read
                 return Poll::Ready(Ok(()));
             }
-            // We have received a new frame. Copy it into `buf`
-            if remaining < frame.len() {
-                // The buffer is too small. Fill it and advance buf
-                let mut our_buf = Bytes::from(frame);
-                let to_write = our_buf.split_to(remaining);
-                buf.put_slice(&to_write);
-                self.buf = our_buf;
-            } else {
-                // The buffer is large enough. Copy the frame into it
-                buf.put_slice(&frame);
-            }
+            self.buf = next.unwrap();
+        } else {
+            // There is some data left in `self.buf`.
+            trace!("using the remaining buffer");
         }
-        // else: The stream has been closed, just return 0 bytes read
+        if remaining < self.buf.len() {
+            // The buffer is too small. Fill it and advance `self.buf`
+            let to_write = self.buf.split_to(remaining);
+            buf.put_slice(&to_write);
+        } else {
+            // The buffer is large enough. Copy the frame into it
+            buf.put_slice(&self.buf);
+            self.buf.clear();
+        }
         Poll::Ready(Ok(()))
     }
 }

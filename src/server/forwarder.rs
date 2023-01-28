@@ -4,6 +4,7 @@
 
 use crate::config;
 use crate::mux::DatagramFrame;
+use bytes::BytesMut;
 use thiserror::Error;
 use tokio::net::TcpStream;
 use tokio::{
@@ -55,15 +56,16 @@ pub(super) async fn udp_forward_to(
     socket.send(&data).await?;
     trace!("sent UDP packet to {target}");
     loop {
-        let mut buf = [0u8; 65536];
+        let mut buf = BytesMut::with_capacity(65536);
         match tokio::time::timeout(config::UDP_PRUNE_TIMEOUT, socket.recv(&mut buf)).await {
             Ok(Ok(len)) => {
                 trace!("got UDP response from {target}");
+                buf.truncate(len);
                 let datagram_frame = DatagramFrame {
                     sid: client_id,
                     host: rhost.clone(),
                     port: rport,
-                    data: buf[..len].to_vec(),
+                    data: buf.freeze(),
                 };
                 datagram_tx.send(datagram_frame).await?;
             }

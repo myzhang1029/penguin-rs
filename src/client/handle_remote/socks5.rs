@@ -6,6 +6,7 @@ use super::{pipe_streams, Error, HandlerResources};
 use crate::client::ClientIdMapEntry;
 use crate::dupe::Dupe;
 use crate::mux::{DatagramFrame, IntKey};
+use bytes::{Buf, Bytes, BytesMut};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use tokio::io::BufWriter;
@@ -309,8 +310,7 @@ async fn udp_relay(
 ) -> Result<(), Error> {
     let socket = Arc::new(socket);
     loop {
-        let mut buf = [0; 65536];
-        let Some((dst, dport, data, len, src, sport)) = handle_udp_relay_header(&socket, &mut buf).await? else {
+        let Some((dst, dport, data, src, sport)) = handle_udp_relay_header(&socket).await? else {
             continue
         };
         let mut udp_client_id_map = handler_resources.udp_client_id_map.write().await;
@@ -324,7 +324,7 @@ async fn udp_relay(
             host: dst.into(),
             port: dport,
             sid: client_id,
-            data: data[..len].to_vec(),
+            data,
         };
         handler_resources.datagram_tx.send(datagram_frame).await?;
     }
@@ -333,9 +333,10 @@ async fn udp_relay(
 /// Parse a UDP relay request
 async fn handle_udp_relay_header<'buf>(
     socket: &UdpSocket,
-    buf: &'buf mut [u8],
-) -> Result<Option<(String, u16, &'buf [u8], usize, IpAddr, u16)>, Error> {
-    let (len, addr) = socket.recv_from(buf).await?;
+) -> Result<Option<(String, u16, Bytes, IpAddr, u16)>, Error> {
+    let mut buf = BytesMut::with_capacity(65536);
+    let (len, addr) = socket.recv_from(&mut buf).await?;
+    buf.truncate(len);
     // let _reserved = &buf[..2];
     let frag = buf[2];
     if frag != 0 {
@@ -378,14 +379,8 @@ async fn handle_udp_relay_header<'buf>(
             return Ok(None);
         }
     };
-    Ok(Some((
-        dst,
-        port,
-        &buf[processed..len],
-        len - processed,
-        addr.ip(),
-        addr.port(),
-    )))
+    buf.advance(processed);
+    Ok(Some((dst, port, buf.freeze(), addr.ip(), addr.port())))
 }
 
 /// Send a UDP relay response

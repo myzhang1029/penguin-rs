@@ -6,6 +6,7 @@ use super::Error;
 use crate::client::{ClientIdMapEntry, HandlerResources};
 use crate::dupe::Dupe;
 use crate::mux::{DatagramFrame, IntKey};
+use bytes::{Bytes, BytesMut};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::UdpSocket;
@@ -15,9 +16,9 @@ use tracing::{error, info, warn};
 #[inline]
 #[tracing::instrument(skip(handler_resources), level = "debug")]
 pub(super) async fn handle_udp(
-    lhost: &str,
+    lhost: &'static str,
     lport: u16,
-    rhost: &str,
+    rhost: &'static str,
     rport: u16,
     handler_resources: &HandlerResources,
 ) -> Result<(), Error> {
@@ -28,17 +29,18 @@ pub(super) async fn handle_udp(
         .map_or(format!("{lhost}:{lport}"), |addr| addr.to_string());
     info!("Bound on {local_addr}");
     loop {
-        let mut buf = [0u8; 65536];
+        let mut buf = BytesMut::with_capacity(65536);
         let (len, addr) = socket.recv_from(&mut buf).await?;
+        buf.truncate(len);
         let mut udp_client_id_map = handler_resources.udp_client_id_map.write().await;
         let client_id = u32::next_available_key(&*udp_client_id_map);
         udp_client_id_map.insert(client_id, ClientIdMapEntry::new(addr, socket.dupe(), false));
         drop(udp_client_id_map);
         let frame = DatagramFrame {
-            host: rhost.as_bytes().to_vec(),
+            host: Bytes::from_static(rhost.as_bytes()),
             port: rport,
             sid: client_id,
-            data: buf[..len].to_vec(),
+            data: buf.freeze(),
         };
         handler_resources.datagram_tx.send(frame).await?;
     }
@@ -48,7 +50,7 @@ pub(super) async fn handle_udp(
 #[inline]
 #[tracing::instrument(skip(handler_resources), level = "debug")]
 pub(super) async fn handle_udp_stdio(
-    rhost: &str,
+    rhost: &'static str,
     rport: u16,
     handler_resources: &HandlerResources,
 ) -> Result<(), Error> {
@@ -57,10 +59,10 @@ pub(super) async fn handle_udp_stdio(
         let mut line = String::new();
         super::complete_or_continue_if_retryable!(stdin.read_line(&mut line).await);
         let frame = DatagramFrame {
-            host: rhost.as_bytes().to_vec(),
+            host: Bytes::from_static(rhost.as_bytes()),
             port: rport,
             sid: 0,
-            data: line.as_bytes().to_vec(),
+            data: line.into(),
         };
         handler_resources.datagram_tx.send(frame).await?;
     }

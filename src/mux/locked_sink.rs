@@ -108,7 +108,11 @@ impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedMessag
                 return Poll::Pending;
             }
         }
-        let frame = Frame::Stream(StreamFrame::new_psh(our_port, their_port, buf.to_vec()));
+        let frame = Frame::Stream(StreamFrame::new_psh(
+            our_port,
+            their_port,
+            buf.to_vec().into(),
+        ));
         let message: Message = match frame.try_into() {
             Ok(message) => message,
             Err(e) => {

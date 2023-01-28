@@ -25,7 +25,7 @@
 //! send them back to the client with the same Source ID.
 #![allow(clippy::similar_names)]
 
-use bytes::{Buf, Bytes};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use std::{fmt::Debug, num::TryFromIntError};
 use thiserror::Error;
 use tracing::warn;
@@ -66,7 +66,7 @@ pub struct StreamFrame {
     pub sport: u16,
     pub dport: u16,
     pub flag: StreamFlag,
-    pub data: Vec<u8>,
+    pub data: Bytes,
 }
 
 impl Debug for StreamFrame {
@@ -84,16 +84,17 @@ impl StreamFrame {
     /// Create a new `Syn` frame.
     pub fn new_syn(dest_host: &[u8], dest_port: u16, sport: u16) -> Result<Self, Error> {
         let host_len = dest_host.len();
-        let mut syn_payload =
-            Vec::with_capacity(std::mem::size_of::<u8>() + std::mem::size_of::<u16>() + host_len);
-        syn_payload.push(u8::try_from(host_len)?);
+        let mut syn_payload = BytesMut::with_capacity(
+            std::mem::size_of::<u8>() + std::mem::size_of::<u16>() + host_len,
+        );
+        syn_payload.put_u8(u8::try_from(host_len)?);
         syn_payload.extend_from_slice(dest_host);
-        syn_payload.extend_from_slice(&dest_port.to_be_bytes());
+        syn_payload.put_u16(dest_port);
         Ok(Self {
             sport,
             dport: 0,
             flag: StreamFlag::Syn,
-            data: syn_payload,
+            data: syn_payload.freeze(),
         })
     }
     /// Create a new `Ack` frame.
@@ -103,7 +104,7 @@ impl StreamFrame {
             sport,
             dport,
             flag: StreamFlag::Ack,
-            data: vec![],
+            data: Bytes::new(),
         }
     }
     /// Create a new `Rst` frame.
@@ -113,7 +114,7 @@ impl StreamFrame {
             sport,
             dport,
             flag: StreamFlag::Rst,
-            data: vec![],
+            data: Bytes::new(),
         }
     }
     /// Create a new `Fin` frame.
@@ -123,12 +124,12 @@ impl StreamFrame {
             sport,
             dport,
             flag: StreamFlag::Fin,
-            data: vec![],
+            data: Bytes::new(),
         }
     }
     /// Create a new `Psh` frame.
     #[must_use]
-    pub const fn new_psh(sport: u16, dport: u16, data: Vec<u8>) -> Self {
+    pub const fn new_psh(sport: u16, dport: u16, data: Bytes) -> Self {
         Self {
             sport,
             dport,
@@ -145,12 +146,12 @@ pub struct DatagramFrame {
     /// Host of the other end
     /// host of the "remote" if sent from client;
     /// host of the "from" if sent from server.
-    pub host: Vec<u8>,
+    pub host: Bytes,
     pub port: u16,
     /// Source ID
     pub sid: u32,
     /// Payload
-    pub data: Vec<u8>,
+    pub data: Bytes,
 }
 
 impl Debug for DatagramFrame {
@@ -181,7 +182,7 @@ impl TryFrom<Frame> for Vec<u8> {
     #[tracing::instrument(level = "trace")]
     fn try_from(frame: Frame) -> Result<Vec<u8>, Self::Error> {
         match frame {
-            Frame::Stream(mut frame) => {
+            Frame::Stream(frame) => {
                 let size = 1
                     + std::mem::size_of::<u16>()
                     + std::mem::size_of::<u16>()
@@ -189,26 +190,26 @@ impl TryFrom<Frame> for Vec<u8> {
                     + std::mem::size_of::<u32>()
                     + frame.data.len();
                 let mut encoded = Vec::with_capacity(size);
-                encoded.push(1);
-                encoded.extend_from_slice(&frame.sport.to_be_bytes());
-                encoded.extend_from_slice(&frame.dport.to_be_bytes());
-                encoded.extend_from_slice(&(frame.flag as u8).to_be_bytes());
-                encoded.append(&mut frame.data);
+                encoded.put_u8(1);
+                encoded.put_u16(frame.sport);
+                encoded.put_u16(frame.dport);
+                encoded.put_u8(frame.flag as u8);
+                encoded.extend_from_slice(&frame.data);
                 Ok(encoded)
             }
-            Frame::Datagram(mut frame) => {
+            Frame::Datagram(frame) => {
                 let size = 1
                     + frame.host.len()
                     + std::mem::size_of::<u16>()
                     + std::mem::size_of::<u32>()
                     + frame.data.len();
                 let mut encoded = Vec::with_capacity(size);
-                encoded.push(3);
-                encoded.push(u8::try_from(frame.host.len())?);
-                encoded.append(&mut frame.host);
-                encoded.extend_from_slice(&frame.port.to_be_bytes());
-                encoded.extend_from_slice(&frame.sid.to_be_bytes());
-                encoded.append(&mut frame.data);
+                encoded.put_u8(3);
+                encoded.put_u8(u8::try_from(frame.host.len())?);
+                encoded.extend_from_slice(&frame.host);
+                encoded.put_u16(frame.port);
+                encoded.put_u32(frame.sid);
+                encoded.extend_from_slice(&frame.data);
                 Ok(encoded)
             }
         }
@@ -242,7 +243,7 @@ impl TryFrom<Bytes> for StreamFrame {
             sport,
             dport,
             flag,
-            data: Vec::from(data),
+            data,
         })
     }
 }
@@ -250,14 +251,14 @@ impl TryFrom<Bytes> for StreamFrame {
 impl From<Bytes> for DatagramFrame {
     fn from(mut data: Bytes) -> Self {
         let host_len = data.get_u8();
-        let host = data.split_to(host_len as usize).into();
+        let host = data.split_to(host_len as usize);
         let port = data.get_u16();
         let sid = data.get_u32();
         Self {
             host,
             port,
             sid,
-            data: Vec::from(data),
+            data,
         }
     }
 }
@@ -290,7 +291,7 @@ mod test {
                 sport: 1234,
                 dport: 0,
                 flag: StreamFlag::Syn,
-                data: vec![0x00, 0x16, 0x2e]
+                data: Bytes::from_static(&[0x00, 0x16, 0x2e]),
             })
         );
         let bytes = Vec::try_from(frame.clone()).unwrap();
@@ -301,10 +302,10 @@ mod test {
     #[test]
     fn test_datagram_frame() {
         let frame = Frame::Datagram(DatagramFrame {
-            host: vec![1, 2, 3, 4],
+            host: Bytes::from_static(&[1, 2, 3, 4]),
             port: 1234,
             sid: 5678,
-            data: vec![1, 2, 3, 4],
+            data: Bytes::from_static(&[1, 2, 3, 4]),
         });
         let bytes = Vec::try_from(frame.clone()).unwrap();
         let decoded = Frame::try_from(bytes).unwrap();
@@ -327,7 +328,11 @@ mod test {
             ]
         );
 
-        let frame = Frame::Stream(StreamFrame::new_psh(1234, 5678, vec![1, 2, 3, 4]));
+        let frame = Frame::Stream(StreamFrame::new_psh(
+            1234,
+            5678,
+            Bytes::from_static(&[1, 2, 3, 4]),
+        ));
         let bytes = Vec::try_from(frame).unwrap();
         assert_eq!(
             bytes,
@@ -353,10 +358,10 @@ mod test {
         );
 
         let frame = Frame::Datagram(DatagramFrame {
-            host: vec![1, 2, 3, 4],
+            host: Bytes::from_static(&[1, 2, 3, 4]),
             port: 1234,
             sid: 5678,
-            data: vec![1, 2, 3, 4],
+            data: Bytes::from_static(&[1, 2, 3, 4]),
         });
         let bytes = Vec::try_from(frame).unwrap();
         assert_eq!(

@@ -18,7 +18,7 @@ use tracing::{debug, error, trace};
 use tungstenite::Message;
 
 /// (writer, notifier when `close_port` is called)
-type MuxStreamSenderData = (mpsc::Sender<Vec<u8>>, Arc<AtomicBool>);
+type MuxStreamSenderData = (mpsc::Sender<Bytes>, Arc<AtomicBool>);
 
 /// Multiplexor inner
 pub(super) struct MultiplexorInner<Sink, Stream> {
@@ -160,9 +160,9 @@ where
                     return Err(Error::ClientReceivedSyn);
                 }
                 // Decode Syn handshake
-                let mut syn_data = bytes::Bytes::from(data);
+                let mut syn_data = data;
                 let host_len = syn_data.get_u8();
-                let dest_host = syn_data.split_to(host_len as usize).to_vec();
+                let dest_host = syn_data.split_to(host_len as usize);
                 let dest_port = syn_data.get_u16();
                 let our_port = u16::next_available_key(&*self.streams.read().await);
                 trace!("port: {}", our_port);
@@ -182,7 +182,7 @@ where
                 }
                 // "we" is `role == Client`
                 // "they" is `role == Server`
-                self.new_stream(our_port, their_port, vec![], 0, stream_tx)
+                self.new_stream(our_port, their_port, Bytes::new(), 0, stream_tx)
                     .await?;
             }
             StreamFlag::Rst => {
@@ -193,7 +193,7 @@ where
                 let sender = self.streams.write().await;
                 if let Some(sender) = sender.get(&our_port) {
                     // Make sure the user receives `EOF`.
-                    sender.0.send(vec![]).await.ok();
+                    sender.0.send(Bytes::new()).await.ok();
                 }
                 // And our end can still send
             }
@@ -218,7 +218,7 @@ where
         self: Arc<Self>,
         our_port: u16,
         their_port: u16,
-        dest_host: Vec<u8>,
+        dest_host: Bytes,
         dest_port: u16,
         stream_tx: &mut mpsc::Sender<MuxStream<Sink, Stream>>,
     ) -> Result<(), Error> {
@@ -338,7 +338,7 @@ where
         // Free the port for reuse
         if let Some(tx) = self.streams.write().await.remove(&our_port) {
             // Make sure the user receives `EOF`.
-            tx.0.send(vec![]).await.ok();
+            tx.0.send(Bytes::new()).await.ok();
             tx.1.store(true, Ordering::Relaxed);
         }
         debug!("freed port {}", our_port);
@@ -351,7 +351,7 @@ where
         let mut streams = self.streams.write().await;
         for (_, tx) in streams.drain() {
             // Make sure the user receives `EOF`.
-            tx.0.send(vec![]).await.ok();
+            tx.0.send(Bytes::new()).await.ok();
             // Stop all streams form sending stuff
             tx.1.store(true, Ordering::Relaxed);
         }
