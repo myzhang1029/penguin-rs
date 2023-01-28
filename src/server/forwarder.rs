@@ -90,11 +90,11 @@ pub(super) async fn udp_forward_to(
 #[tracing::instrument(skip(channel), level = "debug")]
 pub(super) async fn tcp_forwarder_on_channel(
     mut channel: super::websocket::MuxStream,
-    rhost: String,
-    rport: u16,
 ) -> Result<(), Error> {
-    tracing::info!("TCP forwarding to {}:{}", rhost, rport);
-    let mut rstream = TcpStream::connect((&*rhost, rport)).await?;
+    let rhost = std::str::from_utf8(&channel.dest_host)?;
+    let rport = channel.dest_port;
+    debug!("TCP forwarding to {}:{}", rhost, rport);
+    let mut rstream = TcpStream::connect((rhost, rport)).await?;
     trace!("connected to {:?}", rstream.peer_addr());
     tokio::io::copy_bidirectional(&mut channel, &mut rstream).await?;
     trace!("TCP forwarding finished");

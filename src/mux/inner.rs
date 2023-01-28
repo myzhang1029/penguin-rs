@@ -204,6 +204,7 @@ where
                         return Ok(());
                     }
                 }
+                drop(streams);
                 // else, the receiver is closed or the port does not exist
                 let rst_frame = Frame::Stream(StreamFrame::new_rst(our_port, their_port));
                 self.send_frame(rst_frame).await?;
@@ -226,7 +227,7 @@ where
         let stream_removed = Arc::new(AtomicBool::new(false));
         // Save the TX end of the stream so we can write to it when subsequent frames arrive
         let mut streams = self.streams.write().await;
-        streams.insert(our_port, (frame_tx, stream_removed.clone()));
+        streams.insert(our_port, (frame_tx, stream_removed.dupe()));
         drop(streams);
         let stream = MuxStream {
             frame_rx,

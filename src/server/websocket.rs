@@ -44,12 +44,7 @@ pub async fn handle_websocket(ws_stream: WebSocket) {
             }
             // Check if the multiplexor has received a new stream request
             Some(result) = mux.server_new_stream_channel() => {
-                if let Ok(rhost) = String::from_utf8(result.dest_host.clone()) {
-                    let rport = result.dest_port;
-                    jobs.spawn(tcp_forwarder_on_channel(result, rhost, rport));
-                } else {
-                    warn!("Invalid host name");
-                }
+                jobs.spawn(tcp_forwarder_on_channel(result));
             }
             // Check if the multiplexor has received a UDP datagram
             Some(datagram_frame) = mux.get_datagram() => {
