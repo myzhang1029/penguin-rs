@@ -158,13 +158,13 @@ async fn test_several_channels() {
         .await
         .unwrap();
     info!("client conn3 = {:?}", conn3);
-    conn1.write(b"hello").await.unwrap();
+    conn1.write_all(b"hello").await.unwrap();
     conn1.shutdown().await.unwrap();
     info!("client conn1 wrote");
-    conn2.write(b"world").await.unwrap();
+    conn2.write_all(b"world").await.unwrap();
     conn2.shutdown().await.unwrap();
     info!("client conn2 wrote");
-    conn3.write(b"!").await.unwrap();
+    conn3.write_all(b"!").await.unwrap();
     conn3.shutdown().await.unwrap();
     info!("client conn3 wrote");
 

@@ -32,7 +32,7 @@ fn make_server_args(host: &str, port: u16) -> arg::ServerArgs {
 
 fn make_client_args(servhost: &str, servport: u16, remotes: Vec<Remote>) -> arg::ClientArgs {
     arg::ClientArgs {
-        server: ServerUrl::from_str(&format!("ws://{}:{}/ws", servhost, servport)).unwrap(),
+        server: ServerUrl::from_str(&format!("ws://{servhost}:{servport}/ws")).unwrap(),
         remote: remotes,
         ws_psk: None,
         keepalive: 0,
@@ -157,7 +157,8 @@ async fn test_socks_connect_reliability_v4() {
         sock.write_all(b"\x05\x01\x00\x01\x7f\x00\x00\x01\x66\xc3")
             .await
             .unwrap();
-        sock.read(&mut buf).await.unwrap();
+        let n = sock.read(&mut buf).await.unwrap();
+        assert_eq!(n, 3);
         assert_eq!(&buf[..3], b"\x05\x00\x00");
         sock.write_all(&input_bytes).await.unwrap();
         let mut output_bytes = vec![0u8; input_len];
@@ -210,7 +211,8 @@ async fn test_socks_connect_reliability_v6() {
         sock.write_all(b"\x05\x01\x00\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x34\x48")
             .await
             .unwrap();
-        sock.read(&mut buf).await.unwrap();
+        let n = sock.read(&mut buf).await.unwrap();
+        assert_eq!(n, 3);
         assert_eq!(&buf[..3], b"\x05\x00\x00");
         sock.write_all(&input_bytes).await.unwrap();
         let mut output_bytes = vec![0u8; input_len];

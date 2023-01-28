@@ -47,16 +47,12 @@ type WebSocket = WebSocketStream<Upgraded>;
 /// Server Errors
 #[derive(Debug, Error)]
 pub enum Error {
-    /// Invalid listening host
     #[error("invalid listening host: {0}")]
     InvalidHost(#[from] std::net::AddrParseError),
-    /// TLS error
     #[error(transparent)]
     Tls(#[from] crate::tls::Error),
-    /// IO error
-    #[error("IO error: {0}")]
+    #[error(transparent)]
     Io(#[from] std::io::Error),
-    /// Hyper error
     #[error("HTTP server error: {0}")]
     Hyper(#[from] hyper::Error),
 }

@@ -491,8 +491,7 @@ mod test {
 
     #[test]
     fn test_client_args_minimal() {
-        let args =
-            PenguinCli::parse_from(&["penguin", "client", "127.0.0.1:9999/endpoint", "1234"]);
+        let args = PenguinCli::parse_from(["penguin", "client", "127.0.0.1:9999/endpoint", "1234"]);
         assert!(matches!(args.subcommand, Commands::Client(_)));
         if let Commands::Client(args) = args.subcommand {
             let server_uri = args.server.0;
@@ -514,7 +513,7 @@ mod test {
 
     #[test]
     fn test_client_args_full() {
-        let args = PenguinCli::parse_from(&[
+        let args = PenguinCli::parse_from([
             "penguin",
             "client",
             "wss://127.0.0.1:9999/endpoint",

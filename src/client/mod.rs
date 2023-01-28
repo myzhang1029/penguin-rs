@@ -2,6 +2,7 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 mod handle_remote;
+mod maybe_retryable;
 pub(crate) mod ws_connect;
 
 use crate::arg::ClientArgs;
@@ -10,6 +11,7 @@ use crate::dupe::Dupe;
 use crate::mux::{DatagramFrame, Multiplexor, MuxStream as GMuxStream, Role};
 use futures_util::stream::{SplitSink, SplitStream};
 use handle_remote::handle_remote;
+use maybe_retryable::MaybeRetryableError;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -309,49 +311,5 @@ async fn prune_client_id_map_task(udp_client_id_map: Arc<RwLock<HashMap<u32, Cli
         let mut udp_client_id_map = udp_client_id_map.write().await;
         let now = time::Instant::now();
         udp_client_id_map.retain(|_, entry| entry.expires > now);
-    }
-}
-
-pub(super) trait MaybeRetryableError: std::error::Error {
-    /// Returns true if we should retry the connection.
-    fn retryable(&self) -> bool;
-}
-
-impl MaybeRetryableError for std::io::Error {
-    fn retryable(&self) -> bool {
-        self.kind() == std::io::ErrorKind::AddrNotAvailable
-            || self.kind() == std::io::ErrorKind::BrokenPipe
-            || self.kind() == std::io::ErrorKind::ConnectionReset
-            || self.kind() == std::io::ErrorKind::ConnectionRefused
-    }
-}
-
-impl MaybeRetryableError for tungstenite::Error {
-    fn retryable(&self) -> bool {
-        match self {
-            tungstenite::Error::Io(e) => e.retryable(),
-            tungstenite::Error::AlreadyClosed => true,
-            _ => false,
-        }
-    }
-}
-
-impl MaybeRetryableError for crate::mux::Error {
-    fn retryable(&self) -> bool {
-        match self {
-            crate::mux::Error::Io(e) => e.retryable(),
-            crate::mux::Error::Tungstenite(e) => e.retryable(),
-            crate::mux::Error::StreamTxClosed => true,
-            _ => false,
-        }
-    }
-}
-
-impl MaybeRetryableError for ws_connect::Error {
-    fn retryable(&self) -> bool {
-        match self {
-            ws_connect::Error::Tungstenite(e) => e.retryable(),
-            ws_connect::Error::Tls(_) => false,
-        }
     }
 }
