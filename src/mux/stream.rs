@@ -2,10 +2,10 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::frame::{Frame, StreamFrame};
-use super::inner::MultiplexorInner;
+use super::locked_sink::LockedMessageSink;
 use super::tungstenite_error_to_io_error;
 use bytes::Bytes;
-use futures_util::{Sink as FutureSink, Stream as FutureStream};
+use futures_util::Sink as FutureSink;
 use std::io;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,7 +18,7 @@ use tungstenite::Message;
 
 /// All parameters of a stream channel
 #[allow(clippy::module_name_repetitions)]
-pub struct MuxStream<Sink, Stream> {
+pub struct MuxStream<Sink> {
     /// Receive stream frames
     pub(super) frame_rx: mpsc::Receiver<Bytes>,
     /// Our port
@@ -36,10 +36,13 @@ pub struct MuxStream<Sink, Stream> {
     pub(super) stream_removed: Arc<AtomicBool>,
     /// Remaining bytes to be read
     pub(super) buf: Bytes,
-    pub(super) inner: Arc<MultiplexorInner<Sink, Stream>>,
+    /// See `MultiplexorInner`.
+    pub(super) sink: Arc<LockedMessageSink<Sink>>,
+    /// See `MultiplexorInner`.
+    pub(super) dropped_ports_tx: mpsc::UnboundedSender<(u16, u16, bool)>,
 }
 
-impl<Sink, Stream> std::fmt::Debug for MuxStream<Sink, Stream> {
+impl<Sink> std::fmt::Debug for MuxStream<Sink> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MuxStream")
             .field("our_port", &self.our_port)
@@ -51,13 +54,12 @@ impl<Sink, Stream> std::fmt::Debug for MuxStream<Sink, Stream> {
     }
 }
 
-impl<Sink, Stream> Drop for MuxStream<Sink, Stream> {
+impl<Sink> Drop for MuxStream<Sink> {
     /// Dropping the port should act like `close()` has been called.
     /// Since `drop` is not async, this is handled by the mux task.
     fn drop(&mut self) {
         // Notify the task that this port is no longer in use
-        self.inner
-            .dropped_ports_tx
+        self.dropped_ports_tx
             .send((
                 self.our_port,
                 self.their_port,
@@ -69,9 +71,8 @@ impl<Sink, Stream> Drop for MuxStream<Sink, Stream> {
 }
 
 // Proxy the AsyncRead trait to the underlying stream so that users don't access `stream`
-impl<Sink, Stream> AsyncRead for MuxStream<Sink, Stream>
+impl<Sink> AsyncRead for MuxStream<Sink>
 where
-    Stream: FutureStream<Item = tungstenite::Result<Message>> + Send + Sync + Unpin + 'static,
     Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Sync + Unpin + 'static,
 {
     /// Read data from the stream.
@@ -113,9 +114,8 @@ where
     }
 }
 
-impl<Sink, Stream> AsyncWrite for MuxStream<Sink, Stream>
+impl<Sink> AsyncWrite for MuxStream<Sink>
 where
-    Stream: FutureStream<Item = tungstenite::Result<Message>> + Send + Sync + Unpin + 'static,
     Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Sync + Unpin + 'static,
 {
     #[tracing::instrument(skip(cx, buf), level = "trace")]
@@ -131,7 +131,6 @@ where
             return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
         }
         ready!(self
-            .inner
             .sink
             .poll_send_stream_buf(cx, buf, self.our_port, self.their_port))?;
         Poll::Ready(Ok(buf.len()))
@@ -140,7 +139,7 @@ where
     #[tracing::instrument(skip(cx), level = "trace")]
     #[inline]
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        ready!(self.inner.sink.poll_flush(cx)).map_err(tungstenite_error_to_io_error)?;
+        ready!(self.sink.poll_flush(cx)).map_err(tungstenite_error_to_io_error)?;
         Poll::Ready(Ok(()))
     }
 
@@ -153,13 +152,13 @@ where
             let message = Frame::Stream(StreamFrame::new_fin(self.our_port, self.their_port))
                 .try_into()
                 .expect("Frame should be representable as a message (this is a bug)");
-            ready!(self.inner.sink.poll_send_message(cx, &message))
+            ready!(self.sink.poll_send_message(cx, &message))
                 .map_err(tungstenite_error_to_io_error)?;
             self.fin_sent.store(true, Ordering::Relaxed);
         }
         // We don't want to `close()` the sink here!!!
         // This line is allowed to fail, because the sink might have been closed altogether
-        ready!(self.inner.sink.poll_flush(cx)).ok();
+        ready!(self.sink.poll_flush(cx)).ok();
         Poll::Ready(Ok(()))
     }
 }

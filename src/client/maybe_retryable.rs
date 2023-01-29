@@ -23,7 +23,9 @@ impl MaybeRetryableError for tungstenite::error::ProtocolError {
     fn retryable(&self) -> bool {
         matches!(
             self,
-            Self::ReceivedAfterClosing | Self::ResetWithoutClosingHandshake
+            Self::ReceivedAfterClosing
+                | Self::ResetWithoutClosingHandshake
+                | Self::SendAfterClosing
         )
     }
 }

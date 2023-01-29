@@ -7,7 +7,6 @@ use super::WebSocket;
 use crate::dupe::Dupe;
 use crate::mux::{DatagramFrame, Multiplexor, Role};
 use futures_util::stream::SplitSink;
-use futures_util::stream::SplitStream;
 use hyper::upgrade::Upgraded;
 use tokio::{sync::mpsc, task::JoinSet};
 use tokio_tungstenite::WebSocketStream;
@@ -16,8 +15,7 @@ use tungstenite::Message;
 
 type WSStream = WebSocketStream<Upgraded>;
 pub(super) type Sink = SplitSink<WSStream, Message>;
-pub(super) type Stream = SplitStream<WSStream>;
-pub(super) type MuxStream = crate::mux::MuxStream<Sink, Stream>;
+pub(super) type MuxStream = crate::mux::MuxStream<Sink>;
 
 /// Multiplex the `WebSocket` connection and handle the forwarding requests.
 #[tracing::instrument(skip(ws_stream), level = "debug")]

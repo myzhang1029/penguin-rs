@@ -12,6 +12,7 @@ impl<T> Dupe for &T {}
 impl<T> Dupe for std::sync::Arc<T> {}
 impl<T> Dupe for std::rc::Rc<T> {}
 impl<T> Dupe for tokio::sync::mpsc::Sender<T> {}
+impl<T> Dupe for tokio::sync::mpsc::UnboundedSender<T> {}
 impl Dupe for std::task::Waker {}
 impl Dupe for axum_server::tls_rustls::RustlsConfig {}
 

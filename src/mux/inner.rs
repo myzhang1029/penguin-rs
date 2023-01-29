@@ -21,21 +21,15 @@ use tungstenite::Message;
 type MuxStreamSenderData = (mpsc::Sender<Bytes>, Arc<AtomicBool>);
 
 /// Multiplexor inner
-pub(super) struct MultiplexorInner<Sink, Stream> {
+pub(super) struct MultiplexorInner<Sink> {
     /// The role of this multiplexor
     pub(super) role: Role,
-    /// The underlying `Sink` of messages
-    pub(super) sink: LockedMessageSink<Sink>,
-    /// The underlying `Stream` of messages
-    pub(super) stream: RwLock<Stream>,
+    /// The underlying `Sink` of messages. `Stream` is localized to `self.task_inner`.
+    pub(super) sink: Arc<LockedMessageSink<Sink>>,
     /// Interval between keepalive `Ping`s
     pub(super) keepalive_interval: Option<std::time::Duration>,
-    /// Open stream channels: our_port ->
-    pub(super) streams: RwLock<HashMap<u16, MuxStreamSenderData>>,
-    /// Channel of received datagram frames for processing
-    pub(super) datagram_rx: RwLock<mpsc::Receiver<DatagramFrame>>,
-    /// Channel of established streams for processing
-    pub(super) stream_rx: RwLock<mpsc::Receiver<MuxStream<Sink, Stream>>>,
+    /// Open stream channels: our_port -> `MuxStreamSenderData`
+    pub(super) streams: Arc<RwLock<HashMap<u16, MuxStreamSenderData>>>,
     /// Channel for notifying the task of a dropped `MuxStream`
     /// (in the form (our_port, their_port, fin_sent)).
     /// Sending (0, _, _) means that the multiplexor is being dropped and the
@@ -45,7 +39,7 @@ pub(super) struct MultiplexorInner<Sink, Stream> {
     pub(super) dropped_ports_tx: mpsc::UnboundedSender<(u16, u16, bool)>,
 }
 
-impl<Sink, Stream> std::fmt::Debug for MultiplexorInner<Sink, Stream> {
+impl<Sink> std::fmt::Debug for MultiplexorInner<Sink> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MultiplexorInner")
             .field("role", &self.role)
@@ -54,21 +48,56 @@ impl<Sink, Stream> std::fmt::Debug for MultiplexorInner<Sink, Stream> {
     }
 }
 
-impl<Sink, Stream> MultiplexorInner<Sink, Stream>
+impl<Sink> Clone for MultiplexorInner<Sink> {
+    // `Clone` is manually implemented because we don't need `Sink: Clone`.
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            role: self.role,
+            sink: self.sink.clone(),
+            keepalive_interval: self.keepalive_interval,
+            streams: self.streams.clone(),
+            dropped_ports_tx: self.dropped_ports_tx.clone(),
+        }
+    }
+}
+
+impl<Sink> Dupe for MultiplexorInner<Sink> {
+    // Explicitly providing a `dupe` implementation to prove that everything
+    // can be cheaply cloned.
+    #[inline]
+    fn dupe(&self) -> Self {
+        Self {
+            role: self.role,
+            sink: self.sink.dupe(),
+            keepalive_interval: self.keepalive_interval,
+            streams: self.streams.dupe(),
+            dropped_ports_tx: self.dropped_ports_tx.dupe(),
+        }
+    }
+}
+
+impl<Sink> MultiplexorInner<Sink>
 where
-    Stream: FutureStream<Item = tungstenite::Result<Message>> + Send + Sync + Unpin + 'static,
     Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Sync + Unpin + 'static,
 {
     /// Wrapper for `task_inner` that makes sure `self.shutdown` is called
-    #[tracing::instrument(skip(datagram_tx, stream_tx, dropped_ports_rx), level = "trace")]
-    pub(super) async fn task_wrapper(
-        self: Arc<Self>,
+    #[tracing::instrument(
+        skip(datagram_tx, stream_tx, dropped_ports_rx, message_stream),
+        level = "trace"
+    )]
+    pub(super) async fn task_wrapper<Stream>(
+        self,
         datagram_tx: mpsc::Sender<DatagramFrame>,
-        stream_tx: mpsc::Sender<MuxStream<Sink, Stream>>,
+        stream_tx: mpsc::Sender<MuxStream<Sink>>,
         dropped_ports_rx: mpsc::UnboundedReceiver<(u16, u16, bool)>,
-    ) -> Result<(), Error> {
+        message_stream: Stream,
+    ) -> Result<(), Error>
+    where
+        Stream: FutureStream<Item = tungstenite::Result<Message>> + Send + Sync + Unpin + 'static,
+    {
         let res = self
-            .task_inner(datagram_tx, stream_tx, dropped_ports_rx)
+            .task_inner(datagram_tx, stream_tx, dropped_ports_rx, message_stream)
             .await;
         match &res {
             Ok(()) => debug!("Multiplexor task exited"),
@@ -83,12 +112,16 @@ where
     /// - Sends received datagrams to the `datagram_tx` channel
     /// - Sends received streams to the appropriate handler
     /// - Responds to ping/pong messages
-    async fn task_inner(
-        self: &Arc<Self>,
+    async fn task_inner<Stream>(
+        &self,
         mut datagram_tx: mpsc::Sender<DatagramFrame>,
-        mut stream_tx: mpsc::Sender<MuxStream<Sink, Stream>>,
+        mut stream_tx: mpsc::Sender<MuxStream<Sink>>,
         mut dropped_ports_rx: mpsc::UnboundedReceiver<(u16, u16, bool)>,
-    ) -> Result<(), Error> {
+        mut message_stream: Stream,
+    ) -> Result<(), Error>
+    where
+        Stream: FutureStream<Item = tungstenite::Result<Message>> + Send + Sync + Unpin + 'static,
+    {
         let mut keepalive_interval = MaybeInterval::new(self.keepalive_interval);
         // If we missed a tick, it is probably doing networking, so we don't need to
         // send a ping
@@ -103,7 +136,7 @@ where
                     }
                     self.close_port(our_port, their_port, fin_sent).await;
                 }
-                Some(msg) = self.next_message() => {
+                Some(msg) = message_stream.next() => {
                     let msg = msg?;
                     trace!("received message length = {}", msg.len());
                     if self.dupe().process_message(msg, &mut datagram_tx, &mut stream_tx).await? {
@@ -123,14 +156,6 @@ where
         }
     }
 
-    /// Get the next message
-    #[tracing::instrument(level = "trace")]
-    #[inline]
-    async fn next_message(&self) -> Option<tungstenite::Result<Message>> {
-        let mut stream = self.stream.write().await;
-        stream.next().await
-    }
-
     /// Process a stream frame
     /// Does the following:
     /// - If `flag` is `Syn`,
@@ -144,9 +169,9 @@ where
     ///     `Rst` frame.
     #[tracing::instrument(skip(stream_frame, stream_tx), level = "trace")]
     async fn process_stream_frame(
-        self: Arc<Self>,
+        &self,
         stream_frame: StreamFrame,
-        stream_tx: &mut mpsc::Sender<MuxStream<Sink, Stream>>,
+        stream_tx: &mut mpsc::Sender<MuxStream<Sink>>,
     ) -> Result<(), Error> {
         let StreamFrame {
             dport: our_port,
@@ -215,12 +240,12 @@ where
 
     /// Create a new `MuxStream` and add it into the map
     async fn new_stream(
-        self: Arc<Self>,
+        &self,
         our_port: u16,
         their_port: u16,
         dest_host: Bytes,
         dest_port: u16,
-        stream_tx: &mut mpsc::Sender<MuxStream<Sink, Stream>>,
+        stream_tx: &mut mpsc::Sender<MuxStream<Sink>>,
     ) -> Result<(), Error> {
         // `tx` is our end, `rx` is the user's end
         let (frame_tx, frame_rx) = mpsc::channel(config::STREAM_FRAME_BUFFER_SIZE);
@@ -238,7 +263,8 @@ where
             fin_sent: AtomicBool::new(false),
             stream_removed,
             buf: Bytes::new(),
-            inner: self,
+            sink: self.sink.dupe(),
+            dropped_ports_tx: self.dropped_ports_tx.dupe(),
         };
         trace!("sending stream to user");
         // This goes to the user
@@ -276,10 +302,10 @@ where
     /// Returns `Ok(true)` if a `Close` message was received.
     #[tracing::instrument(skip(msg, datagram_tx, stream_tx), level = "trace")]
     async fn process_message(
-        self: Arc<Self>,
+        &self,
         msg: Message,
         datagram_tx: &mut mpsc::Sender<DatagramFrame>,
-        stream_tx: &mut mpsc::Sender<MuxStream<Sink, Stream>>,
+        stream_tx: &mut mpsc::Sender<MuxStream<Sink>>,
     ) -> Result<bool, Error> {
         match msg {
             Message::Binary(data) => {

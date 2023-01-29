@@ -9,7 +9,7 @@ use crate::arg::ClientArgs;
 use crate::config;
 use crate::dupe::Dupe;
 use crate::mux::{DatagramFrame, Multiplexor, MuxStream as GMuxStream, Role};
-use futures_util::stream::{SplitSink, SplitStream};
+use futures_util::stream::SplitSink;
 use handle_remote::handle_remote;
 use maybe_retryable::MaybeRetryableError;
 use std::collections::HashMap;
@@ -45,8 +45,7 @@ pub(crate) enum Error {
 }
 
 type Sink = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
-type Stream = SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>;
-type MuxStream = GMuxStream<Sink, Stream>;
+type MuxStream = GMuxStream<Sink>;
 
 // Send the information about how to send the stream to the listener
 /// Type that local listeners send to the main loop to request a connection
@@ -273,7 +272,7 @@ async fn on_connected(
 /// Datagrams are simply dropped if we fail to get a new channel.
 #[tracing::instrument(skip_all, level = "trace")]
 async fn get_send_stream_chan_or_put_back(
-    mux: &mut Multiplexor<Sink, Stream>,
+    mux: &mut Multiplexor<Sink>,
     stream_command: StreamCommand,
     stream_command_tx: &mut mpsc::Sender<StreamCommand>,
 ) -> Result<bool, Error> {
