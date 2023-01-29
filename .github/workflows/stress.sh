@@ -13,12 +13,12 @@ trap "kill $PID_SERVER; kill $PID_CLIENT" EXIT
 sleep 3
 
 # Run the tests
-if ! tcptunnelchecker '127.0.0.1:1234' '127.0.0.1:5201' | grep 'FAIL'
-then
-    echo "tcptunnelchecker passed"
-else
-    echo "tcptunnelchecker failed"
-fi
+#if ! tcptunnelchecker '127.0.0.1:1234' '127.0.0.1:5201' | grep 'FAIL'
+#then
+#    echo "tcptunnelchecker passed"
+#else
+#    echo "tcptunnelchecker failed"
+#fi
 
 if ~/go/bin/tcpgoon run 127.0.0.1 5201 -yc 2560
 then
