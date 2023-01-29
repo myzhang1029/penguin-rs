@@ -23,8 +23,7 @@ impl MaybeRetryableError for tungstenite::error::ProtocolError {
     fn retryable(&self) -> bool {
         matches!(
             self,
-            tungstenite::error::ProtocolError::ReceivedAfterClosing
-                | tungstenite::error::ProtocolError::ResetWithoutClosingHandshake
+            Self::ReceivedAfterClosing | Self::ResetWithoutClosingHandshake
         )
     }
 }
@@ -32,9 +31,9 @@ impl MaybeRetryableError for tungstenite::error::ProtocolError {
 impl MaybeRetryableError for tungstenite::Error {
     fn retryable(&self) -> bool {
         match self {
-            tungstenite::Error::Io(e) => e.retryable(),
-            tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed => true,
-            tungstenite::Error::Protocol(e) => e.retryable(),
+            Self::Io(e) => e.retryable(),
+            Self::ConnectionClosed | Self::AlreadyClosed => true,
+            Self::Protocol(e) => e.retryable(),
             _ => false,
         }
     }
@@ -43,9 +42,9 @@ impl MaybeRetryableError for tungstenite::Error {
 impl MaybeRetryableError for crate::mux::Error {
     fn retryable(&self) -> bool {
         match self {
-            crate::mux::Error::Io(e) => e.retryable(),
-            crate::mux::Error::Tungstenite(e) => e.retryable(),
-            crate::mux::Error::StreamTxClosed => true,
+            Self::Io(e) => e.retryable(),
+            Self::Tungstenite(e) => e.retryable(),
+            Self::StreamTxClosed => true,
             _ => false,
         }
     }
@@ -54,8 +53,8 @@ impl MaybeRetryableError for crate::mux::Error {
 impl MaybeRetryableError for super::ws_connect::Error {
     fn retryable(&self) -> bool {
         match self {
-            super::ws_connect::Error::Tungstenite(e) => e.retryable(),
-            super::ws_connect::Error::Tls(_) => false,
+            Self::Tungstenite(e) => e.retryable(),
+            Self::Tls(_) => false,
         }
     }
 }

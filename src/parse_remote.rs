@@ -50,8 +50,8 @@ pub enum Error {
 impl Display for Protocol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Protocol::Tcp => write!(f, "tcp"),
-            Protocol::Udp => write!(f, "udp"),
+            Self::Tcp => write!(f, "tcp"),
+            Self::Udp => write!(f, "udp"),
         }
     }
 }
@@ -61,8 +61,8 @@ impl FromStr for Protocol {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "tcp" => Ok(Protocol::Tcp),
-            "udp" => Ok(Protocol::Udp),
+            "tcp" => Ok(Self::Tcp),
+            "udp" => Ok(Self::Udp),
             _ => Err(Error::Protocol),
         }
     }
@@ -120,33 +120,33 @@ impl FromStr for Remote {
         let tokens = tokenize_remote(rest)?;
         let result = match tokens[..] {
             // One element: either "socks" or a port number.
-            ["socks"] => Ok(Remote {
+            ["socks"] => Ok(Self {
                 local_addr: LocalSpec::Inet(("127.0.0.1".to_string(), 1080)),
                 remote_addr: RemoteSpec::Socks,
                 protocol: proto,
             }),
-            [port] => Ok(Remote {
+            [port] => Ok(Self {
                 local_addr: LocalSpec::Inet(("0.0.0.0".to_string(), port.parse()?)),
                 remote_addr: RemoteSpec::Inet(("127.0.0.1".to_string(), port.parse()?)),
                 protocol: proto,
             }),
             // Two elements: either "socks" and local port number, or remote host and port number.
-            ["stdio", "socks"] => Ok(Remote {
+            ["stdio", "socks"] => Ok(Self {
                 local_addr: LocalSpec::Stdio,
                 remote_addr: RemoteSpec::Socks,
                 protocol: proto,
             }),
-            [port, "socks"] => Ok(Remote {
+            [port, "socks"] => Ok(Self {
                 local_addr: LocalSpec::Inet(("127.0.0.1".to_string(), port.parse()?)),
                 remote_addr: RemoteSpec::Socks,
                 protocol: proto,
             }),
-            ["stdio", port] => Ok(Remote {
+            ["stdio", port] => Ok(Self {
                 local_addr: LocalSpec::Stdio,
                 remote_addr: RemoteSpec::Inet(("127.0.0.1".to_string(), port.parse()?)),
                 protocol: proto,
             }),
-            [host, port] => Ok(Remote {
+            [host, port] => Ok(Self {
                 local_addr: LocalSpec::Inet(("0.0.0.0".to_string(), port.parse()?)),
                 remote_addr: RemoteSpec::Inet((remove_brackets(host).to_string(), port.parse()?)),
                 protocol: proto,
@@ -155,7 +155,7 @@ impl FromStr for Remote {
             // - "stdio", remote host, and port number,
             // - local host, local port number, and "socks", or
             // - local port number, remote host, and port number.
-            ["stdio", remote_host, remote_port] => Ok(Remote {
+            ["stdio", remote_host, remote_port] => Ok(Self {
                 local_addr: LocalSpec::Stdio,
                 remote_addr: RemoteSpec::Inet((
                     remove_brackets(remote_host).to_string(),
@@ -163,7 +163,7 @@ impl FromStr for Remote {
                 )),
                 protocol: proto,
             }),
-            [local_host, local_port, "socks"] => Ok(Remote {
+            [local_host, local_port, "socks"] => Ok(Self {
                 local_addr: LocalSpec::Inet((
                     remove_brackets(local_host).to_string(),
                     local_port.parse()?,
@@ -171,7 +171,7 @@ impl FromStr for Remote {
                 remote_addr: RemoteSpec::Socks,
                 protocol: proto,
             }),
-            [local_port, remote_host, remote_port] => Ok(Remote {
+            [local_port, remote_host, remote_port] => Ok(Self {
                 local_addr: LocalSpec::Inet(("0.0.0.0".to_string(), local_port.parse()?)),
                 remote_addr: RemoteSpec::Inet((
                     remove_brackets(remote_host).to_string(),
@@ -179,7 +179,7 @@ impl FromStr for Remote {
                 )),
                 protocol: proto,
             }),
-            [local_host, local_port, remote_host, remote_port] => Ok(Remote {
+            [local_host, local_port, remote_host, remote_port] => Ok(Self {
                 local_addr: LocalSpec::Inet((
                     remove_brackets(local_host).to_string(),
                     local_port.parse()?,
@@ -194,7 +194,7 @@ impl FromStr for Remote {
         };
         // I love Rust's pattern matching
         // (this sentence is written by GitHub Copilot)
-        if let Ok(Remote {
+        if let Ok(Self {
             remote_addr: RemoteSpec::Socks,
             protocol: Protocol::Udp,
             ..

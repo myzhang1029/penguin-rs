@@ -12,7 +12,7 @@ use rustls_pemfile::Item;
 use thiserror::Error;
 
 /// Skip TLS verification
-pub struct EmptyVerifier {}
+pub struct EmptyVerifier;
 
 impl ServerCertVerifier for EmptyVerifier {
     fn verify_server_cert(
@@ -172,9 +172,8 @@ mod test {
     #[tokio::test]
     async fn test_generate_rustls_rootcertstore() {
         // No custom CA store
-        let sys_root = generate_rustls_rootcertstore(None).await;
-        assert!(sys_root.is_ok());
-        assert!(!sys_root.unwrap().is_empty());
+        let sys_root = generate_rustls_rootcertstore(None).await.unwrap();
+        assert!(!sys_root.is_empty());
         // Custom CA store
         let tmpdir = tempdir().unwrap();
         let ca_path = tmpdir.path().join("ca.pem");
@@ -182,17 +181,17 @@ mod test {
         tokio::fs::write(&ca_path, custom_ca.serialize_pem().unwrap())
             .await
             .unwrap();
-        let custom_root = generate_rustls_rootcertstore(Some(ca_path.to_str().unwrap())).await;
-        assert!(custom_root.is_ok());
-        assert_eq!(custom_root.unwrap().len(), 1);
+        let custom_root = generate_rustls_rootcertstore(Some(ca_path.to_str().unwrap()))
+            .await
+            .unwrap();
+        assert_eq!(custom_root.len(), 1);
     }
 
     #[tokio::test]
     async fn test_try_load_certificate() {
         // No certificate and key
-        let no_cert = try_load_certificate(None, None).await;
-        assert!(no_cert.is_ok());
-        assert!(no_cert.unwrap().is_none());
+        let no_cert = try_load_certificate(None, None).await.unwrap();
+        assert!(no_cert.is_none());
         // Certificate and key
         let tmpdir = tempdir().unwrap();
         let key_path = tmpdir.path().join("key.pem");
@@ -206,11 +205,9 @@ mod test {
             Some(key_path.to_str().unwrap()),
             Some(cert_path.to_str().unwrap()),
         )
-        .await;
-        assert!(loaded_cert.is_ok());
-        let loaded_cert = loaded_cert.unwrap();
-        assert!(loaded_cert.is_some());
-        let loaded_cert = loaded_cert.unwrap();
+        .await
+        .unwrap()
+        .unwrap();
         let (loaded_cert, loaded_key) = loaded_cert;
         assert_eq!(loaded_cert.len(), 1);
         assert_eq!(loaded_key.0, custom_crt.serialize_private_key_der());
@@ -231,9 +228,7 @@ mod test {
             key_path.to_str().unwrap(),
             None,
         )
-        .await;
-        assert!(config.is_ok());
-        let config = config.unwrap();
+        .await.unwrap();
         assert_eq!(
             config.alpn_protocols,
             vec![b"h2".to_vec(), b"http/1.1".to_vec()]
@@ -249,9 +244,7 @@ mod test {
             .await
             .unwrap();
         let config =
-            make_rustls_client_config(None, None, Some(ca_path.to_str().unwrap()), true).await;
-        assert!(config.is_ok());
-        let config = config.unwrap();
+            make_rustls_client_config(None, None, Some(ca_path.to_str().unwrap()), true).await.unwrap();
         assert_eq!(
             config.alpn_protocols,
             vec![b"h2".to_vec(), b"http/1.1".to_vec()]

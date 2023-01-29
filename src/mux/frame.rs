@@ -180,7 +180,7 @@ impl TryFrom<Frame> for Vec<u8> {
     /// Convert a `Frame` to bytes. Gives an error when
     /// `DatagramFrame::host` is longer than 255 octets.
     #[tracing::instrument(level = "trace")]
-    fn try_from(frame: Frame) -> Result<Vec<u8>, Self::Error> {
+    fn try_from(frame: Frame) -> Result<Self, Self::Error> {
         match frame {
             Frame::Stream(frame) => {
                 let size = 1
@@ -189,7 +189,7 @@ impl TryFrom<Frame> for Vec<u8> {
                     + std::mem::size_of::<StreamFlag>()
                     + std::mem::size_of::<u32>()
                     + frame.data.len();
-                let mut encoded = Vec::with_capacity(size);
+                let mut encoded = Self::with_capacity(size);
                 encoded.put_u8(1);
                 encoded.put_u16(frame.sport);
                 encoded.put_u16(frame.dport);
@@ -203,7 +203,7 @@ impl TryFrom<Frame> for Vec<u8> {
                     + std::mem::size_of::<u16>()
                     + std::mem::size_of::<u32>()
                     + frame.data.len();
-                let mut encoded = Vec::with_capacity(size);
+                let mut encoded = Self::with_capacity(size);
                 encoded.put_u8(3);
                 encoded.put_u8(u8::try_from(frame.host.len())?);
                 encoded.extend_from_slice(&frame.host);
@@ -221,7 +221,7 @@ impl TryFrom<Frame> for Message {
 
     fn try_from(frame: Frame) -> Result<Self, Self::Error> {
         let bytes = Vec::try_from(frame)?;
-        Ok(Message::Binary(bytes))
+        Ok(Self::Binary(bytes))
     }
 }
 
@@ -271,8 +271,8 @@ impl TryFrom<Vec<u8>> for Frame {
         let mut data = Bytes::from(data);
         let frame_type = data.get_u8();
         match frame_type {
-            1 => Ok(Frame::Stream(StreamFrame::try_from(data)?)),
-            3 => Ok(Frame::Datagram(DatagramFrame::from(data))),
+            1 => Ok(Self::Stream(StreamFrame::try_from(data)?)),
+            3 => Ok(Self::Datagram(DatagramFrame::from(data))),
             other => Err(Error::InvalidFrameType(other)),
         }
     }

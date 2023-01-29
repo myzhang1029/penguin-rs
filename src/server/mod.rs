@@ -354,7 +354,7 @@ mod test {
         assert_eq!(actual, expected);
     }
 
-    #[cfg(feature = "tests-real-internet")]
+    #[cfg(any(feature = "tests-real-internet4", feature = "tests-real-internet6"))]
     #[tokio::test]
     async fn test_stealth_websocket_upgrade_from_request_parts() {
         use once_cell::sync::Lazy;

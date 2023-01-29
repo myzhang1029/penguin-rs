@@ -64,7 +64,7 @@ impl From<Error> for std::io::Error {
         match e {
             Error::Io(e) => e,
             Error::Tungstenite(e) => tungstenite_error_to_io_error(e),
-            e => std::io::Error::new(std::io::ErrorKind::Other, e),
+            e => Self::new(std::io::ErrorKind::Other, e),
         }
     }
 }
@@ -214,7 +214,7 @@ macro_rules! impl_int_key {
             impl IntKey for $t {
                 // 0 is for special use
                 const MIN : Self = 1;
-                const MAX : Self = <$t>::MAX;
+                const MAX : Self = Self::MAX;
             }
         )*
     };

@@ -33,7 +33,7 @@ impl PenguinCli {
     }
 
     pub(crate) fn parse_global() {
-        ARGS.set(PenguinCli::parse())
+        ARGS.set(Self::parse())
             .expect("`parse_global` should not be called twice (this is a bug)");
     }
 }
@@ -300,7 +300,7 @@ impl FromStr for ServerUrl {
                     .unwrap_or_else(|| PathAndQuery::from_static("/")),
             )
             .build()?;
-        Ok(ServerUrl(url))
+        Ok(Self(url))
     }
 }
 
@@ -344,7 +344,7 @@ impl FromStr for BackendUrl {
         if scheme != Scheme::HTTP && scheme != Scheme::HTTPS {
             return Err(BackendUrlError::InvalidScheme(scheme.to_string()));
         }
-        Ok(BackendUrl {
+        Ok(Self {
             scheme,
             authority: url_parts
                 .authority
@@ -394,7 +394,7 @@ impl FromStr for Header {
             .ok_or_else(|| Self::Err::Format(s.to_string()))?;
         let name = HeaderName::from_str(name)?;
         let value = HeaderValue::from_str(value.trim())?;
-        Ok(Header { name, value })
+        Ok(Self { name, value })
     }
 }
 
@@ -434,7 +434,7 @@ mod test {
                 .to_string(),
             "ws://example.com/"
         );
-        assert!(ServerUrl::from_str("ftp://example.com").is_err());
+        ServerUrl::from_str("ftp://example.com").unwrap_err();
     }
 
     #[test]
@@ -465,27 +465,27 @@ mod test {
                 .to_string(),
             "http://example.com/foo?bar"
         );
-        assert!(BackendUrl::from_str("ftp://example.com").is_err());
-        assert!(BackendUrl::from_str("http://").is_err());
+        BackendUrl::from_str("ftp://example.com").unwrap_err();
+        BackendUrl::from_str("http://").unwrap_err();
     }
 
     #[test]
     fn test_header_parser() {
         let header = Header::from_str("X-Test: test").unwrap();
         assert_eq!(header.name.as_str().to_lowercase(), "X-Test".to_lowercase());
-        assert!(header.value.to_str().is_ok());
+        header.value.to_str().unwrap();
         assert_eq!(header.value.to_str().unwrap(), "test");
-        assert!(Header::from_str("X-Test").is_err());
+        Header::from_str("X-Test").unwrap_err();
         // HTTP forbids empty header values, but we allow it
         //assert!(Header::from_str("X-Test:").is_err());
-        assert!(Header::from_str(": test").is_err());
+        Header::from_str(": test").unwrap_err();
         let header = Header::from_str("X-Test: test: test").unwrap();
         assert_eq!(header.name.as_str().to_lowercase(), "X-Test".to_lowercase());
-        assert!(header.value.to_str().is_ok());
+        header.value.to_str().unwrap();
         assert_eq!(header.value.to_str().unwrap(), "test: test");
         let header = Header::from_str("X-Test:test").unwrap();
         assert_eq!(header.name.as_str().to_lowercase(), "X-Test".to_lowercase());
-        assert!(header.value.to_str().is_ok());
+        header.value.to_str().unwrap();
         assert_eq!(header.value.to_str().unwrap(), "test");
     }
 

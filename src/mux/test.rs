@@ -48,8 +48,9 @@ async fn connected_stream_passes_data() {
         let mut conn = server_mux.server_new_stream_channel().await.unwrap();
         let mut i = 0;
         while i < input_bytes_clone.len() {
-            let res = conn.write_all(&input_bytes_clone[i..i + 1024]).await;
-            assert!(res.is_ok());
+            conn.write_all(&input_bytes_clone[i..i + 1024])
+                .await
+                .unwrap();
             i += 1024;
         }
         info!("Done send");
