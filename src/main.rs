@@ -1,6 +1,7 @@
 //! A fast TCP/UDP tunnel, transported over HTTP WebSockets.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 #![warn(missing_docs, missing_debug_implementations)]
+#![forbid(unsafe_code)]
 
 mod arg;
 mod client;
@@ -39,13 +40,35 @@ const VERBOSE_LOG_LEVEL: filter::LevelFilter = filter::LevelFilter::DEBUG;
 #[cfg(not(feature = "tokio-console"))]
 const VERBOSE_VERBOSE_LOG_LEVEL: filter::LevelFilter = filter::LevelFilter::TRACE;
 
+#[cfg(feature = "deadlock_detection")]
+fn spawn_deadlock_detection() {
+    use std::thread;
+
+    // Create a background thread which checks for deadlocks every 10s
+    thread::spawn(move || loop {
+        thread::sleep(std::time::Duration::from_secs(10));
+        let deadlocks = parking_lot::deadlock::check_deadlock();
+        if deadlocks.is_empty() {
+            continue;
+        }
+
+        error!("{} deadlocks detected", deadlocks.len());
+        for (i, threads) in deadlocks.iter().enumerate() {
+            error!("Deadlock #{}", i);
+            for t in threads {
+                error!("Thread Id {:#?}", t.thread_id());
+                error!("{:#?}", t.backtrace());
+            }
+        }
+    });
+}
+
 /// Real entry point
 async fn main_real() -> Result<(), Error> {
     #[cfg(not(feature = "tokio-console"))]
     let reload_handle = {
         let fmt_layer = fmt::Layer::default()
             .compact()
-            .with_thread_ids(true)
             .with_timer(fmt::time::time())
             .with_writer(std::io::stderr);
         let (level_layer, reload_handle) = reload::Layer::new(DEFAULT_LOG_LEVEL);
@@ -81,6 +104,8 @@ async fn main_real() -> Result<(), Error> {
                 .expect("Resetting log level failed (this is a bug)"),
         };
     }
+    #[cfg(feature = "deadlock_detection")]
+    spawn_deadlock_detection();
     match &cli_args.subcommand {
         arg::Commands::Client(args) => client::client_main(args).await?,
         arg::Commands::Server(args) => server::server_main(args).await?,

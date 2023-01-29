@@ -1,7 +1,7 @@
 use super::*;
 use crate::{arg::ServerUrl, parse_remote::Remote};
 use once_cell::sync::Lazy;
-use std::str::FromStr;
+use std::{str::FromStr, time::Duration};
 #[cfg(any(feature = "tests-real-internet4", feature = "tests-real-internet6"))]
 use tokio::net::UdpSocket;
 use tokio::{
@@ -75,7 +75,7 @@ async fn test_it_works() {
 
     let client_task = tokio::spawn(crate::client::client_main(&CLIENT_ARGS));
     let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
     let mut sock = TcpStream::connect("127.0.0.1:21628").await.unwrap();
     sock.write_all(&input_bytes).await.unwrap();
     let output_bytes = second_task.await.unwrap();
@@ -108,7 +108,7 @@ async fn test_it_works_v6() {
 
     let client_task = tokio::spawn(crate::client::client_main(&CLIENT_ARGS));
     let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
     let mut sock = TcpStream::connect("[::1]:20246").await.unwrap();
     sock.write_all(&input_bytes).await.unwrap();
     let output_bytes = second_task.await.unwrap();
@@ -130,7 +130,7 @@ async fn test_socks_connect_reliability_v4() {
 
     let client_task = tokio::spawn(crate::client::client_main(&CLIENT_ARGS));
     let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Use a small buffer to simulate a HTTP request: if `flush` or `shutdown` is not called, the
     // server will not receive the data.
@@ -185,7 +185,7 @@ async fn test_socks_connect_reliability_v6() {
 
     let client_task = tokio::spawn(crate::client::client_main(&CLIENT_ARGS));
     let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Use a small buffer to simulate a HTTP request: if `flush` or `shutdown` is not called, the
     // server will not receive the data.
@@ -239,7 +239,7 @@ async fn test_it_works_dns_v4() {
 
     let client_task = tokio::spawn(crate::client::client_main(&CLIENT_ARGS));
     let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
     let sock = UdpSocket::bind("0.0.0.0:0").await.unwrap();
     // Just for fun, let's query AAAA here
     let request = b"\x37\x0a\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03www\x06google\x03com\x00\x00\x1c\x00\x01";
@@ -266,7 +266,7 @@ async fn test_it_works_dns_v6() {
 
     let client_task = tokio::spawn(crate::client::client_main(&CLIENT_ARGS));
     let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
     let sock = UdpSocket::bind("[::]:0").await.unwrap();
     let request = b"\x39\x36\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03www\x06google\x03com\x00\x00\x01\x00\x01";
     let expected = b"\x39\x36\x81\x80\x00\x01";

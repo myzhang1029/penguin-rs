@@ -25,7 +25,7 @@ pub(super) struct MultiplexorInner<Sink> {
     /// The role of this multiplexor
     pub(super) role: Role,
     /// The underlying `Sink` of messages. `Stream` is localized to `self.task_inner`.
-    pub(super) sink: Arc<LockedMessageSink<Sink>>,
+    pub(super) sink: LockedMessageSink<Sink>,
     /// Interval between keepalive `Ping`s
     pub(super) keepalive_interval: Option<std::time::Duration>,
     /// Open stream channels: our_port -> `MuxStreamSenderData`
@@ -139,7 +139,7 @@ where
                 Some(msg) = message_stream.next() => {
                     let msg = msg?;
                     trace!("received message length = {}", msg.len());
-                    if self.dupe().process_message(msg, &mut datagram_tx, &mut stream_tx).await? {
+                    if self.process_message(msg, &mut datagram_tx, &mut stream_tx).await? {
                         // If the message was a `Close` frame, we are done
                         return Ok(());
                     }
@@ -168,6 +168,7 @@ where
     ///   - If the receiver is closed or the port does not exist, send back a
     ///     `Rst` frame.
     #[tracing::instrument(skip(stream_frame, stream_tx), level = "trace")]
+    #[inline]
     async fn process_stream_frame(
         &self,
         stream_frame: StreamFrame,
@@ -301,6 +302,7 @@ where
     /// Process an incoming message
     /// Returns `Ok(true)` if a `Close` message was received.
     #[tracing::instrument(skip(msg, datagram_tx, stream_tx), level = "trace")]
+    #[inline]
     async fn process_message(
         &self,
         msg: Message,
@@ -312,27 +314,27 @@ where
                 let frame = data.try_into()?;
                 match frame {
                     Frame::Datagram(datagram_frame) => {
-                        trace!("Received datagram frame: {:?}", datagram_frame);
+                        trace!("received datagram frame: {:?}", datagram_frame);
                         datagram_tx.send(datagram_frame).await?;
                     }
                     Frame::Stream(stream_frame) => {
-                        trace!("Received stream frame: {:?}", stream_frame);
+                        trace!("received stream frame: {:?}", stream_frame);
                         self.process_stream_frame(stream_frame, stream_tx).await?;
                     }
                 }
                 Ok(false)
             }
             Message::Ping(data) => {
-                trace!("Received ping: {:?}", data);
+                trace!("received ping: {:?}", data);
                 self.sink.send_message(Message::Pong(data)).await?;
                 Ok(false)
             }
             Message::Pong(data) => {
-                trace!("Received pong: {:?}", data);
+                trace!("received pong: {:?}", data);
                 Ok(false)
             }
             Message::Close(_) => {
-                debug!("Received close");
+                debug!("received close");
                 Ok(true)
             }
             Message::Text(text) => {
@@ -348,6 +350,7 @@ where
     /// Close a port. That is, send `Rst` if `Fin` is not sent,
     /// and remove it from the map.
     #[tracing::instrument(level = "trace")]
+    #[inline]
     pub async fn close_port(&self, our_port: u16, their_port: u16, fin_sent: bool) {
         // If the user did not call `poll_shutdown`, we need to send a `Rst` frame
         if !fin_sent {

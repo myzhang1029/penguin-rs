@@ -106,7 +106,7 @@ where
 
         let inner = MultiplexorInner {
             role,
-            sink: Arc::new(LockedMessageSink::new(sink)),
+            sink: LockedMessageSink::new(sink),
             keepalive_interval,
             streams: Arc::new(RwLock::new(HashMap::new())),
             dropped_ports_tx,
@@ -162,12 +162,14 @@ where
     /// Get the next available datagram
     /// Returns `None` if the connection is closed
     #[tracing::instrument(skip(self), level = "debug")]
+    #[inline]
     pub async fn get_datagram(&self) -> Option<DatagramFrame> {
         self.datagram_rx.write().await.recv().await
     }
 
     /// Send a datagram
     #[tracing::instrument(skip(self), level = "debug")]
+    #[inline]
     pub async fn send_datagram(&self, frame: DatagramFrame) -> Result<(), Error> {
         self.inner.send_frame(Frame::Datagram(frame)).await?;
         Ok(())

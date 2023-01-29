@@ -30,14 +30,14 @@ pub struct MuxStream<Sink> {
     /// Forwarding destination port. Only used on `Role::Server`
     pub dest_port: u16,
     /// Whether `Fin` has been sent
-    pub fin_sent: AtomicBool,
+    pub(super) fin_sent: AtomicBool,
     /// Whether our entry in `inner.streams` has been removed and
     /// no more writes should succeed
     pub(super) stream_removed: Arc<AtomicBool>,
     /// Remaining bytes to be read
     pub(super) buf: Bytes,
     /// See `MultiplexorInner`.
-    pub(super) sink: Arc<LockedMessageSink<Sink>>,
+    pub(super) sink: LockedMessageSink<Sink>,
     /// See `MultiplexorInner`.
     pub(super) dropped_ports_tx: mpsc::UnboundedSender<(u16, u16, bool)>,
 }
