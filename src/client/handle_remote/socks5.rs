@@ -334,7 +334,7 @@ async fn udp_relay(
 async fn handle_udp_relay_header<'buf>(
     socket: &UdpSocket,
 ) -> Result<Option<(String, u16, Bytes, IpAddr, u16)>, Error> {
-    let mut buf = BytesMut::with_capacity(65536);
+    let mut buf = BytesMut::zeroed(65536);
     let (len, addr) = socket.recv_from(&mut buf).await?;
     buf.truncate(len);
     // let _reserved = &buf[..2];

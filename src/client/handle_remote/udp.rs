@@ -10,7 +10,7 @@ use bytes::{Bytes, BytesMut};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::UdpSocket;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// Handle a UDP Inet->Inet remote.
 #[inline]
@@ -29,9 +29,10 @@ pub(super) async fn handle_udp(
         .map_or(format!("{lhost}:{lport}"), |addr| addr.to_string());
     info!("Bound on {local_addr}");
     loop {
-        let mut buf = BytesMut::with_capacity(65536);
+        let mut buf = BytesMut::zeroed(65536);
         let (len, addr) = socket.recv_from(&mut buf).await?;
         buf.truncate(len);
+        debug!("received {len} bytes from {addr}");
         let mut udp_client_id_map = handler_resources.udp_client_id_map.write().await;
         let client_id = u32::next_available_key(&*udp_client_id_map);
         udp_client_id_map.insert(client_id, ClientIdMapEntry::new(addr, socket.dupe(), false));

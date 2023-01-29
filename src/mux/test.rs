@@ -2,6 +2,7 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::*;
+use bytes::Bytes;
 use tokio::io::{duplex, AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, info};
 
@@ -27,6 +28,43 @@ async fn connect_succeeds() {
         .await
         .unwrap();
     info!("sport = {}, dport = {}", stream.our_port, stream.their_port);
+    debug!("Waiting for server task to finish");
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn datagram_channel_passes_data() {
+    let (client, server) = duplex(10);
+    let client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
+    let server = WebSocketStream::from_raw_socket(server, Role::Server, None).await;
+
+    let client_mux = Multiplexor::new(client, Role::Client, None);
+    let server_mux = Multiplexor::new(server, Role::Server, None);
+
+    let server_task = tokio::spawn(async move {
+        for _ in 0..64 {
+            let dgram = server_mux.get_datagram().await.unwrap();
+            server_mux.send_datagram(dgram).await.unwrap();
+        }
+    });
+
+    for _ in 0..64 {
+        let payload: Bytes = (0..32768).map(|_| rand::random::<u8>()).collect();
+        client_mux
+            .send_datagram(DatagramFrame {
+                host: Bytes::from_static("example.com".as_bytes()),
+                port: 53,
+                sid: 1,
+                data: payload.clone(),
+            })
+            .await
+            .unwrap();
+        let recvd = client_mux.get_datagram().await.unwrap();
+        assert_eq!(recvd.host, "example.com".as_bytes());
+        assert_eq!(recvd.port, 53);
+        assert_eq!(recvd.sid, 1);
+        assert_eq!(recvd.data, payload);
+    }
     debug!("Waiting for server task to finish");
     server_task.await.unwrap();
 }

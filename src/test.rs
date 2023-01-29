@@ -158,7 +158,7 @@ async fn test_socks_connect_reliability_v4() {
             .await
             .unwrap();
         let n = sock.read(&mut buf).await.unwrap();
-        assert_eq!(n, 3);
+        assert!(n > 3);
         assert_eq!(&buf[..3], b"\x05\x00\x00");
         sock.write_all(&input_bytes).await.unwrap();
         let mut output_bytes = vec![0u8; input_len];
@@ -212,7 +212,7 @@ async fn test_socks_connect_reliability_v6() {
             .await
             .unwrap();
         let n = sock.read(&mut buf).await.unwrap();
-        assert_eq!(n, 3);
+        assert!(n > 3);
         assert_eq!(&buf[..3], b"\x05\x00\x00");
         sock.write_all(&input_bytes).await.unwrap();
         let mut output_bytes = vec![0u8; input_len];

@@ -228,7 +228,8 @@ mod test {
             key_path.to_str().unwrap(),
             None,
         )
-        .await.unwrap();
+        .await
+        .unwrap();
         assert_eq!(
             config.alpn_protocols,
             vec![b"h2".to_vec(), b"http/1.1".to_vec()]
@@ -243,8 +244,9 @@ mod test {
         tokio::fs::write(&ca_path, custom_ca.serialize_pem().unwrap())
             .await
             .unwrap();
-        let config =
-            make_rustls_client_config(None, None, Some(ca_path.to_str().unwrap()), true).await.unwrap();
+        let config = make_rustls_client_config(None, None, Some(ca_path.to_str().unwrap()), true)
+            .await
+            .unwrap();
         assert_eq!(
             config.alpn_protocols,
             vec![b"h2".to_vec(), b"http/1.1".to_vec()]
