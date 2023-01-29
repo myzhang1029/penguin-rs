@@ -194,8 +194,7 @@ where
                 trace!("port: {}", our_port);
                 // "we" is `role == Server`
                 // "they" is `role == Client`
-                self.dupe()
-                    .new_stream(our_port, their_port, dest_host, dest_port, stream_tx)
+                self.new_stream(our_port, their_port, dest_host, dest_port, stream_tx)
                     .await?;
                 // Send a `Ack`
                 let ack_frame = Frame::Stream(StreamFrame::new_ack(our_port, their_port));
