@@ -71,6 +71,16 @@ async fn datagram_channel_passes_data() {
 
 #[tokio::test]
 async fn connected_stream_passes_data() {
+    use tracing_subscriber::{filter, fmt, prelude::*};
+    let fmt_layer = fmt::Layer::default()
+        .compact()
+        .with_thread_ids(true)
+        .with_timer(fmt::time::time())
+        .with_writer(std::io::stderr);
+    tracing_subscriber::registry()
+        .with(filter::LevelFilter::TRACE)
+        .with(fmt_layer)
+        .init();
     let (client, server) = duplex(10);
     let client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
     let server = WebSocketStream::from_raw_socket(server, Role::Server, None).await;

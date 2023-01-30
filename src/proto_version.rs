@@ -1,1 +1,1 @@
-pub const PROTOCOL_VERSION: &str = "penguin-v5";
+pub const PROTOCOL_VERSION: &str = "penguin-v6";

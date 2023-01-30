@@ -15,6 +15,10 @@ pub const DATAGRAM_BUFFER_SIZE: usize = 2 << 8;
 /// Number of `MuxStream`s to buffer in the channels before blocking
 pub const STREAM_BUFFER_SIZE: usize = 2 << 8;
 /// Number of `StreamFrame`s to buffer in `MuxStream`'s channels before blocking
+#[cfg(not(test))]
 pub const STREAM_FRAME_BUFFER_SIZE: usize = 2 << 8;
+#[cfg(test)]
+// This new value will make it terribly slow but more likely to find problems
+pub const STREAM_FRAME_BUFFER_SIZE: usize = 4;
 
 pub const UDP_PRUNE_TIMEOUT: time::Duration = time::Duration::from_secs(60);

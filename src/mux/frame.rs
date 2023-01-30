@@ -48,6 +48,7 @@ pub enum Error {
 pub enum StreamFlag {
     /// New connection
     Syn = 0,
+    /// 1 was `SynAck`
     /// Confirm connection
     Ack = 2,
     /// When `dport` is not open
@@ -56,6 +57,8 @@ pub enum StreamFlag {
     Fin = 4,
     /// Data
     Psh = 5,
+    /// Confirm data reception
+    Dack = 6,
 }
 
 /// Stream frame
@@ -135,6 +138,16 @@ impl StreamFrame {
             dport,
             flag: StreamFlag::Psh,
             data,
+        }
+    }
+    /// Create a new `Dack` frame.
+    #[must_use]
+    pub const fn new_dack(sport: u16, dport: u16) -> Self {
+        Self {
+            sport,
+            dport,
+            flag: StreamFlag::Dack,
+            data: Bytes::new(),
         }
     }
 }
@@ -237,6 +250,7 @@ impl TryFrom<Bytes> for StreamFrame {
             3 => StreamFlag::Rst,
             4 => StreamFlag::Fin,
             5 => StreamFlag::Psh,
+            6 => StreamFlag::Dack,
             other => return Err(Error::InvalidStreamFlag(other)),
         };
         Ok(Self {
@@ -354,6 +368,18 @@ mod test {
                 0x16, 0x2e, // sport (u16)
                 0x04, 0xd2, // dport (u16)
                 0x04  // flag (u8)
+            ]
+        );
+
+        let frame = Frame::Stream(StreamFrame::new_dack(5678, 1234));
+        let bytes = Vec::try_from(frame).unwrap();
+        assert_eq!(
+            bytes,
+            vec![
+                0x01, // frame type (u8)
+                0x16, 0x2e, // sport (u16)
+                0x04, 0xd2, // dport (u16)
+                0x06  // flag (u8)
             ]
         );
 

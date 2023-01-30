@@ -9,16 +9,26 @@ use crate::config;
 use crate::dupe::Dupe;
 use bytes::{Buf, Bytes};
 use futures_util::{Sink as FutureSink, Stream as FutureStream, StreamExt};
+use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, OwnedSemaphorePermit, RwLock, Semaphore};
 use tokio::time::MissedTickBehavior;
+use tokio_util::sync::PollSemaphore;
 use tracing::{debug, error, trace};
 use tungstenite::Message;
 
-/// (writer, notifier when `close_port` is called)
-type MuxStreamSenderData = (mpsc::Sender<Bytes>, Arc<AtomicBool>);
+/// (
+///     writer,
+///     notifier when `close_port` is called,
+///     number of remaining packets we can send before having to wait for `Dack`.
+/// )
+type MuxStreamSenderData = (
+    mpsc::Sender<Bytes>,
+    Arc<AtomicBool>,
+    Arc<Mutex<Vec<OwnedSemaphorePermit>>>,
+);
 
 /// Multiplexor inner
 pub(super) struct MultiplexorInner<Sink> {
@@ -126,6 +136,8 @@ where
         // If we missed a tick, it is probably doing networking, so we don't need to
         // send a ping
         keepalive_interval.maybe_set_missed_tick_behavior(MissedTickBehavior::Skip);
+        // Number of `Psh` frames received after the previous `Dack`
+        let recv_counter = AtomicUsize::new(0);
         loop {
             trace!("task loop");
             tokio::select! {
@@ -139,7 +151,7 @@ where
                 Some(msg) = message_stream.next() => {
                     let msg = msg?;
                     trace!("received message length = {}", msg.len());
-                    if self.process_message(msg, &mut datagram_tx, &mut stream_tx).await? {
+                    if self.process_message(msg, &mut datagram_tx, &mut stream_tx, &recv_counter).await? {
                         // If the message was a `Close` frame, we are done
                         return Ok(());
                     }
@@ -152,6 +164,56 @@ where
                     // Everything is closed, we are probably done
                     return Ok(());
                 }
+            }
+        }
+    }
+
+    /// Process an incoming message
+    /// Returns `Ok(true)` if a `Close` message was received.
+    #[tracing::instrument(skip(msg, datagram_tx, stream_tx), level = "trace")]
+    #[inline]
+    async fn process_message(
+        &self,
+        msg: Message,
+        datagram_tx: &mut mpsc::Sender<DatagramFrame>,
+        stream_tx: &mut mpsc::Sender<MuxStream<Sink>>,
+        recv_counter: &AtomicUsize,
+    ) -> Result<bool, Error> {
+        match msg {
+            Message::Binary(data) => {
+                let frame = data.try_into()?;
+                match frame {
+                    Frame::Datagram(datagram_frame) => {
+                        trace!("received datagram frame: {:?}", datagram_frame);
+                        datagram_tx.send(datagram_frame).await?;
+                    }
+                    Frame::Stream(stream_frame) => {
+                        trace!("received stream frame: {:?}", stream_frame);
+                        self.process_stream_frame(stream_frame, stream_tx, recv_counter)
+                            .await?;
+                    }
+                }
+                Ok(false)
+            }
+            Message::Ping(data) => {
+                trace!("received ping: {:?}", data);
+                self.sink.send_message(Message::Pong(data)).await?;
+                Ok(false)
+            }
+            Message::Pong(data) => {
+                trace!("received pong: {:?}", data);
+                Ok(false)
+            }
+            Message::Close(_) => {
+                debug!("received close");
+                Ok(true)
+            }
+            Message::Text(text) => {
+                error!("Received `Text` message: `{text}'");
+                Err(Error::TextMessage)
+            }
+            Message::Frame(_) => {
+                unreachable!("`Frame` message should not be received");
             }
         }
     }
@@ -173,6 +235,7 @@ where
         &self,
         stream_frame: StreamFrame,
         stream_tx: &mut mpsc::Sender<MuxStream<Sink>>,
+        recv_counter: &AtomicUsize,
     ) -> Result<(), Error> {
         let StreamFrame {
             dport: our_port,
@@ -198,7 +261,7 @@ where
                     .await?;
                 // Send a `Ack`
                 let ack_frame = Frame::Stream(StreamFrame::new_ack(our_port, their_port));
-                trace!("sending ack");
+                trace!("sending `Ack`");
                 self.send_frame(ack_frame).await?;
             }
             StreamFlag::Ack => {
@@ -226,6 +289,15 @@ where
                 let mut streams = self.streams.write().await;
                 if let Some(frame_sender) = streams.get_mut(&our_port) {
                     if frame_sender.0.send(data).await.is_ok() {
+                        let new = recv_counter.fetch_add(1, Ordering::AcqRel);
+                        if new >= config::STREAM_FRAME_BUFFER_SIZE / 2 {
+                            // Let's acknowledge them
+                            let dack_frame =
+                                Frame::Stream(StreamFrame::new_dack(our_port, their_port));
+                            debug!("sending `Dack` for {their_port} at count={new}");
+                            self.send_frame(dack_frame).await?;
+                            recv_counter.store(0, Ordering::Relaxed);
+                        }
                         return Ok(());
                     }
                 }
@@ -233,6 +305,19 @@ where
                 // else, the receiver is closed or the port does not exist
                 let rst_frame = Frame::Stream(StreamFrame::new_rst(our_port, their_port));
                 self.send_frame(rst_frame).await?;
+            }
+            StreamFlag::Dack => {
+                debug!("received `Dack` for {our_port}");
+                let mut streams = self.streams.write().await;
+                if let Some((_, _, write_permits)) = streams.get_mut(&our_port) {
+                    // Relinquish all permits
+                    write_permits.lock().clear();
+                } else {
+                    // the receiver is closed or the port does not exist
+                    drop(streams);
+                    let rst_frame = Frame::Stream(StreamFrame::new_rst(our_port, their_port));
+                    self.send_frame(rst_frame).await?;
+                }
             }
         }
         Ok(())
@@ -250,9 +335,15 @@ where
         // `tx` is our end, `rx` is the user's end
         let (frame_tx, frame_rx) = mpsc::channel(config::STREAM_FRAME_BUFFER_SIZE);
         let stream_removed = Arc::new(AtomicBool::new(false));
+        let window_remaining =
+            PollSemaphore::new(Arc::new(Semaphore::new(config::STREAM_FRAME_BUFFER_SIZE)));
+        let write_permits = Arc::new(Mutex::new(Vec::new()));
         // Save the TX end of the stream so we can write to it when subsequent frames arrive
         let mut streams = self.streams.write().await;
-        streams.insert(our_port, (frame_tx, stream_removed.dupe()));
+        streams.insert(
+            our_port,
+            (frame_tx, stream_removed.dupe(), write_permits.dupe()),
+        );
         drop(streams);
         let stream = MuxStream {
             frame_rx,
@@ -261,6 +352,8 @@ where
             dest_host,
             dest_port,
             fin_sent: AtomicBool::new(false),
+            window_remaining,
+            write_permits,
             stream_removed,
             buf: Bytes::new(),
             sink: self.sink.dupe(),
@@ -298,54 +391,6 @@ where
         }
     }
 
-    /// Process an incoming message
-    /// Returns `Ok(true)` if a `Close` message was received.
-    #[tracing::instrument(skip(msg, datagram_tx, stream_tx), level = "trace")]
-    #[inline]
-    async fn process_message(
-        &self,
-        msg: Message,
-        datagram_tx: &mut mpsc::Sender<DatagramFrame>,
-        stream_tx: &mut mpsc::Sender<MuxStream<Sink>>,
-    ) -> Result<bool, Error> {
-        match msg {
-            Message::Binary(data) => {
-                let frame = data.try_into()?;
-                match frame {
-                    Frame::Datagram(datagram_frame) => {
-                        trace!("received datagram frame: {:?}", datagram_frame);
-                        datagram_tx.send(datagram_frame).await?;
-                    }
-                    Frame::Stream(stream_frame) => {
-                        trace!("received stream frame: {:?}", stream_frame);
-                        self.process_stream_frame(stream_frame, stream_tx).await?;
-                    }
-                }
-                Ok(false)
-            }
-            Message::Ping(data) => {
-                trace!("received ping: {:?}", data);
-                self.sink.send_message(Message::Pong(data)).await?;
-                Ok(false)
-            }
-            Message::Pong(data) => {
-                trace!("received pong: {:?}", data);
-                Ok(false)
-            }
-            Message::Close(_) => {
-                debug!("received close");
-                Ok(true)
-            }
-            Message::Text(text) => {
-                error!("Received `Text` message: `{text}'");
-                Err(Error::TextMessage)
-            }
-            Message::Frame(_) => {
-                unreachable!("`Frame` message should not be received");
-            }
-        }
-    }
-
     /// Close a port. That is, send `Rst` if `Fin` is not sent,
     /// and remove it from the map.
     #[tracing::instrument(level = "trace")]
@@ -364,10 +409,10 @@ where
             self.sink.flush().await.ok();
         }
         // Free the port for reuse
-        if let Some(tx) = self.streams.write().await.remove(&our_port) {
+        if let Some((sender, closed, _)) = self.streams.write().await.remove(&our_port) {
             // Make sure the user receives `EOF`.
-            tx.0.send(Bytes::new()).await.ok();
-            tx.1.store(true, Ordering::Relaxed);
+            sender.send(Bytes::new()).await.ok();
+            closed.store(true, Ordering::Relaxed);
         }
         debug!("freed port {}", our_port);
     }
@@ -377,11 +422,11 @@ where
     async fn shutdown(&self) {
         debug!("closing all connections");
         let mut streams = self.streams.write().await;
-        for (_, tx) in streams.drain() {
+        for (_, (sender, closed, _)) in streams.drain() {
             // Make sure the user receives `EOF`.
-            tx.0.send(Bytes::new()).await.ok();
+            sender.send(Bytes::new()).await.ok();
             // Stop all streams form sending stuff
-            tx.1.store(true, Ordering::Relaxed);
+            closed.store(true, Ordering::Relaxed);
         }
         drop(streams);
         // This also effectively `Rst`s all streams

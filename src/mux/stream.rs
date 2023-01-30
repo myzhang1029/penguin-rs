@@ -6,13 +6,15 @@ use super::locked_sink::LockedMessageSink;
 use super::tungstenite_error_to_io_error;
 use bytes::Bytes;
 use futures_util::Sink as FutureSink;
+use parking_lot::Mutex;
 use std::io;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, OwnedSemaphorePermit};
+use tokio_util::sync::PollSemaphore;
 use tracing::{debug, trace, warn};
 use tungstenite::Message;
 
@@ -31,6 +33,10 @@ pub struct MuxStream<Sink> {
     pub dest_port: u16,
     /// Whether `Fin` has been sent
     pub(super) fin_sent: AtomicBool,
+    /// Number of remaining `Psh` frames we can send before an `Dack` needs to arrive
+    pub(super) window_remaining: PollSemaphore,
+    /// Already-sinked permits to write
+    pub(super) write_permits: Arc<Mutex<Vec<OwnedSemaphorePermit>>>,
     /// Whether our entry in `inner.streams` has been removed and
     /// no more writes should succeed
     pub(super) stream_removed: Arc<AtomicBool>,
@@ -121,7 +127,7 @@ where
     #[tracing::instrument(skip(cx, buf), level = "trace")]
     #[inline]
     fn poll_write(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<std::io::Result<usize>> {
@@ -130,9 +136,12 @@ where
             debug!("stream has been closed, returning `BrokenPipe`");
             return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
         }
+        let permit = ready!(self.window_remaining.poll_acquire(cx))
+            .expect("Semaphore should not be closed (this is a bug)");
         ready!(self
             .sink
             .poll_send_stream_buf(cx, buf, self.our_port, self.their_port))?;
+        self.write_permits.lock().push(permit);
         Poll::Ready(Ok(buf.len()))
     }
 
