@@ -14,8 +14,7 @@ mod test;
 
 use crate::config;
 use crate::dupe::Dupe;
-use futures_util::stream::SplitSink;
-use futures_util::{Sink as FutureSink, Stream as FutureStream, StreamExt};
+use futures_util::{Sink as FutureSink, Stream as FutureStream};
 use inner::MultiplexorInner;
 use rand::distributions::uniform::SampleUniform;
 use rand::Rng;
@@ -23,9 +22,7 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{mpsc, RwLock};
-use tokio_tungstenite::WebSocketStream;
 use tracing::{error, trace, warn};
 use tungstenite::Message;
 
@@ -76,45 +73,42 @@ fn tungstenite_error_to_io_error(e: tungstenite::Error) -> std::io::Error {
 }
 
 #[derive(Debug)]
-pub struct Multiplexor<Sink> {
-    inner: MultiplexorInner<Sink>,
+pub struct Multiplexor<SinkStream> {
+    inner: MultiplexorInner<SinkStream>,
     /// Channel of received datagram frames for processing
     datagram_rx: RwLock<mpsc::Receiver<DatagramFrame>>,
     /// Channel of established streams for processing
-    stream_rx: RwLock<mpsc::Receiver<MuxStream<Sink>>>,
+    stream_rx: RwLock<mpsc::Receiver<MuxStream<SinkStream>>>,
 }
 
-impl<Sink> Multiplexor<Sink>
+impl<SinkStream> Multiplexor<SinkStream>
 where
-    Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Sync + Unpin + 'static,
+    SinkStream: FutureSink<Message, Error = tungstenite::Error>
+        + FutureStream<Item = tungstenite::Result<Message>>
+        + Send
+        + Unpin
+        + 'static,
 {
     /// Create a new `Multiplexor`
     #[tracing::instrument(skip_all, level = "debug")]
-    pub fn new_with_sink_stream<Stream>(
-        sink: Sink,
-        stream: Stream,
-        keepalive_interval: Option<std::time::Duration>,
+    pub fn new(
+        sink_stream: SinkStream,
         role: Role,
-    ) -> Self
-    where
-        Stream: FutureStream<Item = tungstenite::Result<Message>> + Send + Sync + Unpin + 'static,
-    {
+        keepalive_interval: Option<std::time::Duration>,
+    ) -> Self {
         let (datagram_tx, datagram_rx) = tokio::sync::mpsc::channel(config::DATAGRAM_BUFFER_SIZE);
         let (stream_tx, stream_rx) = tokio::sync::mpsc::channel(config::STREAM_BUFFER_SIZE);
         let (dropped_ports_tx, dropped_ports_rx) = tokio::sync::mpsc::unbounded_channel();
+        let locked_sink_stream = locked_sink::LockedSink::new(sink_stream);
 
         let inner = MultiplexorInner {
             role,
-            sink: locked_sink::LockedSink::new(sink),
+            sink_stream: locked_sink_stream,
             keepalive_interval,
             streams: Arc::new(RwLock::new(HashMap::new())),
             dropped_ports_tx,
         };
-        tokio::spawn(
-            inner
-                .dupe()
-                .task(datagram_tx, stream_tx, dropped_ports_rx, stream),
-        );
+        tokio::spawn(inner.dupe().task(datagram_tx, stream_tx, dropped_ports_rx));
         trace!("Multiplexor task spawned");
 
         Self {
@@ -131,14 +125,15 @@ where
         &self,
         host: Vec<u8>,
         port: u16,
-    ) -> Result<MuxStream<Sink>, Error> {
+    ) -> Result<MuxStream<SinkStream>, Error> {
         assert_eq!(self.inner.role, Role::Client);
         // Allocate a new port
         let sport = u16::next_available_key(&*self.inner.streams.read().await);
         trace!("sport = {sport}");
-        let syn_frame = StreamFrame::new_syn(&host, port, sport)?;
-        trace!("sending syn");
-        self.inner.send_message(syn_frame.into()).await?;
+        trace!("sending `Syn`");
+        let message = StreamFrame::new_syn(&host, port, sport)?.into();
+        self.inner.sink_stream.send_message(&message).await?;
+        self.inner.sink_stream.flush_ignore_closed().await?;
         trace!("sending stream to user");
         let stream = self
             .stream_rx
@@ -153,7 +148,7 @@ where
     /// Get the next available stream channel
     /// Returns `None` if the connection is closed
     #[tracing::instrument(skip(self), level = "debug")]
-    pub async fn server_new_stream_channel(&self) -> Option<MuxStream<Sink>> {
+    pub async fn server_new_stream_channel(&self) -> Option<MuxStream<SinkStream>> {
         assert_eq!(self.inner.role, Role::Server);
         self.stream_rx.write().await.recv().await
     }
@@ -170,27 +165,13 @@ where
     #[tracing::instrument(skip(self), level = "debug")]
     #[inline]
     pub async fn send_datagram(&self, frame: DatagramFrame) -> Result<(), Error> {
-        self.inner.send_message(frame.try_into()?).await?;
+        let message = frame.try_into()?;
+        self.inner.sink_stream.send_message(&message).await?;
         Ok(())
     }
 }
 
-impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>
-    Multiplexor<SplitSink<WebSocketStream<S>, Message>>
-{
-    /// Create a new `WebSocketMultiplexor` from a `WebSocketStream`
-    #[must_use]
-    pub fn new(
-        ws_stream: WebSocketStream<S>,
-        role: Role,
-        keepalive_interval: Option<std::time::Duration>,
-    ) -> Self {
-        let (sink, stream) = ws_stream.split();
-        Self::new_with_sink_stream(sink, stream, keepalive_interval, role)
-    }
-}
-
-impl<Sink> Drop for Multiplexor<Sink> {
+impl<SinkStream> Drop for Multiplexor<SinkStream> {
     fn drop(&mut self) {
         self.inner
             .dropped_ports_tx
@@ -210,12 +191,12 @@ pub trait IntKey: Eq + Hash + Copy + SampleUniform + PartialOrd {
     #[inline]
     #[must_use]
     fn next_available_key<V>(map: &HashMap<Self, V>) -> Self {
-        let mut i = Self::MIN;
-
-        while map.contains_key(&i) {
-            i = rand::thread_rng().gen_range(Self::MIN..Self::MAX);
+        loop {
+            let i = rand::thread_rng().gen_range(Self::MIN..Self::MAX);
+            if !map.contains_key(&i) {
+                break i;
+            }
         }
-        i
     }
 }
 

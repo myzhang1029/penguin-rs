@@ -9,6 +9,20 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 
+#[ctor::ctor]
+fn test_setup_log() {
+    use tracing_subscriber::{filter, fmt, prelude::*};
+    let fmt_layer = fmt::Layer::default()
+        .compact()
+        .with_thread_ids(true)
+        .with_timer(fmt::time::time())
+        .with_writer(std::io::stderr);
+    tracing_subscriber::registry()
+        .with(filter::LevelFilter::DEBUG)
+        .with(fmt_layer)
+        .init();
+}
+
 fn make_server_args(host: &str, port: u16) -> arg::ServerArgs {
     arg::ServerArgs {
         host: host.to_string(),

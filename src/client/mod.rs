@@ -8,8 +8,7 @@ pub(crate) mod ws_connect;
 use crate::arg::ClientArgs;
 use crate::config;
 use crate::dupe::Dupe;
-use crate::mux::{DatagramFrame, Multiplexor, MuxStream as GMuxStream, Role};
-use futures_util::stream::SplitSink;
+use crate::mux::{DatagramFrame, Multiplexor, Role};
 use handle_remote::handle_remote;
 use maybe_retryable::MaybeRetryableError;
 use std::collections::HashMap;
@@ -23,7 +22,6 @@ use tokio::task::JoinSet;
 use tokio::time;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use tracing::{error, info, trace, warn};
-use tungstenite::Message;
 
 /// Errors
 #[derive(Debug, Error)]
@@ -44,8 +42,8 @@ pub(crate) enum Error {
     RemoteHandlerExited(#[from] handle_remote::Error),
 }
 
-type Sink = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
-type MuxStream = GMuxStream<Sink>;
+type SinkStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
+type MuxStream = crate::mux::MuxStream<SinkStream>;
 
 // Send the information about how to send the stream to the listener
 /// Type that local listeners send to the main loop to request a connection
@@ -272,7 +270,7 @@ async fn on_connected(
 /// Datagrams are simply dropped if we fail to get a new channel.
 #[tracing::instrument(skip_all, level = "trace")]
 async fn get_send_stream_chan_or_put_back(
-    mux: &mut Multiplexor<Sink>,
+    mux: &mut Multiplexor<SinkStream>,
     stream_command: StreamCommand,
     stream_command_tx: &mut mpsc::Sender<StreamCommand>,
 ) -> Result<bool, Error> {

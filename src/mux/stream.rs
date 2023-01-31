@@ -73,7 +73,7 @@ impl<Sink> Drop for MuxStream<Sink> {
 // Proxy the AsyncRead trait to the underlying stream so that users don't access `stream`
 impl<Sink> AsyncRead for MuxStream<Sink>
 where
-    Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Sync + Unpin + 'static,
+    Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Unpin + 'static,
 {
     /// Read data from the stream.
     /// There are two cases where this function gives EOF:
@@ -116,7 +116,7 @@ where
 
 impl<Sink> AsyncWrite for MuxStream<Sink>
 where
-    Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Sync + Unpin + 'static,
+    Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Unpin + 'static,
 {
     #[tracing::instrument(skip(cx, buf), level = "trace")]
     #[inline]
@@ -131,11 +131,13 @@ where
             return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
         }
         // `ready`: nothing happens if return here
-        ready!(self.sink.poll_send_with(cx, || {
-            StreamFrame::new_psh(self.our_port, self.their_port, buf.to_vec().into()).into()
+        ready!(self.sink.poll_send_with(cx, |_cx| {
+            Poll::Ready(
+                StreamFrame::new_psh(self.our_port, self.their_port, buf.to_vec().into()).into(),
+            )
         }))
         .map_err(tungstenite_error_to_io_error)?;
-
+        debug!("sent a frame");
         Poll::Ready(Ok(buf.len()))
     }
 
@@ -151,10 +153,17 @@ where
     #[tracing::instrument(skip(cx), level = "trace")]
     #[inline]
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        if !self.fin_sent.load(Ordering::Relaxed) {
+        if !self.fin_sent.load(Ordering::Relaxed)
+        // There is no need to send a `Fin` frame if the mux task has already removed the stream
+        // because either:
+        // 1. `MuxStream` was dropped before `poll_shutdown` is completed and the mux task should
+        //    have already sent a `Rst` frame.
+        // 2. The entire mux task has been dropped, so we will only get `BrokenPipe` error.
+        && !self.stream_removed.load(Ordering::Relaxed)
+        {
             // `ready`: nothing happens if return here
-            ready!(self.sink.poll_send_with(cx, || {
-                StreamFrame::new_fin(self.our_port, self.their_port).into()
+            ready!(self.sink.poll_send_with(cx, |_cx| {
+                Poll::Ready(StreamFrame::new_fin(self.our_port, self.their_port).into())
             }))
             .map_err(tungstenite_error_to_io_error)?;
             self.fin_sent.store(true, Ordering::Relaxed);

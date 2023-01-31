@@ -4,6 +4,7 @@
 use super::*;
 use bytes::Bytes;
 use tokio::io::{duplex, AsyncReadExt, AsyncWriteExt};
+use tokio_tungstenite::WebSocketStream;
 use tracing::{debug, info};
 
 #[tokio::test]

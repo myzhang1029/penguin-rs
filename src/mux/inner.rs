@@ -8,9 +8,8 @@ use super::{Error, IntKey, Role};
 use crate::config;
 use crate::dupe::Dupe;
 use bytes::{Buf, Bytes};
-use futures_util::{Sink as FutureSink, Stream as FutureStream, StreamExt};
+use futures_util::{Sink as FutureSink, Stream as FutureStream};
 use std::collections::HashMap;
-use std::future::poll_fn;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
@@ -22,11 +21,11 @@ use tungstenite::Message;
 type MuxStreamSenderData = (mpsc::Sender<Bytes>, Arc<AtomicBool>);
 
 /// Multiplexor inner
-pub(super) struct MultiplexorInner<Sink> {
+pub(super) struct MultiplexorInner<SinkStream> {
     /// The role of this multiplexor
     pub(super) role: Role,
-    /// The underlying `Sink` of messages. `Stream` is localized to `self.task_inner`.
-    pub(super) sink: LockedSink<Sink>,
+    /// The underlying `Sink + Stream` of messages.
+    pub(super) sink_stream: LockedSink<SinkStream>,
     /// Interval between keepalive `Ping`s
     pub(super) keepalive_interval: Option<std::time::Duration>,
     /// Open stream channels: our_port -> `MuxStreamSenderData`
@@ -40,7 +39,7 @@ pub(super) struct MultiplexorInner<Sink> {
     pub(super) dropped_ports_tx: mpsc::UnboundedSender<(u16, u16, bool)>,
 }
 
-impl<Sink> std::fmt::Debug for MultiplexorInner<Sink> {
+impl<SinkStream> std::fmt::Debug for MultiplexorInner<SinkStream> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MultiplexorInner")
             .field("role", &self.role)
@@ -49,13 +48,13 @@ impl<Sink> std::fmt::Debug for MultiplexorInner<Sink> {
     }
 }
 
-impl<Sink> Clone for MultiplexorInner<Sink> {
-    // `Clone` is manually implemented because we don't need `Sink: Clone`.
+impl<SinkStream> Clone for MultiplexorInner<SinkStream> {
+    // `Clone` is manually implemented because we don't need `SinkStream: Clone`.
     #[inline]
     fn clone(&self) -> Self {
         Self {
             role: self.role,
-            sink: self.sink.clone(),
+            sink_stream: self.sink_stream.clone(),
             keepalive_interval: self.keepalive_interval,
             streams: self.streams.clone(),
             dropped_ports_tx: self.dropped_ports_tx.clone(),
@@ -63,14 +62,14 @@ impl<Sink> Clone for MultiplexorInner<Sink> {
     }
 }
 
-impl<Sink> Dupe for MultiplexorInner<Sink> {
+impl<SinkStream> Dupe for MultiplexorInner<SinkStream> {
     // Explicitly providing a `dupe` implementation to prove that everything
     // can be cheaply cloned.
     #[inline]
     fn dupe(&self) -> Self {
         Self {
             role: self.role,
-            sink: self.sink.dupe(),
+            sink_stream: self.sink_stream.dupe(),
             keepalive_interval: self.keepalive_interval,
             streams: self.streams.dupe(),
             dropped_ports_tx: self.dropped_ports_tx.dupe(),
@@ -78,9 +77,13 @@ impl<Sink> Dupe for MultiplexorInner<Sink> {
     }
 }
 
-impl<Sink> MultiplexorInner<Sink>
+impl<SinkStream> MultiplexorInner<SinkStream>
 where
-    Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Sync + Unpin + 'static,
+    SinkStream: FutureSink<Message, Error = tungstenite::Error>
+        + FutureStream<Item = tungstenite::Result<Message>>
+        + Send
+        + Unpin
+        + 'static,
 {
     /// Processing task
     /// Does the following:
@@ -88,20 +91,13 @@ where
     /// - Sends received datagrams to the `datagram_tx` channel
     /// - Sends received streams to the appropriate handler
     /// - Responds to ping/pong messages
-    #[tracing::instrument(
-        skip(datagram_tx, stream_tx, dropped_ports_rx, message_stream),
-        level = "trace"
-    )]
-    pub async fn task<Stream>(
+    #[tracing::instrument(skip(datagram_tx, stream_tx, dropped_ports_rx), level = "trace")]
+    pub async fn task(
         self,
         mut datagram_tx: mpsc::Sender<DatagramFrame>,
-        mut stream_tx: mpsc::Sender<MuxStream<Sink>>,
+        mut stream_tx: mpsc::Sender<MuxStream<SinkStream>>,
         mut dropped_ports_rx: mpsc::UnboundedReceiver<(u16, u16, bool)>,
-        mut message_stream: Stream,
-    ) -> Result<(), Error>
-    where
-        Stream: FutureStream<Item = tungstenite::Result<Message>> + Send + Sync + Unpin + 'static,
-    {
+    ) -> Result<(), Error> {
         let mut keepalive_interval = MaybeInterval::new(self.keepalive_interval);
         // If we missed a tick, it is probably doing networking, so we don't need to
         // send a ping
@@ -116,7 +112,7 @@ where
                     }
                     self.close_port(our_port, their_port, fin_sent).await;
                 }
-                Some(msg) = message_stream.next() => {
+                Some(msg) = self.sink_stream.next() => {
                     let msg = match msg {
                         Ok(msg) => msg,
                         Err(e) => {
@@ -134,9 +130,10 @@ where
                 }
                 _ = keepalive_interval.tick() => {
                     trace!("sending ping");
-                    if let Err(e) = self.send_message(Message::Ping(vec![])).await {
+                    // Tungstenite should deliver `Ping` immediately
+                    if let Err(e) = self.sink_stream.send_with(|| Message::Ping(vec![])).await {
                         error!("Failed to send ping: {}", e);
-                        break Err(e);
+                        break Err(e.into());
                     }
                 }
                 else => {
@@ -152,7 +149,12 @@ where
         self.shutdown().await;
         result
     }
+}
 
+impl<SinkStream> MultiplexorInner<SinkStream>
+where
+    SinkStream: FutureSink<Message, Error = tungstenite::Error> + Send + Unpin + 'static,
+{
     /// Process an incoming message
     /// Returns `Ok(true)` if a `Close` message was received.
     #[tracing::instrument(skip(msg, datagram_tx, stream_tx), level = "trace")]
@@ -161,7 +163,7 @@ where
         &self,
         msg: Message,
         datagram_tx: &mut mpsc::Sender<DatagramFrame>,
-        stream_tx: &mut mpsc::Sender<MuxStream<Sink>>,
+        stream_tx: &mut mpsc::Sender<MuxStream<SinkStream>>,
     ) -> Result<bool, Error> {
         match msg {
             Message::Binary(data) => {
@@ -180,7 +182,8 @@ where
             }
             Message::Ping(data) => {
                 trace!("received ping: {:?}", data);
-                self.send_message(Message::Pong(data)).await?;
+                self.sink_stream.send_message(&Message::Pong(data)).await?;
+                self.sink_stream.flush_ignore_closed().await?;
                 Ok(false)
             }
             Message::Pong(data) => {
@@ -217,7 +220,7 @@ where
     async fn process_stream_frame(
         &self,
         stream_frame: StreamFrame,
-        stream_tx: &mut mpsc::Sender<MuxStream<Sink>>,
+        stream_tx: &mut mpsc::Sender<MuxStream<SinkStream>>,
     ) -> Result<(), Error> {
         let StreamFrame {
             dport: our_port,
@@ -225,6 +228,12 @@ where
             flag,
             data,
         } = stream_frame;
+        let send_rst = || async {
+            self.sink_stream
+                .send_with(|| StreamFrame::new_rst(our_port, their_port).into())
+                .await?;
+            self.sink_stream.flush_ignore_closed().await
+        };
         match flag {
             StreamFlag::Syn => {
                 if self.role == Role::Client {
@@ -242,9 +251,11 @@ where
                 self.new_stream(our_port, their_port, dest_host, dest_port, stream_tx)
                     .await?;
                 // Send a `Ack`
-                let ack_frame = StreamFrame::new_ack(our_port, their_port);
-                trace!("sending ack");
-                self.send_message(ack_frame.into()).await?;
+                trace!("sending `Ack`");
+                self.sink_stream
+                    .send_with(|| StreamFrame::new_ack(our_port, their_port).into())
+                    .await?;
+                self.sink_stream.flush_ignore_closed().await?;
             }
             StreamFlag::Ack => {
                 if self.role == Role::Server {
@@ -273,11 +284,12 @@ where
                     if sender.send(data).await.is_ok() {
                         return Ok(());
                     }
-                }
-                drop(streams);
-                // else, the receiver is closed or the port does not exist
-                let rst_frame = StreamFrame::new_rst(our_port, their_port);
-                self.send_message(rst_frame.into()).await?;
+                } else {
+                    // The port does not exist
+                    drop(streams);
+                    send_rst().await?;
+                    return Ok(());
+                };
             }
         }
         Ok(())
@@ -290,7 +302,7 @@ where
         their_port: u16,
         dest_host: Bytes,
         dest_port: u16,
-        stream_tx: &mut mpsc::Sender<MuxStream<Sink>>,
+        stream_tx: &mut mpsc::Sender<MuxStream<SinkStream>>,
     ) -> Result<(), Error> {
         // `tx` is our end, `rx` is the user's end
         let (frame_tx, frame_rx) = mpsc::channel(config::STREAM_FRAME_BUFFER_SIZE);
@@ -308,7 +320,7 @@ where
             fin_sent: AtomicBool::new(false),
             stream_removed,
             buf: Bytes::new(),
-            sink: self.sink.dupe(),
+            sink: self.sink_stream.dupe(),
             dropped_ports_tx: self.dropped_ports_tx.dupe(),
         };
         trace!("sending stream to user");
@@ -319,18 +331,6 @@ where
             .map_err(|e| Error::SendStreamToClient(e.to_string()))
     }
 
-    /// Send a message.
-    ///
-    /// This method flushes the sink immediately after sending the frame,
-    /// so it is designed to be used for control frames or frames that
-    /// require immediate delivery.
-    #[tracing::instrument(level = "trace")]
-    pub(super) async fn send_message(&self, message: Message) -> Result<(), Error> {
-        poll_fn(|cx| self.sink.poll_send_message(cx, &message)).await?;
-        poll_fn(|cx| self.sink.poll_flush_ignore_closed(cx)).await?;
-        Ok(())
-    }
-
     /// Close a port. That is, send `Rst` if `Fin` is not sent,
     /// and remove it from the map.
     #[tracing::instrument(level = "trace")]
@@ -338,9 +338,11 @@ where
     pub async fn close_port(&self, our_port: u16, their_port: u16, fin_sent: bool) {
         // If the user did not call `poll_shutdown`, we need to send a `Rst` frame
         if !fin_sent {
-            self.send_message(StreamFrame::new_rst(our_port, their_port).into())
+            self.sink_stream
+                .send_with(|| StreamFrame::new_rst(our_port, their_port).into())
                 .await
                 .ok();
+            self.sink_stream.flush_ignore_closed().await.ok();
         }
         // Free the port for reuse
         if let Some((sender, closed)) = self.streams.write().await.remove(&our_port) {
@@ -364,7 +366,7 @@ where
         }
         drop(streams);
         // This also effectively `Rst`s all streams
-        poll_fn(|cx| self.sink.poll_close(cx)).await.ok();
+        self.sink_stream.close().await.ok();
     }
 }
 
