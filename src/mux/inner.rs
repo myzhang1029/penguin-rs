@@ -82,39 +82,18 @@ impl<Sink> MultiplexorInner<Sink>
 where
     Sink: FutureSink<Message, Error = tungstenite::Error> + Send + Sync + Unpin + 'static,
 {
-    /// Wrapper for `task_inner` that makes sure `self.shutdown` is called
-    #[tracing::instrument(
-        skip(datagram_tx, stream_tx, dropped_ports_rx, message_stream),
-        level = "trace"
-    )]
-    pub(super) async fn task_wrapper<Stream>(
-        self,
-        datagram_tx: mpsc::Sender<DatagramFrame>,
-        stream_tx: mpsc::Sender<MuxStream<Sink>>,
-        dropped_ports_rx: mpsc::UnboundedReceiver<(u16, u16, bool)>,
-        message_stream: Stream,
-    ) -> Result<(), Error>
-    where
-        Stream: FutureStream<Item = tungstenite::Result<Message>> + Send + Sync + Unpin + 'static,
-    {
-        let res = self
-            .task_inner(datagram_tx, stream_tx, dropped_ports_rx, message_stream)
-            .await;
-        match &res {
-            Ok(()) => debug!("Multiplexor task exited"),
-            Err(e) => error!("Multiplexor task failed: {e}"),
-        }
-        self.shutdown().await;
-        res
-    }
     /// Processing task
     /// Does the following:
     /// - Receives messages from `WebSocket` and processes them
     /// - Sends received datagrams to the `datagram_tx` channel
     /// - Sends received streams to the appropriate handler
     /// - Responds to ping/pong messages
-    async fn task_inner<Stream>(
-        &self,
+    #[tracing::instrument(
+        skip(datagram_tx, stream_tx, dropped_ports_rx, message_stream),
+        level = "trace"
+    )]
+    pub async fn task<Stream>(
+        self,
         mut datagram_tx: mpsc::Sender<DatagramFrame>,
         mut stream_tx: mpsc::Sender<MuxStream<Sink>>,
         mut dropped_ports_rx: mpsc::UnboundedReceiver<(u16, u16, bool)>,
@@ -127,34 +106,51 @@ where
         // If we missed a tick, it is probably doing networking, so we don't need to
         // send a ping
         keepalive_interval.maybe_set_missed_tick_behavior(MissedTickBehavior::Skip);
-        loop {
+        let result = loop {
             trace!("task loop");
             tokio::select! {
                 Some((our_port, their_port, fin_sent)) = dropped_ports_rx.recv() => {
                     if our_port == 0 {
                         debug!("mux dropped");
-                        return Ok(());
+                        break Ok(());
                     }
                     self.close_port(our_port, their_port, fin_sent).await;
                 }
                 Some(msg) = message_stream.next() => {
-                    let msg = msg?;
+                    let msg = match msg {
+                        Ok(msg) => msg,
+                        Err(e) => {
+                            error!("Failed to receive message: {}", e);
+                            break Err(e.into());
+                        }
+                    };
                     trace!("received message length = {}", msg.len());
-                    if self.process_message(msg, &mut datagram_tx, &mut stream_tx).await? {
-                        // If the message was a `Close` frame, we are done
-                        return Ok(());
+                    // Messages cannot be processed concurrently
+                    // because doing so will break stream ordering
+                    if let Err(e) = self.process_message(msg, &mut datagram_tx, &mut stream_tx).await {
+                        error!("Failed to process message: {}", e);
+                        break Err(e);
                     }
                 }
                 _ = keepalive_interval.tick() => {
                     trace!("sending ping");
-                    self.send_message(Message::Ping(vec![])).await?;
+                    if let Err(e) = self.send_message(Message::Ping(vec![])).await {
+                        error!("Failed to send ping: {}", e);
+                        break Err(e);
+                    }
                 }
                 else => {
                     // Everything is closed, we are probably done
-                    return Ok(());
+                    break Ok(());
                 }
             }
+        };
+        match &result {
+            Ok(()) => debug!("Multiplexor task exited"),
+            Err(e) => error!("Multiplexor task failed: {e}"),
         }
+        self.shutdown().await;
+        result
     }
 
     /// Process an incoming message

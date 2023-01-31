@@ -113,7 +113,7 @@ where
         tokio::spawn(
             inner
                 .dupe()
-                .task_wrapper(datagram_tx, stream_tx, dropped_ports_rx, stream),
+                .task(datagram_tx, stream_tx, dropped_ports_rx, stream),
         );
         trace!("Multiplexor task spawned");
 
