@@ -1,8 +1,6 @@
-//! A wrapper around `tokio_tungstenite::WebSocketStream` that uses locking
-//! to ensure that only one task is writing to the sink at a time.
+//! A wrapper around `Sink` that can be cloned and shared between tasks.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use super::frame::{Frame, StreamFrame};
 use futures_util::{Sink as FutureSink, SinkExt};
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -10,130 +8,102 @@ use std::task::{ready, Poll};
 use tracing::trace;
 use tungstenite::Message;
 
-/// `Sink` of frames with locking.
-#[derive(Debug)]
-pub(super) struct LockedMessageSink<Sink> {
-    /// The sink to write to.
-    sink: Arc<Mutex<Sink>>,
-}
+/// A wrapper around `Sink` that can be cloned and shared between tasks.
+pub struct LockedSink<Sink>(Arc<Mutex<Sink>>);
 
-impl<Sink> LockedMessageSink<Sink> {
-    /// Create a new `LockedMessageSink` from a `Sink`.
+impl<Sink> LockedSink<Sink> {
+    /// Create a new `LockedSink` from a `Sink`
     #[inline]
     pub fn new(sink: Sink) -> Self {
-        Self {
-            sink: Arc::new(Mutex::new(sink)),
-        }
+        Self(Arc::new(Mutex::new(sink)))
     }
 }
 
-impl<Sink> Clone for LockedMessageSink<Sink> {
-    // `Clone` is manually implemented because we don't need `Sink: Clone`.
+impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedSink<Sink> {
+    /// Lock and send the resulting `Message` from a computation
     #[inline]
-    fn clone(&self) -> Self {
-        Self {
-            sink: self.sink.clone(),
-        }
-    }
-}
-
-impl<Sink> crate::dupe::Dupe for LockedMessageSink<Sink> {
-    // Explicitly providing a `dupe` implementation to prove that everything
-    // can be cheaply cloned.
-    #[inline]
-    fn dupe(&self) -> Self {
-        Self {
-            sink: self.sink.dupe(),
-        }
-    }
-}
-
-impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedMessageSink<Sink> {
-    /// Lock and run `sink.start_send` on the underlying `Sink`.
-    #[tracing::instrument(skip(self, cx, buf), level = "trace")]
-    #[inline]
-    pub fn poll_send_stream_buf(
+    pub fn poll_send_with(
         &self,
         cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-        our_port: u16,
-        their_port: u16,
-    ) -> Poll<Result<(), super::Error>> {
-        // These code need to be duplicated instead of calling `self.poll_send_message`
-        // because we want to create `Frame`s only when `sink.poll_ready` succeeds.
-        let mut sink = self.sink.lock();
+        msg_fn: impl FnOnce() -> Message,
+    ) -> Poll<Result<(), tungstenite::Error>> {
+        let mut sink = self.0.lock();
         // `ready`: if we return here, nothing happens
         ready!(sink.poll_ready_unpin(cx))?;
-        let frame = Frame::Stream(StreamFrame::new_psh(
-            our_port,
-            their_port,
-            buf.to_vec().into(),
-        ));
-        let message: Message = frame.try_into()?;
-        sink.start_send_unpin(message)?;
-        Poll::Ready(Ok(()))
+        let msg = msg_fn();
+        let result = sink.start_send_unpin(msg);
+        trace!("message sent");
+        Poll::Ready(result)
     }
 
-    /// Lock and send a message
-    #[tracing::instrument(skip(self, cx), level = "trace")]
+    /// Lock and send a `Message`
     #[inline]
     pub fn poll_send_message(
         &self,
         cx: &mut std::task::Context<'_>,
         msg: &Message,
     ) -> Poll<Result<(), tungstenite::Error>> {
-        let mut sink = self.sink.lock();
-        // `ready`: if we return here, nothing happens
-        ready!(sink.poll_ready_unpin(cx))?;
-        let result = sink.start_send_unpin(msg.clone());
-        trace!("message sent");
-        Poll::Ready(result)
+        self.poll_send_with(cx, || msg.clone())
     }
 
-    /// Lock and send a message
-    #[tracing::instrument(skip_all, level = "trace")]
-    #[inline]
-    pub async fn send_message(&self, msg: Message) -> Result<(), tungstenite::Error> {
-        std::future::poll_fn(|cx| self.poll_send_message(cx, &msg)).await
-    }
-
-    /// Lock and run `sink.poll_flush` on the underlying `Sink`.
-    #[tracing::instrument(skip(self, cx), level = "trace")]
+    /// Lock and flush the sink
     #[inline]
     pub fn poll_flush(
         &self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<(), tungstenite::Error>> {
-        let mut sink = self.sink.lock();
-        sink.poll_flush_unpin(cx)
+        self.0.lock().poll_flush_unpin(cx)
     }
 
-    /// Lock and run `sink.poll_flush` on the underlying `Sink`.
-    #[tracing::instrument(skip(self), level = "trace")]
+    /// Lock and flush the sink, ignoring errors that indicate the connection
+    /// is closed.
+    /// It is sometimes acceptable when the other side closes the connection
+    /// because the user should only discover this when they try to work with
+    /// the stream for the next time.
     #[inline]
-    pub async fn flush(&self) -> Result<(), tungstenite::Error> {
-        std::future::poll_fn(|cx| self.poll_flush(cx)).await
+    pub fn poll_flush_ignore_closed(
+        &self,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Result<(), tungstenite::Error>> {
+        match ready!(self.0.lock().poll_flush_unpin(cx)) {
+            Ok(()) | Err(tungstenite::Error::ConnectionClosed) => Poll::Ready(Ok(())),
+            Err(tungstenite::Error::Io(ioerror))
+                if ioerror.kind() == std::io::ErrorKind::BrokenPipe =>
+            {
+                Poll::Ready(Ok(()))
+            }
+            Err(e) => Poll::Ready(Err(e)),
+        }
     }
 
-    /// Lock and run `sink.poll_close` on the underlying `Sink`.
-    /// Note that we should not close the sink if we only want to close one connection.
-    #[tracing::instrument(skip(self, cx), level = "trace")]
+    /// Lock and close the sink
     #[inline]
     pub fn poll_close(
         &self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<(), tungstenite::Error>> {
-        let mut sink = self.sink.lock();
-        sink.poll_close_unpin(cx)
-    }
-
-    /// Lock and run `sink.poll_close` on the underlying `Sink`.
-    /// Note that we should not close the sink if we only want to close one connection.
-    #[tracing::instrument(skip(self), level = "trace")]
-    #[inline]
-    pub async fn close(&self) -> Result<(), tungstenite::Error> {
-        std::future::poll_fn(|cx| self.poll_close(cx)).await
+        self.0.lock().poll_close_unpin(cx)
     }
 }
 
-// Isn't very reasonable to test this file directly
+impl<Sink> Clone for LockedSink<Sink> {
+    // `Clone` is manually implemented because we don't need `Sink: Clone`.
+    #[inline]
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+impl<Sink> crate::dupe::Dupe for LockedSink<Sink> {
+    #[inline]
+    fn dupe(&self) -> Self {
+        Self(self.0.dupe())
+    }
+}
+
+impl<Sink: std::fmt::Debug> std::fmt::Debug for LockedSink<Sink> {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        <Mutex<Sink> as std::fmt::Debug>::fmt(self.0.as_ref(), f)
+    }
+}

@@ -174,56 +174,74 @@ pub enum Frame {
     Datagram(DatagramFrame),
 }
 
+impl From<StreamFrame> for Vec<u8> {
+    /// Convert a `StreamFrame` to bytes.
+    #[tracing::instrument(level = "trace")]
+    fn from(frame: StreamFrame) -> Self {
+        let size = 1
+            + std::mem::size_of::<u16>()
+            + std::mem::size_of::<u16>()
+            + std::mem::size_of::<StreamFlag>()
+            + std::mem::size_of::<u32>()
+            + frame.data.len();
+        let mut encoded = Self::with_capacity(size);
+        encoded.put_u8(1);
+        encoded.put_u16(frame.sport);
+        encoded.put_u16(frame.dport);
+        encoded.put_u8(frame.flag as u8);
+        encoded.extend_from_slice(&frame.data);
+        encoded
+    }
+}
+
+impl TryFrom<DatagramFrame> for Vec<u8> {
+    type Error = Error;
+
+    /// Convert a `DatagramFrame` to bytes. Gives an error when
+    /// `DatagramFrame::host` is longer than 255 octets.
+    fn try_from(frame: DatagramFrame) -> Result<Self, Self::Error> {
+        let size = 1
+            + frame.host.len()
+            + std::mem::size_of::<u16>()
+            + std::mem::size_of::<u32>()
+            + frame.data.len();
+        let mut encoded = Self::with_capacity(size);
+        encoded.put_u8(3);
+        encoded.put_u8(u8::try_from(frame.host.len())?);
+        encoded.extend_from_slice(&frame.host);
+        encoded.put_u16(frame.port);
+        encoded.put_u32(frame.sid);
+        encoded.extend_from_slice(&frame.data);
+        Ok(encoded)
+    }
+}
+
 impl TryFrom<Frame> for Vec<u8> {
     type Error = Error;
 
-    /// Convert a `Frame` to bytes. Gives an error when
-    /// `DatagramFrame::host` is longer than 255 octets.
-    #[tracing::instrument(level = "trace")]
     fn try_from(frame: Frame) -> Result<Self, Self::Error> {
         match frame {
-            Frame::Stream(frame) => {
-                let size = 1
-                    + std::mem::size_of::<u16>()
-                    + std::mem::size_of::<u16>()
-                    + std::mem::size_of::<StreamFlag>()
-                    + std::mem::size_of::<u32>()
-                    + frame.data.len();
-                let mut encoded = Self::with_capacity(size);
-                encoded.put_u8(1);
-                encoded.put_u16(frame.sport);
-                encoded.put_u16(frame.dport);
-                encoded.put_u8(frame.flag as u8);
-                encoded.extend_from_slice(&frame.data);
-                Ok(encoded)
-            }
-            Frame::Datagram(frame) => {
-                let size = 1
-                    + frame.host.len()
-                    + std::mem::size_of::<u16>()
-                    + std::mem::size_of::<u32>()
-                    + frame.data.len();
-                let mut encoded = Self::with_capacity(size);
-                encoded.put_u8(3);
-                encoded.put_u8(u8::try_from(frame.host.len())?);
-                encoded.extend_from_slice(&frame.host);
-                encoded.put_u16(frame.port);
-                encoded.put_u32(frame.sid);
-                encoded.extend_from_slice(&frame.data);
-                Ok(encoded)
-            }
+            Frame::Stream(frame) => Ok(frame.into()),
+            Frame::Datagram(frame) => frame.try_into(),
         }
     }
 }
 
-impl TryFrom<Frame> for Message {
-    type Error = <Vec<u8> as TryFrom<Frame>>::Error;
-
-    fn try_from(frame: Frame) -> Result<Self, Self::Error> {
-        let bytes = Vec::try_from(frame)?;
-        Ok(Self::Binary(bytes))
+// I thought these was automatically implemented by the compiler
+impl From<StreamFrame> for Message {
+    fn from(frame: StreamFrame) -> Self {
+        Vec::<u8>::from(frame).into()
     }
 }
+
+impl TryFrom<DatagramFrame> for Message {
+    type Error = Error;
+    fn try_from(frame: DatagramFrame) -> Result<Self, Self::Error> {
+        Vec::<u8>::try_from(frame).map(Into::into)
+    }
+}
+
+// `Message` has `From<Vec<u8>>` so it automatically have `TryFrom<Frame>`.
 
 impl TryFrom<Bytes> for StreamFrame {
     type Error = Error;

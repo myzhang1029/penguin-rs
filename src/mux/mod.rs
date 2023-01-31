@@ -14,7 +14,6 @@ mod test;
 
 use crate::config;
 use crate::dupe::Dupe;
-use crate::mux::locked_sink::LockedMessageSink;
 use futures_util::stream::SplitSink;
 use futures_util::{Sink as FutureSink, Stream as FutureStream, StreamExt};
 use inner::MultiplexorInner;
@@ -41,8 +40,8 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Tungstenite(#[from] tungstenite::Error),
-    #[error("invalid frame: {0}")]
-    InvalidFrame(#[from] <Message as TryFrom<Frame>>::Error),
+    #[error("datagram invalid: {0}")]
+    InvalidDatagramFrame(#[from] <Vec<u8> as TryFrom<DatagramFrame>>::Error),
     #[error("received `Text` message")]
     TextMessage,
     #[error("server received `Ack` frame")]
@@ -106,7 +105,7 @@ where
 
         let inner = MultiplexorInner {
             role,
-            sink: LockedMessageSink::new(sink),
+            sink: locked_sink::LockedSink::new(sink),
             keepalive_interval,
             streams: Arc::new(RwLock::new(HashMap::new())),
             dropped_ports_tx,
@@ -139,7 +138,7 @@ where
         trace!("sport = {sport}");
         let syn_frame = StreamFrame::new_syn(&host, port, sport)?;
         trace!("sending syn");
-        self.inner.send_frame(Frame::Stream(syn_frame)).await?;
+        self.inner.send_message(syn_frame.into()).await?;
         trace!("sending stream to user");
         let stream = self
             .stream_rx
@@ -171,7 +170,7 @@ where
     #[tracing::instrument(skip(self), level = "debug")]
     #[inline]
     pub async fn send_datagram(&self, frame: DatagramFrame) -> Result<(), Error> {
-        self.inner.send_frame(Frame::Datagram(frame)).await?;
+        self.inner.send_message(frame.try_into()?).await?;
         Ok(())
     }
 }

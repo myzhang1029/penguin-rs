@@ -1,8 +1,8 @@
 //! `AsyncRead + AsyncWrite` object returned by `*_new_stream_channel`.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use super::frame::{Frame, StreamFrame};
-use super::locked_sink::LockedMessageSink;
+use super::frame::StreamFrame;
+use super::locked_sink::LockedSink;
 use super::tungstenite_error_to_io_error;
 use bytes::Bytes;
 use futures_util::Sink as FutureSink;
@@ -22,9 +22,9 @@ pub struct MuxStream<Sink> {
     /// Receive stream frames
     pub(super) frame_rx: mpsc::Receiver<Bytes>,
     /// Our port
-    pub our_port: u16,
+    pub(super) our_port: u16,
     /// Port of the other end
-    pub their_port: u16,
+    pub(super) their_port: u16,
     /// Forwarding destination. Only used on `Role::Server`
     pub dest_host: Bytes,
     /// Forwarding destination port. Only used on `Role::Server`
@@ -37,7 +37,7 @@ pub struct MuxStream<Sink> {
     /// Remaining bytes to be read
     pub(super) buf: Bytes,
     /// See `MultiplexorInner`.
-    pub(super) sink: LockedMessageSink<Sink>,
+    pub(super) sink: LockedSink<Sink>,
     /// See `MultiplexorInner`.
     pub(super) dropped_ports_tx: mpsc::UnboundedSender<(u16, u16, bool)>,
 }
@@ -130,9 +130,12 @@ where
             debug!("stream has been closed, returning `BrokenPipe`");
             return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
         }
-        ready!(self
-            .sink
-            .poll_send_stream_buf(cx, buf, self.our_port, self.their_port))?;
+        // `ready`: nothing happens if return here
+        ready!(self.sink.poll_send_with(cx, || {
+            StreamFrame::new_psh(self.our_port, self.their_port, buf.to_vec().into()).into()
+        }))
+        .map_err(tungstenite_error_to_io_error)?;
+
         Poll::Ready(Ok(buf.len()))
     }
 
@@ -149,13 +152,14 @@ where
     #[inline]
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         if !self.fin_sent.load(Ordering::Relaxed) {
-            let message = Frame::Stream(StreamFrame::new_fin(self.our_port, self.their_port))
-                .try_into()
-                .expect("Frame should be representable as a message (this is a bug)");
-            ready!(self.sink.poll_send_message(cx, &message))
-                .map_err(tungstenite_error_to_io_error)?;
+            // `ready`: nothing happens if return here
+            ready!(self.sink.poll_send_with(cx, || {
+                StreamFrame::new_fin(self.our_port, self.their_port).into()
+            }))
+            .map_err(tungstenite_error_to_io_error)?;
             self.fin_sent.store(true, Ordering::Relaxed);
         }
+        // `ready`: if poll resumes, `self.fin_sent` indicates where to continue
         // We don't want to `close()` the sink here!!!
         // This line is allowed to fail, because the sink might have been closed altogether
         ready!(self.sink.poll_flush(cx)).ok();
