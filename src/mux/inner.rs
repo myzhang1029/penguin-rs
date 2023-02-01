@@ -18,20 +18,26 @@ use tokio::time::MissedTickBehavior;
 use tracing::{debug, error, trace};
 use tungstenite::Message;
 
-/// (
-///     writer,
-///     can_write,
-///     number of `Psh` frames received after the last `Ack` frame,
-///     number of `Psh` frames we are allowed to send before waiting for a `Ack` frame,
-///     waker to wake writers awaiting `Ack` frames,
-/// )
-type MuxStreamData = (
-    mpsc::Sender<Bytes>,
-    Arc<AtomicBool>,
-    AtomicU64,
-    Arc<AtomicU64>,
-    Arc<AtomicWaker>,
-);
+#[derive(Debug)]
+pub(super) struct MuxStreamData {
+    /// Channel for sending data to `MuxStream`'s `AsyncRead`
+    sender: mpsc::Sender<Bytes>,
+    /// Whether writes should succeed.
+    /// There are two cases for `false`:
+    /// 1. `Fin` has been sent.
+    /// 2. The stream has been removed from `inner.streams`
+    ///    (or the mux has been dropped).
+    can_write: Arc<AtomicBool>,
+    /// Number of `Psh` frames to receive before sending the next `Ack` frame.
+    /// That is, previous `Ack`'s `rwnd` minus number of `Psh` frames received
+    /// since then.
+    psh_recv_remaining: AtomicU64,
+    /// Number of `Psh` frames we are allowed to send before waiting for a `Ack` frame.
+    psh_send_remaining: Arc<AtomicU64>,
+    /// Waker to wake up the task that sends frames because their `cwnd` has
+    /// increased.
+    writer_waker: Arc<AtomicWaker>,
+}
 
 /// Multiplexor inner
 pub(super) struct MultiplexorInner<S> {
@@ -283,10 +289,12 @@ where
             StreamFlag::Ack => {
                 debug!("received `Ack` for {our_port}");
                 let new_rwnd = data.get_u64();
-                let mut streams = self.streams.write().await;
-                if let Some((_, _, _, cwnd, waker)) = streams.get_mut(&our_port) {
-                    cwnd.store(new_rwnd, Ordering::SeqCst);
-                    waker.wake();
+                let streams = self.streams.read().await;
+                if let Some(stream_data) = streams.get(&our_port) {
+                    stream_data
+                        .psh_send_remaining
+                        .store(new_rwnd, Ordering::SeqCst);
+                    stream_data.writer_waker.wake();
                 } else {
                     // the port does not exist
                     drop(streams);
@@ -298,26 +306,36 @@ where
                 self.close_port(our_port, their_port, true).await;
             }
             StreamFlag::Fin => {
-                let sender = self.streams.write().await;
-                if let Some((sender, _, _, _, _)) = sender.get(&our_port) {
+                let streams = self.streams.read().await;
+                if let Some(stream_data) = streams.get(&our_port) {
                     // Make sure the user receives `EOF`.
-                    sender.send(Bytes::new()).await.ok();
+                    stream_data.sender.send(Bytes::new()).await.ok();
                 }
                 // And our end can still send
             }
             StreamFlag::Psh => {
-                let mut streams = self.streams.write().await;
-                if let Some((sender, _, psh_count, _, _)) = streams.get_mut(&our_port) {
+                let streams = self.streams.read().await;
+                if let Some(stream_data) = streams.get(&our_port) {
+                    let sender = &stream_data.sender;
                     if sender.send(data).await.is_ok() {
                         let remaining: u64 = sender
                             .capacity()
                             .try_into()
                             .expect("Capacity should fit into u64 (this is a bug)");
-                        let new = psh_count.fetch_add(1, Ordering::SeqCst) + 1;
-                        if new >= config::RWND - 1 {
-                            psh_count.store(0, Ordering::SeqCst);
+                        let new = stream_data
+                            .psh_recv_remaining
+                            .fetch_sub(1, Ordering::SeqCst)
+                            - 1;
+                        // To reduce blocking, let's send `Ack` when we have
+                        // one window left.
+                        if new <= 1 {
+                            // Set it to our newly advertised window
+                            stream_data
+                                .psh_recv_remaining
+                                .store(remaining, Ordering::SeqCst);
                             drop(streams);
                             debug!("sending `Ack` from {our_port} at {remaining}");
+                            // Advertise our new window
                             self.ws
                                 .send_with(|| {
                                     StreamFrame::new_ack(our_port, their_port, remaining).into()
@@ -360,13 +378,13 @@ where
         let mut streams = self.streams.write().await;
         streams.insert(
             our_port,
-            (
-                frame_tx,
-                can_write.dupe(),
-                AtomicU64::new(0),
-                cwnd.dupe(),
-                writer_waker.dupe(),
-            ),
+            MuxStreamData {
+                sender: frame_tx,
+                can_write: can_write.dupe(),
+                psh_recv_remaining: AtomicU64::new(config::RWND),
+                psh_send_remaining: cwnd.dupe(),
+                writer_waker: writer_waker.dupe(),
+            },
         );
         drop(streams);
         let stream = MuxStream {
@@ -396,10 +414,10 @@ where
     #[inline]
     pub async fn close_port(&self, our_port: u16, their_port: u16, inhibit_rst: bool) {
         // Free the port for reuse
-        if let Some((sender, can_write, _, _, _)) = self.streams.write().await.remove(&our_port) {
+        if let Some(stream_data) = self.streams.write().await.remove(&our_port) {
             // Make sure the user receives `EOF`.
-            sender.send(Bytes::new()).await.ok();
-            let old = can_write.swap(false, Ordering::Relaxed);
+            stream_data.sender.send(Bytes::new()).await.ok();
+            let old = stream_data.can_write.swap(false, Ordering::Relaxed);
             if old && !inhibit_rst {
                 // If the user did not call `poll_shutdown`, we need to send a `Rst` frame
                 self.ws
@@ -417,11 +435,11 @@ where
     async fn shutdown(&self) {
         debug!("closing all connections");
         let mut streams = self.streams.write().await;
-        for (_, (sender, closed, _, _, _)) in streams.drain() {
+        for (_, stream_data) in streams.drain() {
             // Make sure the user receives `EOF`.
-            sender.send(Bytes::new()).await.ok();
+            stream_data.sender.send(Bytes::new()).await.ok();
             // Stop all streams from sending stuff
-            closed.store(true, Ordering::Relaxed);
+            stream_data.can_write.store(false, Ordering::Relaxed);
         }
         drop(streams);
         // This also effectively `Rst`s all streams

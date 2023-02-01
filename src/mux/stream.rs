@@ -29,10 +29,6 @@ pub struct MuxStream<S> {
     /// Forwarding destination port. Only used on `Role::Server`
     pub dest_port: u16,
     /// Whether writes should succeed.
-    /// There are two cases for `false`:
-    /// 1. `Fin` has been sent.
-    /// 2. The stream has been removed from `inner.streams`
-    ///    (or the mux has been dropped).
     pub(super) can_write: Arc<AtomicBool>,
     /// Number of frames we can still send before we need to wait for an `Ack`
     pub(super) cwnd: Arc<AtomicU64>,
