@@ -8,8 +8,9 @@ use super::{Error, IntKey, Role};
 use crate::config;
 use crate::dupe::Dupe;
 use bytes::{Buf, Bytes};
+use futures_util::task::AtomicWaker;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{mpsc, RwLock};
@@ -17,8 +18,20 @@ use tokio::time::MissedTickBehavior;
 use tracing::{debug, error, trace};
 use tungstenite::Message;
 
-/// (writer, can_write)
-type MuxStreamSenderData = (mpsc::Sender<Bytes>, Arc<AtomicBool>);
+/// (
+///     writer,
+///     can_write,
+///     number of `Psh` frames received after the last `Ack` frame,
+///     number of `Psh` frames we are allowed to send before waiting for a `Ack` frame,
+///     waker to wake writers awaiting `Ack` frames,
+/// )
+type MuxStreamData = (
+    mpsc::Sender<Bytes>,
+    Arc<AtomicBool>,
+    AtomicU64,
+    Arc<AtomicU64>,
+    Arc<AtomicWaker>,
+);
 
 /// Multiplexor inner
 pub(super) struct MultiplexorInner<S> {
@@ -28,8 +41,8 @@ pub(super) struct MultiplexorInner<S> {
     pub(super) ws: LockedWebSocket<S>,
     /// Interval between keepalive `Ping`s
     pub(super) keepalive_interval: Option<std::time::Duration>,
-    /// Open stream channels: our_port -> `MuxStreamSenderData`
-    pub(super) streams: Arc<RwLock<HashMap<u16, MuxStreamSenderData>>>,
+    /// Open stream channels: our_port -> `MuxStreamData`
+    pub(super) streams: Arc<RwLock<HashMap<u16, MuxStreamData>>>,
     /// Channel for notifying the task of a dropped `MuxStream`
     /// (in the form (our_port, their_port)).
     /// Sending (0, _) means that the multiplexor is being dropped and the
@@ -222,7 +235,7 @@ where
             dport: our_port,
             sport: their_port,
             flag,
-            data,
+            mut data,
         } = stream_frame;
         let send_rst = || async {
             self.ws
@@ -236,31 +249,49 @@ where
                     return Err(Error::ClientReceivedSyn);
                 }
                 // Decode Syn handshake
-                let mut syn_data = data;
-                let host_len = syn_data.get_u8();
-                let dest_host = syn_data.split_to(host_len as usize);
-                let dest_port = syn_data.get_u16();
+                let peer_rwnd = data.get_u64();
+                let dest_port = data.get_u16();
+                let dest_host = data;
                 let our_port = u16::next_available_key(&*self.streams.read().await);
                 trace!("port: {}", our_port);
                 // "we" is `role == Server`
                 // "they" is `role == Client`
-                self.new_stream(our_port, their_port, dest_host, dest_port, stream_tx)
-                    .await?;
-                // Send a `Ack`
-                trace!("sending `Ack`");
+                self.new_stream(
+                    our_port, their_port, dest_host, dest_port, peer_rwnd, stream_tx,
+                )
+                .await?;
+                // Send a `SynAck`
+                trace!("sending `SynAck`");
                 self.ws
-                    .send_with(|| StreamFrame::new_ack(our_port, their_port).into())
+                    .send_with(|| {
+                        StreamFrame::new_synack(our_port, their_port, config::RWND).into()
+                    })
                     .await?;
                 self.ws.flush_ignore_closed().await?;
             }
-            StreamFlag::Ack => {
+            StreamFlag::SynAck => {
                 if self.role == Role::Server {
-                    return Err(Error::ServerReceivedAck);
+                    return Err(Error::ServerReceivedSynAck);
                 }
+                // Decode `SynAck` handshake
+                let peer_rwnd = data.get_u64();
                 // "we" is `role == Client`
                 // "they" is `role == Server`
-                self.new_stream(our_port, their_port, Bytes::new(), 0, stream_tx)
+                self.new_stream(our_port, their_port, Bytes::new(), 0, peer_rwnd, stream_tx)
                     .await?;
+            }
+            StreamFlag::Ack => {
+                debug!("received `Ack` for {our_port}");
+                let new_rwnd = data.get_u64();
+                let mut streams = self.streams.write().await;
+                if let Some((_, _, _, cwnd, waker)) = streams.get_mut(&our_port) {
+                    cwnd.store(new_rwnd, Ordering::SeqCst);
+                    waker.wake();
+                } else {
+                    // the port does not exist
+                    drop(streams);
+                    send_rst().await?;
+                }
             }
             StreamFlag::Rst => {
                 // `true` because we don't want to reply `Rst` with `Rst`.
@@ -268,7 +299,7 @@ where
             }
             StreamFlag::Fin => {
                 let sender = self.streams.write().await;
-                if let Some((sender, _)) = sender.get(&our_port) {
+                if let Some((sender, _, _, _, _)) = sender.get(&our_port) {
                     // Make sure the user receives `EOF`.
                     sender.send(Bytes::new()).await.ok();
                 }
@@ -276,9 +307,28 @@ where
             }
             StreamFlag::Psh => {
                 let mut streams = self.streams.write().await;
-                if let Some((sender, _)) = streams.get_mut(&our_port) {
+                if let Some((sender, _, psh_count, _, _)) = streams.get_mut(&our_port) {
                     if sender.send(data).await.is_ok() {
-                        return Ok(());
+                        let remaining: u64 = sender
+                            .capacity()
+                            .try_into()
+                            .expect("Capacity should fit into u64 (this is a bug)");
+                        let new = psh_count.fetch_add(1, Ordering::SeqCst) + 1;
+                        if new >= config::RWND - 1 {
+                            psh_count.store(0, Ordering::SeqCst);
+                            drop(streams);
+                            debug!("sending `Ack` from {our_port} at {remaining}");
+                            self.ws
+                                .send_with(|| {
+                                    StreamFrame::new_ack(our_port, their_port, remaining).into()
+                                })
+                                .await?;
+                            self.ws.flush_ignore_closed().await?;
+                        }
+                    } else {
+                        // The receiver is closed
+                        drop(streams);
+                        send_rst().await?;
                     }
                 } else {
                     // The port does not exist
@@ -298,14 +348,26 @@ where
         their_port: u16,
         dest_host: Bytes,
         dest_port: u16,
+        peer_rwnd: u64,
         stream_tx: &mut mpsc::Sender<MuxStream<S>>,
     ) -> Result<(), Error> {
         // `tx` is our end, `rx` is the user's end
         let (frame_tx, frame_rx) = mpsc::channel(config::STREAM_FRAME_BUFFER_SIZE);
         let can_write = Arc::new(AtomicBool::new(true));
+        let cwnd = Arc::new(AtomicU64::new(peer_rwnd));
+        let writer_waker = Arc::new(AtomicWaker::new());
         // Save the TX end of the stream so we can write to it when subsequent frames arrive
         let mut streams = self.streams.write().await;
-        streams.insert(our_port, (frame_tx, can_write.dupe()));
+        streams.insert(
+            our_port,
+            (
+                frame_tx,
+                can_write.dupe(),
+                AtomicU64::new(0),
+                cwnd.dupe(),
+                writer_waker.dupe(),
+            ),
+        );
         drop(streams);
         let stream = MuxStream {
             frame_rx,
@@ -314,6 +376,8 @@ where
             dest_host,
             dest_port,
             can_write,
+            cwnd,
+            writer_waker,
             buf: Bytes::new(),
             ws: self.ws.dupe(),
             dropped_ports_tx: self.dropped_ports_tx.dupe(),
@@ -332,7 +396,7 @@ where
     #[inline]
     pub async fn close_port(&self, our_port: u16, their_port: u16, inhibit_rst: bool) {
         // Free the port for reuse
-        if let Some((sender, can_write)) = self.streams.write().await.remove(&our_port) {
+        if let Some((sender, can_write, _, _, _)) = self.streams.write().await.remove(&our_port) {
             // Make sure the user receives `EOF`.
             sender.send(Bytes::new()).await.ok();
             let old = can_write.swap(false, Ordering::Relaxed);
@@ -353,7 +417,7 @@ where
     async fn shutdown(&self) {
         debug!("closing all connections");
         let mut streams = self.streams.write().await;
-        for (_, (sender, closed)) in streams.drain() {
+        for (_, (sender, closed, _, _, _)) in streams.drain() {
             // Make sure the user receives `EOF`.
             sender.send(Bytes::new()).await.ok();
             // Stop all streams from sending stuff

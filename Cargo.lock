@@ -1279,7 +1279,7 @@ checksum = "5583e89e108996506031660fe09baa5011b9dd0341b89029313006d1fb508d70"
 
 [[package]]
 name = "rusty-penguin"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "axum",
  "axum-server",

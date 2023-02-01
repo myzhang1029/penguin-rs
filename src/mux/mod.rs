@@ -39,12 +39,14 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Tungstenite(#[from] tungstenite::Error),
-    #[error("datagram invalid: {0}")]
-    InvalidDatagramFrame(#[from] <Vec<u8> as TryFrom<DatagramFrame>>::Error),
+    #[error("datagram host longer than 255 octets")]
+    DatagramHostTooLong(#[from] <Vec<u8> as TryFrom<DatagramFrame>>::Error),
+    #[error("invalid frame: {0}")]
+    InvalidFrame(#[from] frame::Error),
     #[error("received `Text` message")]
     TextMessage,
-    #[error("server received `Ack` frame")]
-    ServerReceivedAck,
+    #[error("server received `SynAck` frame")]
+    ServerReceivedSynAck,
     #[error("client received `Syn` frame")]
     ClientReceivedSyn,
     #[error(transparent)]
@@ -129,8 +131,10 @@ where
         let sport = u16::next_available_key(&*self.inner.streams.read().await);
         trace!("sport = {sport}");
         trace!("sending `Syn`");
-        let message: tungstenite::Message = StreamFrame::new_syn(&host, port, sport)?.into();
-        self.inner.ws.send_with(|| message.clone()).await?;
+        self.inner
+            .ws
+            .send_with(|| StreamFrame::new_syn(&host, port, sport, config::RWND).into())
+            .await?;
         self.inner.ws.flush_ignore_closed().await?;
         trace!("sending stream to user");
         let stream = self

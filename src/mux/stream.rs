@@ -5,9 +5,10 @@ use super::frame::StreamFrame;
 use super::locked_sink::LockedWebSocket;
 use super::tungstenite_error_to_io_error;
 use bytes::Bytes;
+use futures_util::task::AtomicWaker;
 use std::io;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -33,6 +34,10 @@ pub struct MuxStream<S> {
     /// 2. The stream has been removed from `inner.streams`
     ///    (or the mux has been dropped).
     pub(super) can_write: Arc<AtomicBool>,
+    /// Number of frames we can still send before we need to wait for an `Ack`
+    pub(super) cwnd: Arc<AtomicU64>,
+    /// Waker to wake up the task that sends frames
+    pub(super) writer_waker: Arc<AtomicWaker>,
     /// Remaining bytes to be read
     pub(super) buf: Bytes,
     /// See `MultiplexorInner`.
@@ -126,7 +131,27 @@ where
             return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
         }
         // `ready`: nothing happens if return here
-        ready!(self.ws.poll_send_with(cx, |_cx| {
+        ready!(self.ws.poll_send_with(cx, |cx| {
+            loop {
+                let original = self.cwnd.load(Ordering::SeqCst);
+                debug!("congestion window: {}", original);
+                if original == 0 {
+                    // We have reached the congestion window limit. Wait for an `Ack`
+                    debug!("congestion window limit reached, waiting for an `Ack`");
+                    self.writer_waker.register(cx.waker());
+                    return Poll::Pending;
+                }
+                let new = original - 1;
+                if self
+                    .cwnd
+                    .compare_exchange(original, new, Ordering::SeqCst, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    // We have successfully decremented the congestion window
+                    break;
+                }
+                debug!("congestion window race condition, retrying");
+            }
             Poll::Ready(
                 StreamFrame::new_psh(self.our_port, self.their_port, buf.to_vec().into()).into(),
             )
