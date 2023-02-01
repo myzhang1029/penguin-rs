@@ -29,17 +29,18 @@ pub struct MuxStream<Sink> {
     pub dest_host: Bytes,
     /// Forwarding destination port. Only used on `Role::Server`
     pub dest_port: u16,
-    /// Whether `Fin` has been sent
-    pub(super) fin_sent: AtomicBool,
-    /// Whether our entry in `inner.streams` has been removed and
-    /// no more writes should succeed
-    pub(super) stream_removed: Arc<AtomicBool>,
+    /// Whether writes should succeed.
+    /// There are two cases for `false`:
+    /// 1. `Fin` has been sent.
+    /// 2. The stream has been removed from `inner.streams`
+    ///    (or the mux has been dropped).
+    pub(super) can_write: Arc<AtomicBool>,
     /// Remaining bytes to be read
     pub(super) buf: Bytes,
     /// See `MultiplexorInner`.
     pub(super) sink: LockedSink<Sink>,
     /// See `MultiplexorInner`.
-    pub(super) dropped_ports_tx: mpsc::UnboundedSender<(u16, u16, bool)>,
+    pub(super) dropped_ports_tx: mpsc::UnboundedSender<(u16, u16)>,
 }
 
 impl<Sink> std::fmt::Debug for MuxStream<Sink> {
@@ -49,7 +50,7 @@ impl<Sink> std::fmt::Debug for MuxStream<Sink> {
             .field("their_port", &self.their_port)
             .field("dest_host", &self.dest_host)
             .field("dest_port", &self.dest_port)
-            .field("fin_sent", &self.fin_sent)
+            .field("can_write", &self.can_write)
             .finish()
     }
 }
@@ -60,11 +61,7 @@ impl<Sink> Drop for MuxStream<Sink> {
     fn drop(&mut self) {
         // Notify the task that this port is no longer in use
         self.dropped_ports_tx
-            .send((
-                self.our_port,
-                self.their_port,
-                self.fin_sent.load(Ordering::Relaxed),
-            ))
+            .send((self.our_port, self.their_port))
             // Maybe the task has already exited, who knows
             .unwrap_or_else(|_| warn!("Failed to notify task of dropped port"));
     }
@@ -125,7 +122,7 @@ where
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<std::io::Result<usize>> {
-        if self.fin_sent.load(Ordering::Relaxed) || self.stream_removed.load(Ordering::Relaxed) {
+        if !self.can_write.load(Ordering::Relaxed) {
             // The stream has been closed. Return an error
             debug!("stream has been closed, returning `BrokenPipe`");
             return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
@@ -153,20 +150,19 @@ where
     #[tracing::instrument(skip(cx), level = "trace")]
     #[inline]
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        if !self.fin_sent.load(Ordering::Relaxed)
         // There is no need to send a `Fin` frame if the mux task has already removed the stream
         // because either:
         // 1. `MuxStream` was dropped before `poll_shutdown` is completed and the mux task should
         //    have already sent a `Rst` frame.
         // 2. The entire mux task has been dropped, so we will only get `BrokenPipe` error.
-        && !self.stream_removed.load(Ordering::Relaxed)
-        {
+        if self.can_write.load(Ordering::Relaxed) {
+            // Can write means that things above have not happened, so we should send a `Fin` frame.
             // `ready`: nothing happens if return here
             ready!(self.sink.poll_send_with(cx, |_cx| {
                 Poll::Ready(StreamFrame::new_fin(self.our_port, self.their_port).into())
             }))
             .map_err(tungstenite_error_to_io_error)?;
-            self.fin_sent.store(true, Ordering::Relaxed);
+            self.can_write.store(false, Ordering::Relaxed);
         }
         // `ready`: if poll resumes, `self.fin_sent` indicates where to continue
         // We don't want to `close()` the sink here!!!

@@ -17,7 +17,7 @@ use tokio::time::MissedTickBehavior;
 use tracing::{debug, error, trace};
 use tungstenite::Message;
 
-/// (writer, notifier when `close_port` is called)
+/// (writer, can_write)
 type MuxStreamSenderData = (mpsc::Sender<Bytes>, Arc<AtomicBool>);
 
 /// Multiplexor inner
@@ -31,12 +31,12 @@ pub(super) struct MultiplexorInner<SinkStream> {
     /// Open stream channels: our_port -> `MuxStreamSenderData`
     pub(super) streams: Arc<RwLock<HashMap<u16, MuxStreamSenderData>>>,
     /// Channel for notifying the task of a dropped `MuxStream`
-    /// (in the form (our_port, their_port, fin_sent)).
-    /// Sending (0, _, _) means that the multiplexor is being dropped and the
+    /// (in the form (our_port, their_port)).
+    /// Sending (0, _) means that the multiplexor is being dropped and the
     /// task should exit.
     /// The reason we need `their_port` is to ensure the connection is `Rst`ed
     /// if the user did not call `poll_shutdown` on the `MuxStream`.
-    pub(super) dropped_ports_tx: mpsc::UnboundedSender<(u16, u16, bool)>,
+    pub(super) dropped_ports_tx: mpsc::UnboundedSender<(u16, u16)>,
 }
 
 impl<SinkStream> std::fmt::Debug for MultiplexorInner<SinkStream> {
@@ -96,7 +96,7 @@ where
         self,
         mut datagram_tx: mpsc::Sender<DatagramFrame>,
         mut stream_tx: mpsc::Sender<MuxStream<SinkStream>>,
-        mut dropped_ports_rx: mpsc::UnboundedReceiver<(u16, u16, bool)>,
+        mut dropped_ports_rx: mpsc::UnboundedReceiver<(u16, u16)>,
     ) -> Result<(), Error> {
         let mut keepalive_interval = MaybeInterval::new(self.keepalive_interval);
         // If we missed a tick, it is probably doing networking, so we don't need to
@@ -105,12 +105,12 @@ where
         let result = loop {
             trace!("task loop");
             tokio::select! {
-                Some((our_port, their_port, fin_sent)) = dropped_ports_rx.recv() => {
+                Some((our_port, their_port)) = dropped_ports_rx.recv() => {
                     if our_port == 0 {
                         debug!("mux dropped");
                         break Ok(());
                     }
-                    self.close_port(our_port, their_port, fin_sent).await;
+                    self.close_port(our_port, their_port, false).await;
                 }
                 Some(msg) = self.sink_stream.next() => {
                     let msg = match msg {
@@ -306,10 +306,10 @@ where
     ) -> Result<(), Error> {
         // `tx` is our end, `rx` is the user's end
         let (frame_tx, frame_rx) = mpsc::channel(config::STREAM_FRAME_BUFFER_SIZE);
-        let stream_removed = Arc::new(AtomicBool::new(false));
+        let can_write = Arc::new(AtomicBool::new(true));
         // Save the TX end of the stream so we can write to it when subsequent frames arrive
         let mut streams = self.streams.write().await;
-        streams.insert(our_port, (frame_tx, stream_removed.dupe()));
+        streams.insert(our_port, (frame_tx, can_write.dupe()));
         drop(streams);
         let stream = MuxStream {
             frame_rx,
@@ -317,8 +317,7 @@ where
             their_port,
             dest_host,
             dest_port,
-            fin_sent: AtomicBool::new(false),
-            stream_removed,
+            can_write,
             buf: Bytes::new(),
             sink: self.sink_stream.dupe(),
             dropped_ports_tx: self.dropped_ports_tx.dupe(),
@@ -335,20 +334,20 @@ where
     /// and remove it from the map.
     #[tracing::instrument(level = "trace")]
     #[inline]
-    pub async fn close_port(&self, our_port: u16, their_port: u16, fin_sent: bool) {
-        // If the user did not call `poll_shutdown`, we need to send a `Rst` frame
-        if !fin_sent {
-            self.sink_stream
-                .send_with(|| StreamFrame::new_rst(our_port, their_port).into())
-                .await
-                .ok();
-            self.sink_stream.flush_ignore_closed().await.ok();
-        }
+    pub async fn close_port(&self, our_port: u16, their_port: u16, inhibit_rst: bool) {
         // Free the port for reuse
-        if let Some((sender, closed)) = self.streams.write().await.remove(&our_port) {
+        if let Some((sender, can_write)) = self.streams.write().await.remove(&our_port) {
             // Make sure the user receives `EOF`.
             sender.send(Bytes::new()).await.ok();
-            closed.store(true, Ordering::Relaxed);
+            let old = can_write.swap(false, Ordering::Relaxed);
+            if old && !inhibit_rst {
+                // If the user did not call `poll_shutdown`, we need to send a `Rst` frame
+                self.sink_stream
+                    .send_with(|| StreamFrame::new_rst(our_port, their_port).into())
+                    .await
+                    .ok();
+                self.sink_stream.flush_ignore_closed().await.ok();
+            }
         }
         debug!("freed port {}", our_port);
     }
