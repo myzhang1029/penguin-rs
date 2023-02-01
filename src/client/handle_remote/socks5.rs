@@ -12,7 +12,7 @@ use std::sync::Arc;
 use tokio::io::BufWriter;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::UdpSocket;
-use tracing::{debug, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 /// Execute an expression, and if it returns an error, write an error response to the client and return the error.
 ///
@@ -54,14 +54,14 @@ where
     // Complete the handshake
     let version = breader.read_u8().await?;
     if version != 5 {
-        debug!("client is not SOCKSv5");
+        info!("client is not SOCKSv5");
         return Err(Error::Socksv4);
     }
     let nmethods = breader.read_u8().await?;
     let mut methods = vec![0; nmethods as usize];
     breader.read_exact(&mut methods).await?;
     if !methods.contains(&0x00) {
-        debug!("client does not support NOAUTH");
+        info!("client does not support NOAUTH");
         // Send back NO ACCEPTABLE METHODS
         // Note that we are not compliant with RFC 1928 here, as we MUST
         // support GSSAPI and SHOULD support USERNAME/PASSWORD
@@ -75,7 +75,7 @@ where
     // Read the request
     let version = breader.read_u8().await?;
     if version != 5 {
-        debug!("client is not SOCKSv5");
+        info!("client is not SOCKSv5");
         return Err(Error::Socksv4);
     }
     let command = execute_or_pass_error!(
@@ -134,7 +134,7 @@ where
             std::net::Ipv6Addr::from(addr).to_string()
         }
         _ => {
-            debug!("invalid address type {address_type}");
+            info!("invalid address type {address_type}");
             bwriter
                 .write_all(&[0x05, 0x08, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
                 .await?;

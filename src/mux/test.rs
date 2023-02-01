@@ -93,6 +93,7 @@ async fn connected_stream_passes_data() {
             i += 1024;
         }
         info!("Done send");
+        conn.shutdown().await.unwrap();
     });
 
     let mut output_bytes: Vec<u8> = vec![];

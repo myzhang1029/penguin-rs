@@ -34,7 +34,9 @@ impl MaybeRetryableError for tungstenite::Error {
     fn retryable(&self) -> bool {
         match self {
             Self::Io(e) => e.retryable(),
-            Self::ConnectionClosed | Self::AlreadyClosed => true,
+            Self::ConnectionClosed => true,
+            // Self::AlreadyClosed should not happen because tungstenite
+            // says that it indicates a bug in our code.
             Self::Protocol(e) => e.retryable(),
             _ => false,
         }

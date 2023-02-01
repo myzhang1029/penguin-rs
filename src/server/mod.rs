@@ -22,9 +22,7 @@ use axum::{
 use axum_server::tls_rustls::RustlsConfig;
 use base64::engine::general_purpose::STANDARD as B64_STANDARD_ENGINE;
 use base64::Engine;
-use http::header::SEC_WEBSOCKET_VERSION;
-use http::HeaderValue;
-use http::Method;
+use http::{header, HeaderValue, Method};
 use hyper::upgrade::{OnUpgrade, Upgraded};
 use hyper::{client::HttpConnector, Body as HyperBody, Client as HyperClient};
 use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
@@ -257,10 +255,10 @@ impl StealthWebSocketUpgrade {
         // Shouldn't panic
         Response::builder()
             .status(StatusCode::SWITCHING_PROTOCOLS)
-            .header("connection", &UPGRADE)
-            .header("upgrade", &WEBSOCKET)
-            .header("sec-websocket-protocol", &WANTED_PROTOCOL)
-            .header("sec-websocket-accept", self.sec_websocket_accept)
+            .header(header::CONNECTION, &UPGRADE)
+            .header(header::UPGRADE, &WEBSOCKET)
+            .header(header::SEC_WEBSOCKET_PROTOCOL, &WANTED_PROTOCOL)
+            .header(header::SEC_WEBSOCKET_ACCEPT, self.sec_websocket_accept)
             .body(axum::body::boxed(axum::body::Empty::new()))
             .expect("Failed to build response (this is a bug)")
     }
@@ -288,11 +286,11 @@ impl FromRequest<ServerState<'static>, Body> for StealthWebSocketUpgrade {
     ) -> Result<Self, Self::Rejection> {
         let on_upgrade = req.extensions_mut().remove::<OnUpgrade>();
         let headers = req.headers();
-        let connection = headers.get("connection");
-        let upgrade = headers.get("upgrade");
-        let sec_websocket_key = headers.get("sec-websocket-key");
-        let sec_websocket_protocol = headers.get("sec-websocket-protocol");
-        let sec_websocket_version = headers.get(SEC_WEBSOCKET_VERSION);
+        let connection = headers.get(header::CONNECTION);
+        let upgrade = headers.get(header::UPGRADE);
+        let sec_websocket_key = headers.get(header::SEC_WEBSOCKET_KEY);
+        let sec_websocket_protocol = headers.get(header::SEC_WEBSOCKET_PROTOCOL);
+        let sec_websocket_version = headers.get(header::SEC_WEBSOCKET_VERSION);
         let x_penguin_psk = headers.get("x-penguin-psk");
 
         if req.method() != Method::GET {
@@ -303,10 +301,10 @@ impl FromRequest<ServerState<'static>, Body> for StealthWebSocketUpgrade {
             warn!("Invalid WebSocket request: invalid PSK {x_penguin_psk:?}");
             return Err(backend_or_404_handler(State(state.dupe()), req).await);
         }
-        if sec_websocket_key.is_none() {
+        let Some(sec_websocket_key) = sec_websocket_key else {
             warn!("Invalid WebSocket request: no sec-websocket-key header");
             return Err(backend_or_404_handler(State(state.dupe()), req).await);
-        }
+        };
         if !header_matches!(connection, UPGRADE)
             || !header_matches!(upgrade, WEBSOCKET)
             || !header_matches!(sec_websocket_version, WEBSOCKET_VERSION)
@@ -314,17 +312,14 @@ impl FromRequest<ServerState<'static>, Body> for StealthWebSocketUpgrade {
         {
             return Err(backend_or_404_handler(State(state.dupe()), req).await);
         }
-        if on_upgrade.is_none() {
+        let Some(on_upgrade) = on_upgrade else {
             error!("Empty `on_upgrade`");
             return Err(backend_or_404_handler(State(state.dupe()), req).await);
-        }
-        // `expect`: we checked that the header is present
-        let sec_websocket_accept = make_sec_websocket_accept(
-            sec_websocket_key.expect("Missing `sec-websocket-key` header (this is a bug)"),
-        );
+        };
+        let sec_websocket_accept = make_sec_websocket_accept(sec_websocket_key);
         Ok(Self {
-            on_upgrade: on_upgrade.expect("Missing `on_upgrade` (this is a bug)"),
             sec_websocket_accept,
+            on_upgrade,
         })
     }
 }

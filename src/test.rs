@@ -92,6 +92,7 @@ async fn test_it_works() {
     tokio::time::sleep(Duration::from_secs(2)).await;
     let mut sock = TcpStream::connect("127.0.0.1:21628").await.unwrap();
     sock.write_all(&input_bytes).await.unwrap();
+    sock.shutdown().await.unwrap();
     let output_bytes = second_task.await.unwrap();
     assert_eq!(input_bytes, output_bytes);
     server_task.abort();
@@ -125,6 +126,7 @@ async fn test_it_works_v6() {
     tokio::time::sleep(Duration::from_secs(2)).await;
     let mut sock = TcpStream::connect("[::1]:20246").await.unwrap();
     sock.write_all(&input_bytes).await.unwrap();
+    sock.shutdown().await.unwrap();
     let output_bytes = second_task.await.unwrap();
     assert_eq!(input_bytes, output_bytes);
     server_task.abort();

@@ -20,7 +20,7 @@ use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::{mpsc, oneshot, RwLock};
 use tokio::task::JoinSet;
 use tokio::time;
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::MaybeTlsStream;
 use tracing::{error, info, trace, warn};
 
 /// Errors
@@ -42,8 +42,7 @@ pub(crate) enum Error {
     RemoteHandlerExited(#[from] handle_remote::Error),
 }
 
-type SinkStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
-type MuxStream = crate::mux::MuxStream<SinkStream>;
+type MuxStream = crate::mux::MuxStream<MaybeTlsStream<TcpStream>>;
 
 // Send the information about how to send the stream to the listener
 /// Type that local listeners send to the main loop to request a connection
@@ -270,7 +269,7 @@ async fn on_connected(
 /// Datagrams are simply dropped if we fail to get a new channel.
 #[tracing::instrument(skip_all, level = "trace")]
 async fn get_send_stream_chan_or_put_back(
-    mux: &mut Multiplexor<SinkStream>,
+    mux: &mut Multiplexor<MaybeTlsStream<TcpStream>>,
     stream_command: StreamCommand,
     stream_command_tx: &mut mpsc::Sender<StreamCommand>,
 ) -> Result<bool, Error> {

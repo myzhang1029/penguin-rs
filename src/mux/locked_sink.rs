@@ -1,26 +1,31 @@
 //! A wrapper around `Sink + Stream` that can be cloned and shared between tasks.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use futures_util::{Sink as FutureSink, SinkExt, Stream as FutureStream, StreamExt};
+use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
 use std::future::poll_fn;
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio_tungstenite::WebSocketStream;
 use tracing::trace;
 use tungstenite::Message;
 
 /// A wrapper around `Sink + Stream` that can be cloned and shared between tasks.
-pub struct LockedSink<SinkStream>(Arc<Mutex<SinkStream>>);
+pub struct LockedWebSocket<S>(Arc<Mutex<WebSocketStream<S>>>);
 
-impl<SinkStream> LockedSink<SinkStream> {
-    /// Create a new `LockedSink` from a `Sink + Stream`
+impl<S> LockedWebSocket<S> {
+    /// Create a new `LockedWebSocket` from a `WebSocketStream`
     #[inline]
-    pub fn new(sink: SinkStream) -> Self {
-        Self(Arc::new(Mutex::new(sink)))
+    pub fn new(websocket: WebSocketStream<S>) -> Self {
+        Self(Arc::new(Mutex::new(websocket)))
     }
 }
 
-impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedSink<Sink> {
+impl<S> LockedWebSocket<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin + 'static,
+{
     /// Lock and send the resulting `Message` from a computation.
     /// The computation is only executed if the sink is ready.
     /// The computation may return `Poll::Pending` to indicate that it is not
@@ -30,7 +35,7 @@ impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedSink<S
         &self,
         cx: &mut Context<'_>,
         msg_fn: impl FnOnce(&mut Context<'_>) -> Poll<Message>,
-    ) -> Poll<Result<(), tungstenite::Error>> {
+    ) -> Poll<tungstenite::Result<()>> {
         let mut sink = self.0.lock();
         // `ready`: if we return here, nothing happens
         ready!(sink.poll_ready_unpin(cx))?;
@@ -41,18 +46,13 @@ impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedSink<S
     }
 
     #[inline]
-    pub async fn send_with(&self, msg_fn: impl Fn() -> Message) -> Result<(), tungstenite::Error> {
+    pub async fn send_with(&self, msg_fn: impl Fn() -> Message) -> tungstenite::Result<()> {
         poll_fn(|cx| self.poll_send_with(cx, |_cx| Poll::Ready(msg_fn()))).await
-    }
-
-    #[inline]
-    pub async fn send_message(&self, msg: &Message) -> Result<(), tungstenite::Error> {
-        self.send_with(|| msg.clone()).await
     }
 
     /// Lock and flush the sink
     #[inline]
-    pub fn poll_flush(&self, cx: &mut Context<'_>) -> Poll<Result<(), tungstenite::Error>> {
+    pub fn poll_flush(&self, cx: &mut Context<'_>) -> Poll<tungstenite::Result<()>> {
         self.0.lock().poll_flush_unpin(cx)
     }
 
@@ -62,11 +62,8 @@ impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedSink<S
     /// because the user should only discover this when they try to work with
     /// the stream for the next time.
     #[inline]
-    pub fn poll_flush_ignore_closed(
-        &self,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<(), tungstenite::Error>> {
-        match ready!(self.0.lock().poll_flush_unpin(cx)) {
+    pub fn poll_flush_ignore_closed(&self, cx: &mut Context<'_>) -> Poll<tungstenite::Result<()>> {
+        match ready!(self.poll_flush(cx)) {
             Ok(()) | Err(tungstenite::Error::ConnectionClosed) => Poll::Ready(Ok(())),
             Err(tungstenite::Error::Io(ioerror))
                 if ioerror.kind() == std::io::ErrorKind::BrokenPipe =>
@@ -78,23 +75,21 @@ impl<Sink: FutureSink<Message, Error = tungstenite::Error> + Unpin> LockedSink<S
     }
 
     #[inline]
-    pub async fn flush_ignore_closed(&self) -> Result<(), tungstenite::Error> {
+    pub async fn flush_ignore_closed(&self) -> tungstenite::Result<()> {
         poll_fn(|cx| self.poll_flush_ignore_closed(cx)).await
     }
 
     /// Lock and close the sink
     #[inline]
-    pub fn poll_close(&self, cx: &mut Context<'_>) -> Poll<Result<(), tungstenite::Error>> {
+    pub fn poll_close(&self, cx: &mut Context<'_>) -> Poll<tungstenite::Result<()>> {
         self.0.lock().poll_close_unpin(cx)
     }
 
     #[inline]
-    pub async fn close(&self) -> Result<(), tungstenite::Error> {
+    pub async fn close(&self) -> tungstenite::Result<()> {
         poll_fn(|cx| self.poll_close(cx)).await
     }
-}
 
-impl<Stream: FutureStream<Item = tungstenite::Result<Message>> + Unpin> LockedSink<Stream> {
     #[inline]
     pub fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<tungstenite::Result<Message>>> {
         self.0.lock().poll_next_unpin(cx)
@@ -106,24 +101,24 @@ impl<Stream: FutureStream<Item = tungstenite::Result<Message>> + Unpin> LockedSi
     }
 }
 
-impl<SinkStream> Clone for LockedSink<SinkStream> {
-    // `Clone` is manually implemented because we don't need `SinkStream: Clone`.
+impl<S> Clone for LockedWebSocket<S> {
+    // `Clone` is manually implemented because we don't need `S: Clone`.
     #[inline]
     fn clone(&self) -> Self {
         Self(Arc::clone(&self.0))
     }
 }
 
-impl<SinkStream> crate::dupe::Dupe for LockedSink<SinkStream> {
+impl<S> crate::dupe::Dupe for LockedWebSocket<S> {
     #[inline]
     fn dupe(&self) -> Self {
         Self(self.0.dupe())
     }
 }
 
-impl<SinkStream: std::fmt::Debug> std::fmt::Debug for LockedSink<SinkStream> {
+impl<S: std::fmt::Debug> std::fmt::Debug for LockedWebSocket<S> {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        <Mutex<SinkStream> as std::fmt::Debug>::fmt(self.0.as_ref(), f)
+        <Mutex<WebSocketStream<S>> as std::fmt::Debug>::fmt(self.0.as_ref(), f)
     }
 }

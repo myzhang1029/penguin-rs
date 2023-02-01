@@ -8,10 +8,9 @@ use crate::dupe::Dupe;
 use crate::mux::{DatagramFrame, Multiplexor, Role};
 use hyper::upgrade::Upgraded;
 use tokio::{sync::mpsc, task::JoinSet};
-use tokio_tungstenite::WebSocketStream;
 use tracing::{debug, error, trace, warn};
 
-pub(super) type MuxStream = crate::mux::MuxStream<WebSocketStream<Upgraded>>;
+pub(super) type MuxStream = crate::mux::MuxStream<Upgraded>;
 
 /// Multiplex the `WebSocket` connection and handle the forwarding requests.
 #[tracing::instrument(skip(ws_stream), level = "debug")]
