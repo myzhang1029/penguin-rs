@@ -25,7 +25,7 @@
 //!         It is in the same format as `Ack`. Using two types of frames is to
 //!         avoid having to implement a state machine.
 //! - `Ack`: the server replies with this frame to confirm the data reception:
-//!         - 4 bytes: current receive window size in network byte order.
+//!         - 4 bytes: number of `Psh` frames processed since the last `Ack` frame.
 //! - `Rst`: one side sends this frame to indicate that the connection should
 //!          be closed.
 //! - `Psh`: one side sends this frame to send data.
@@ -135,12 +135,12 @@ impl StreamFrame {
     }
     /// Create a new `Ack` frame.
     #[must_use]
-    pub fn new_ack(sport: u16, dport: u16, rwnd: u64) -> Self {
+    pub fn new_ack(sport: u16, dport: u16, psh_recvd_since: u64) -> Self {
         Self {
             sport,
             dport,
             flag: StreamFlag::Ack,
-            data: Bytes::copy_from_slice(&rwnd.to_be_bytes()),
+            data: Bytes::copy_from_slice(&psh_recvd_since.to_be_bytes()),
         }
     }
     /// Create a new `Rst` frame.
@@ -410,7 +410,7 @@ mod test {
                 0x16, 0x2e, // sport (u16)
                 0x04, 0xd2, // dport (u16)
                 0x02, // flag (u8)
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, // rwnd (u64)
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, // psh_recvd_since (u64)
             ]
         );
 

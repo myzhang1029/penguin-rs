@@ -4,6 +4,7 @@
 use super::frame::StreamFrame;
 use super::locked_sink::LockedWebSocket;
 use super::tungstenite_error_to_io_error;
+use crate::config;
 use bytes::Bytes;
 use futures_util::task::AtomicWaker;
 use std::io;
@@ -31,7 +32,12 @@ pub struct MuxStream<S> {
     /// Whether writes should succeed.
     pub(super) can_write: Arc<AtomicBool>,
     /// Number of frames we can still send before we need to wait for an `Ack`
-    pub(super) cwnd: Arc<AtomicU64>,
+    pub(super) psh_send_remaining: Arc<AtomicU64>,
+    /// Number of `Psh` frames received after sending the previous `Ack` frame
+    /// `config::RWND - psh_recvd_since` is approximately the peer's `psh_send_remaining`
+    pub(super) psh_recvd_since: AtomicU64,
+    /// Channel to send `Ack` frames to the mux task (our port, their port, psh_recvd_since)
+    pub(super) ack_tx: mpsc::UnboundedSender<(u16, u16, u64)>,
     /// Waker to wake up the task that sends frames
     pub(super) writer_waker: Arc<AtomicWaker>,
     /// Remaining bytes to be read
@@ -93,6 +99,18 @@ where
                 return Poll::Ready(Ok(()));
             }
             self.buf = next.unwrap();
+            let new = self.psh_recvd_since.fetch_add(1, Ordering::SeqCst) + 1;
+            // To reduce blocking, let's send `Ack` when we have
+            // one window left.
+            if new >= config::RWND - 1 {
+                // Reset the counter
+                self.psh_recvd_since.store(0, Ordering::SeqCst);
+                // Send an `Ack` frame
+                // TODO: handle error
+                self.ack_tx
+                    .send((self.our_port, self.their_port, new))
+                    .unwrap();
+            }
         } else {
             // There is some data left in `self.buf`.
             trace!("using the remaining buffer");
@@ -129,7 +147,7 @@ where
         // `ready`: nothing happens if return here
         ready!(self.ws.poll_send_with(cx, |cx| {
             loop {
-                let original = self.cwnd.load(Ordering::SeqCst);
+                let original = self.psh_send_remaining.load(Ordering::SeqCst);
                 debug!("congestion window: {}", original);
                 if original == 0 {
                     // We have reached the congestion window limit. Wait for an `Ack`
@@ -139,7 +157,7 @@ where
                 }
                 let new = original - 1;
                 if self
-                    .cwnd
+                    .psh_send_remaining
                     .compare_exchange(original, new, Ordering::SeqCst, Ordering::Relaxed)
                     .is_ok()
                 {

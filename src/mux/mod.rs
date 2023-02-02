@@ -99,6 +99,7 @@ where
         let (datagram_tx, datagram_rx) = tokio::sync::mpsc::channel(config::DATAGRAM_BUFFER_SIZE);
         let (stream_tx, stream_rx) = tokio::sync::mpsc::channel(config::STREAM_BUFFER_SIZE);
         let (dropped_ports_tx, dropped_ports_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (ack_tx, ack_rx) = tokio::sync::mpsc::unbounded_channel();
         let locked_sink_stream = locked_sink::LockedWebSocket::new(ws);
 
         let inner = MultiplexorInner {
@@ -107,8 +108,13 @@ where
             keepalive_interval,
             streams: Arc::new(RwLock::new(HashMap::new())),
             dropped_ports_tx,
+            ack_tx,
         };
-        tokio::spawn(inner.dupe().task(datagram_tx, stream_tx, dropped_ports_rx));
+        tokio::spawn(
+            inner
+                .dupe()
+                .task(datagram_tx, stream_tx, dropped_ports_rx, ack_rx),
+        );
         trace!("Multiplexor task spawned");
 
         Self {

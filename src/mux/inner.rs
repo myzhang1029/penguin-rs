@@ -28,10 +28,6 @@ pub(super) struct MuxStreamData {
     /// 2. The stream has been removed from `inner.streams`
     ///    (or the mux has been dropped).
     can_write: Arc<AtomicBool>,
-    /// Number of `Psh` frames to receive before sending the next `Ack` frame.
-    /// That is, previous `Ack`'s `rwnd` minus number of `Psh` frames received
-    /// since then.
-    psh_recv_remaining: AtomicU64,
     /// Number of `Psh` frames we are allowed to send before waiting for a `Ack` frame.
     psh_send_remaining: Arc<AtomicU64>,
     /// Waker to wake up the task that sends frames because their `cwnd` has
@@ -56,6 +52,9 @@ pub(super) struct MultiplexorInner<S> {
     /// The reason we need `their_port` is to ensure the connection is `Rst`ed
     /// if the user did not call `poll_shutdown` on the `MuxStream`.
     pub(super) dropped_ports_tx: mpsc::UnboundedSender<(u16, u16)>,
+    /// Channel for queuing `Ack` frames to be sent
+    /// (in the form (our_port, their_port, psh_recvd_since)).
+    pub(super) ack_tx: mpsc::UnboundedSender<(u16, u16, u64)>,
 }
 
 impl<S> std::fmt::Debug for MultiplexorInner<S> {
@@ -77,6 +76,7 @@ impl<S> Clone for MultiplexorInner<S> {
             keepalive_interval: self.keepalive_interval,
             streams: self.streams.clone(),
             dropped_ports_tx: self.dropped_ports_tx.clone(),
+            ack_tx: self.ack_tx.clone(),
         }
     }
 }
@@ -92,6 +92,7 @@ impl<S> Dupe for MultiplexorInner<S> {
             keepalive_interval: self.keepalive_interval,
             streams: self.streams.dupe(),
             dropped_ports_tx: self.dropped_ports_tx.dupe(),
+            ack_tx: self.ack_tx.dupe(),
         }
     }
 }
@@ -106,12 +107,16 @@ where
     /// - Sends received datagrams to the `datagram_tx` channel
     /// - Sends received streams to the appropriate handler
     /// - Responds to ping/pong messages
-    #[tracing::instrument(skip(datagram_tx, stream_tx, dropped_ports_rx), level = "trace")]
+    #[tracing::instrument(
+        skip(datagram_tx, stream_tx, dropped_ports_rx, ack_rx),
+        level = "trace"
+    )]
     pub async fn task(
         self,
         mut datagram_tx: mpsc::Sender<DatagramFrame>,
         mut stream_tx: mpsc::Sender<MuxStream<S>>,
         mut dropped_ports_rx: mpsc::UnboundedReceiver<(u16, u16)>,
+        mut ack_rx: mpsc::UnboundedReceiver<(u16, u16, u64)>,
     ) -> Result<(), Error> {
         let mut keepalive_interval = MaybeInterval::new(self.keepalive_interval);
         // If we missed a tick, it is probably doing networking, so we don't need to
@@ -126,6 +131,12 @@ where
                         break Ok(());
                     }
                     self.close_port(our_port, their_port, false).await;
+                }
+                Some((our_port, their_port, psh_recvd_since)) = ack_rx.recv() => {
+                    debug!("sending ack for port {}", our_port);
+                    self.ws.send_with(|| {
+                        StreamFrame::new_ack(our_port, their_port, psh_recvd_since).into()
+                    }).await?;
                 }
                 Some(msg) = self.ws.next() => {
                     let msg = match msg {
@@ -288,12 +299,12 @@ where
             }
             StreamFlag::Ack => {
                 debug!("received `Ack` for {our_port}");
-                let new_rwnd = data.get_u64();
+                let peer_processed = data.get_u64();
                 let streams = self.streams.read().await;
                 if let Some(stream_data) = streams.get(&our_port) {
                     stream_data
                         .psh_send_remaining
-                        .store(new_rwnd, Ordering::SeqCst);
+                        .fetch_sub(peer_processed, Ordering::SeqCst);
                     stream_data.writer_waker.wake();
                 } else {
                     // the port does not exist
@@ -318,31 +329,6 @@ where
                 if let Some(stream_data) = streams.get(&our_port) {
                     let sender = &stream_data.sender;
                     if sender.send(data).await.is_ok() {
-                        let remaining: u64 = sender
-                            .capacity()
-                            .try_into()
-                            .expect("Capacity should fit into u64 (this is a bug)");
-                        let new = stream_data
-                            .psh_recv_remaining
-                            .fetch_sub(1, Ordering::SeqCst)
-                            - 1;
-                        // To reduce blocking, let's send `Ack` when we have
-                        // one window left.
-                        if new <= 1 {
-                            // Set it to our newly advertised window
-                            stream_data
-                                .psh_recv_remaining
-                                .store(remaining, Ordering::SeqCst);
-                            drop(streams);
-                            debug!("sending `Ack` from {our_port} at {remaining}");
-                            // Advertise our new window
-                            self.ws
-                                .send_with(|| {
-                                    StreamFrame::new_ack(our_port, their_port, remaining).into()
-                                })
-                                .await?;
-                            self.ws.flush_ignore_closed().await?;
-                        }
                     } else {
                         // The receiver is closed
                         drop(streams);
@@ -372,7 +358,7 @@ where
         // `tx` is our end, `rx` is the user's end
         let (frame_tx, frame_rx) = mpsc::channel(config::STREAM_FRAME_BUFFER_SIZE);
         let can_write = Arc::new(AtomicBool::new(true));
-        let cwnd = Arc::new(AtomicU64::new(peer_rwnd));
+        let psh_send_remaining = Arc::new(AtomicU64::new(peer_rwnd));
         let writer_waker = Arc::new(AtomicWaker::new());
         // Save the TX end of the stream so we can write to it when subsequent frames arrive
         let mut streams = self.streams.write().await;
@@ -381,8 +367,7 @@ where
             MuxStreamData {
                 sender: frame_tx,
                 can_write: can_write.dupe(),
-                psh_recv_remaining: AtomicU64::new(config::RWND),
-                psh_send_remaining: cwnd.dupe(),
+                psh_send_remaining: psh_send_remaining.dupe(),
                 writer_waker: writer_waker.dupe(),
             },
         );
@@ -394,7 +379,9 @@ where
             dest_host,
             dest_port,
             can_write,
-            cwnd,
+            psh_send_remaining,
+            psh_recvd_since: AtomicU64::new(0),
+            ack_tx: self.ack_tx.dupe(),
             writer_waker,
             buf: Bytes::new(),
             ws: self.ws.dupe(),
