@@ -30,8 +30,8 @@ pub(super) struct MuxStreamData {
     can_write: Arc<AtomicBool>,
     /// Number of `Psh` frames we are allowed to send before waiting for a `Ack` frame.
     psh_send_remaining: Arc<AtomicU64>,
-    /// Waker to wake up the task that sends frames because their `cwnd` has
-    /// increased.
+    /// Waker to wake up the task that sends frames because their `psh_send_remaining`
+    /// has increased.
     writer_waker: Arc<AtomicWaker>,
 }
 
@@ -133,7 +133,7 @@ where
                     self.close_port(our_port, their_port, false).await;
                 }
                 Some((our_port, their_port, psh_recvd_since)) = ack_rx.recv() => {
-                    debug!("sending ack for port {}", our_port);
+                    trace!("sending `Ack` for port {}", our_port);
                     self.ws.send_with(|| {
                         StreamFrame::new_ack(our_port, their_port, psh_recvd_since).into()
                     }).await?;
@@ -298,13 +298,13 @@ where
                     .await?;
             }
             StreamFlag::Ack => {
-                debug!("received `Ack` for {our_port}");
+                trace!("received `Ack` for {our_port}");
                 let peer_processed = data.get_u64();
                 let streams = self.streams.read().await;
                 if let Some(stream_data) = streams.get(&our_port) {
                     stream_data
                         .psh_send_remaining
-                        .fetch_sub(peer_processed, Ordering::SeqCst);
+                        .fetch_add(peer_processed, Ordering::SeqCst);
                     stream_data.writer_waker.wake();
                 } else {
                     // the port does not exist

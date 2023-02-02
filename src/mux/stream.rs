@@ -148,7 +148,7 @@ where
         ready!(self.ws.poll_send_with(cx, |cx| {
             loop {
                 let original = self.psh_send_remaining.load(Ordering::SeqCst);
-                debug!("congestion window: {}", original);
+                trace!("congestion window: {}", original);
                 if original == 0 {
                     // We have reached the congestion window limit. Wait for an `Ack`
                     debug!("congestion window limit reached, waiting for an `Ack`");
