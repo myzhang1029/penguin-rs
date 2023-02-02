@@ -102,7 +102,7 @@ where
             let new = self.psh_recvd_since.fetch_add(1, Ordering::SeqCst) + 1;
             // To reduce blocking, let's send `Ack` when we have
             // one window left.
-            if new >= config::RWND - 1 {
+            if new >= config::RWND_THRESHOLD {
                 // Reset the counter
                 self.psh_recvd_since.store(0, Ordering::SeqCst);
                 // Send an `Ack` frame
