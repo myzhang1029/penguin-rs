@@ -1,11 +1,6 @@
-# This is not a workspace because I don't want to have to
-# upload my own `tokio-stream-multiplexor` fork to crates.io.
-# Note that we need to delete lib/tokio-stream-multiplexor/Cargo.toml
-# before publishing.
-
 [package]
 name = "rusty-penguin"
-version = "0.4.2"
+version = "0.5.0"
 authors = ["Zhang Maiyun <me@myzhangll.xyz>"]
 edition = "2021"
 description = "A fast TCP/UDP tunnel, transported over HTTP WebSocket"

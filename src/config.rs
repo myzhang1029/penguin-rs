@@ -14,7 +14,27 @@ pub const DEFAULT_WS_CONFIG: WebSocketConfig = WebSocketConfig {
 pub const DATAGRAM_BUFFER_SIZE: usize = 2 << 8;
 /// Number of `MuxStream`s to buffer in the channels before blocking
 pub const STREAM_BUFFER_SIZE: usize = 2 << 8;
+
 /// Number of `StreamFrame`s to buffer in `MuxStream`'s channels before blocking
+#[cfg(not(test))]
 pub const STREAM_FRAME_BUFFER_SIZE: usize = 2 << 8;
+/// Needs to be the same as `STREAM_FRAME_BUFFER_SIZE` but as `u64`
+#[cfg(not(test))]
+pub const RWND: u64 = 2 << 8;
+/// Number of `Psh` frames between `Ack`s:
+/// If too low, `Ack`s will consume too much bandwidth;
+/// If too high, writers may block.
+#[cfg(not(test))]
+pub const RWND_THRESHOLD: u64 = 2 << 7;
+
+/// Number of `StreamFrame`s to buffer in `MuxStream`'s channels before blocking
+#[cfg(test)]
+pub const STREAM_FRAME_BUFFER_SIZE: usize = 2 << 1;
+/// Needs to be the same as `STREAM_FRAME_BUFFER_SIZE` but as `u64`
+#[cfg(test)]
+pub const RWND: u64 = 2 << 1;
+/// Number of `Psh` frames between `Ack`s
+#[cfg(test)]
+pub const RWND_THRESHOLD: u64 = 3;
 
 pub const UDP_PRUNE_TIMEOUT: time::Duration = time::Duration::from_secs(60);

@@ -4,10 +4,12 @@
 use super::frame::StreamFrame;
 use super::locked_sink::LockedWebSocket;
 use super::tungstenite_error_to_io_error;
+use crate::config;
 use bytes::Bytes;
+use futures_util::task::AtomicWaker;
 use std::io;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -28,11 +30,16 @@ pub struct MuxStream<S> {
     /// Forwarding destination port. Only used on `Role::Server`
     pub dest_port: u16,
     /// Whether writes should succeed.
-    /// There are two cases for `false`:
-    /// 1. `Fin` has been sent.
-    /// 2. The stream has been removed from `inner.streams`
-    ///    (or the mux has been dropped).
     pub(super) can_write: Arc<AtomicBool>,
+    /// Number of frames we can still send before we need to wait for an `Ack`
+    pub(super) psh_send_remaining: Arc<AtomicU64>,
+    /// Number of `Psh` frames received after sending the previous `Ack` frame
+    /// `config::RWND - psh_recvd_since` is approximately the peer's `psh_send_remaining`
+    pub(super) psh_recvd_since: AtomicU64,
+    /// Channel to send `Ack` frames to the mux task (our port, their port, psh_recvd_since)
+    pub(super) ack_tx: mpsc::UnboundedSender<(u16, u16, u64)>,
+    /// Waker to wake up the task that sends frames
+    pub(super) writer_waker: Arc<AtomicWaker>,
     /// Remaining bytes to be read
     pub(super) buf: Bytes,
     /// See `MultiplexorInner`.
@@ -49,6 +56,9 @@ impl<S> std::fmt::Debug for MuxStream<S> {
             .field("dest_host", &self.dest_host)
             .field("dest_port", &self.dest_port)
             .field("can_write", &self.can_write)
+            .field("psh_send_remaining", &self.psh_send_remaining)
+            .field("psh_recvd_since", &self.psh_recvd_since)
+            .field("buf.len", &self.buf.len())
             .finish()
     }
 }
@@ -92,6 +102,18 @@ where
                 return Poll::Ready(Ok(()));
             }
             self.buf = next.unwrap();
+            let new = self.psh_recvd_since.fetch_add(1, Ordering::SeqCst) + 1;
+            // To reduce blocking, let's send `Ack` when we have
+            // one window left.
+            if new >= config::RWND_THRESHOLD {
+                // Reset the counter
+                self.psh_recvd_since.store(0, Ordering::SeqCst);
+                // Send an `Ack` frame
+                // TODO: handle error
+                self.ack_tx
+                    .send((self.our_port, self.their_port, new))
+                    .unwrap();
+            }
         } else {
             // There is some data left in `self.buf`.
             trace!("using the remaining buffer");
@@ -126,7 +148,27 @@ where
             return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
         }
         // `ready`: nothing happens if return here
-        ready!(self.ws.poll_send_with(cx, |_cx| {
+        ready!(self.ws.poll_send_with(cx, |cx| {
+            loop {
+                let original = self.psh_send_remaining.load(Ordering::SeqCst);
+                trace!("congestion window: {}", original);
+                if original == 0 {
+                    // We have reached the congestion window limit. Wait for an `Ack`
+                    debug!("congestion window limit reached, waiting for an `Ack`");
+                    self.writer_waker.register(cx.waker());
+                    return Poll::Pending;
+                }
+                let new = original - 1;
+                if self
+                    .psh_send_remaining
+                    .compare_exchange(original, new, Ordering::SeqCst, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    // We have successfully decremented the congestion window
+                    break;
+                }
+                debug!("congestion window race condition, retrying");
+            }
             Poll::Ready(
                 StreamFrame::new_psh(self.our_port, self.their_port, buf.to_vec().into()).into(),
             )

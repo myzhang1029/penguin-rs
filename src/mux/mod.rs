@@ -39,12 +39,14 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Tungstenite(#[from] tungstenite::Error),
-    #[error("datagram invalid: {0}")]
-    InvalidDatagramFrame(#[from] <Vec<u8> as TryFrom<DatagramFrame>>::Error),
+    #[error("datagram host longer than 255 octets")]
+    DatagramHostTooLong(#[from] <Vec<u8> as TryFrom<DatagramFrame>>::Error),
+    #[error("invalid frame: {0}")]
+    InvalidFrame(#[from] frame::Error),
     #[error("received `Text` message")]
     TextMessage,
-    #[error("server received `Ack` frame")]
-    ServerReceivedAck,
+    #[error("server received `SynAck` frame")]
+    ServerReceivedSynAck,
     #[error("client received `Syn` frame")]
     ClientReceivedSyn,
     #[error(transparent)]
@@ -97,6 +99,7 @@ where
         let (datagram_tx, datagram_rx) = tokio::sync::mpsc::channel(config::DATAGRAM_BUFFER_SIZE);
         let (stream_tx, stream_rx) = tokio::sync::mpsc::channel(config::STREAM_BUFFER_SIZE);
         let (dropped_ports_tx, dropped_ports_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (ack_tx, ack_rx) = tokio::sync::mpsc::unbounded_channel();
         let locked_sink_stream = locked_sink::LockedWebSocket::new(ws);
 
         let inner = MultiplexorInner {
@@ -105,8 +108,13 @@ where
             keepalive_interval,
             streams: Arc::new(RwLock::new(HashMap::new())),
             dropped_ports_tx,
+            ack_tx,
         };
-        tokio::spawn(inner.dupe().task(datagram_tx, stream_tx, dropped_ports_rx));
+        tokio::spawn(
+            inner
+                .dupe()
+                .task(datagram_tx, stream_tx, dropped_ports_rx, ack_rx),
+        );
         trace!("Multiplexor task spawned");
 
         Self {
@@ -129,8 +137,10 @@ where
         let sport = u16::next_available_key(&*self.inner.streams.read().await);
         trace!("sport = {sport}");
         trace!("sending `Syn`");
-        let message: tungstenite::Message = StreamFrame::new_syn(&host, port, sport)?.into();
-        self.inner.ws.send_with(|| message.clone()).await?;
+        self.inner
+            .ws
+            .send_with(|| StreamFrame::new_syn(&host, port, sport, config::RWND).into())
+            .await?;
         self.inner.ws.flush_ignore_closed().await?;
         trace!("sending stream to user");
         let stream = self

@@ -47,12 +47,12 @@ else
     exit_status=1
 fi
 
-#if ! tcptunnelchecker '127.0.0.1:1234' '127.0.0.1:5201' | grep 'FAIL'
-#then
-#    echo "tcptunnelchecker passed"
-#else
-#    echo "tcptunnelchecker failed"
-#    exit_status=1
-#fi
+if ! tcptunnelchecker '127.0.0.1:1234' '127.0.0.1:5201' | grep 'FAIL'
+then
+    echo "tcptunnelchecker passed"
+else
+    echo "tcptunnelchecker failed"
+    #exit_status=1
+fi
 
 exit $exit_status
