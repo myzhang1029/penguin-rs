@@ -56,6 +56,9 @@ impl<S> std::fmt::Debug for MuxStream<S> {
             .field("dest_host", &self.dest_host)
             .field("dest_port", &self.dest_port)
             .field("can_write", &self.can_write)
+            .field("psh_send_remaining", &self.psh_send_remaining)
+            .field("psh_recvd_since", &self.psh_recvd_since)
+            .field("buf.len", &self.buf.len())
             .finish()
     }
 }

@@ -14,36 +14,44 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::UdpSocket;
 use tracing::{debug, info, trace, warn};
 
+macro_rules! v5_reply {
+    ($rep:expr) => {
+        &[0x05, $rep, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+    };
+}
+
+macro_rules! v4_reply {
+    ($rep:expr) => {
+        &[0x00, $rep, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+    };
+}
+
 /// Execute an expression, and if it returns an error, write an error response to the client and return the error.
 ///
 /// $ex: The expression to execute
 /// $err: The error code to send to the client (RFC 1928)
 /// $edesc: The error description to log
 /// $writer: The writer to write the error response to
-macro_rules! execute_or_pass_error_v5 {
-    ($ex:expr, $err:literal, $edesc:literal, $writer:expr) => {
+macro_rules! exec_or_ret_err_v5 {
+    ($ex:expr, $edesc:literal, $writer:expr) => {
         match $ex {
             Ok(v) => v,
             Err(e) => {
                 info!("{}: {}", $edesc, e);
-                $writer
-                    .write_all(&[0x05, $err, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
-                    .await?;
+                $writer.write_all(v5_reply!(0x01)).await?;
                 $writer.flush().await?;
                 return Err(e.into());
             }
         }
     };
 }
-macro_rules! execute_or_pass_error_v4 {
+macro_rules! exec_or_ret_err_v4 {
     ($ex:expr, $edesc:literal, $writer:expr) => {
         match $ex {
             Ok(v) => v,
             Err(e) => {
                 info!("{}: {}", $edesc, e);
-                $writer
-                    .write_all(&[0x00, 0x5b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
-                    .await?;
+                $writer.write_all(v4_reply!(0x5b)).await?;
                 $writer.flush().await?;
                 return Err(e.into());
             }
@@ -93,20 +101,18 @@ where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let command =
-        execute_or_pass_error_v4!(breader.read_u8().await, "cannot read command", &mut bwriter);
-    let rport =
-        execute_or_pass_error_v4!(breader.read_u16().await, "cannot read port", &mut bwriter);
-    let ip = execute_or_pass_error_v4!(breader.read_u32().await, "cannot read ip", &mut bwriter);
+    let command = exec_or_ret_err_v4!(breader.read_u8().await, "cannot read command", &mut bwriter);
+    let rport = exec_or_ret_err_v4!(breader.read_u16().await, "cannot read port", &mut bwriter);
+    let ip = exec_or_ret_err_v4!(breader.read_u32().await, "cannot read ip", &mut bwriter);
     let mut user_id = Vec::new();
-    execute_or_pass_error_v4!(
+    exec_or_ret_err_v4!(
         breader.read_until(0, &mut user_id).await,
         "cannot read user id",
         &mut bwriter
     );
     let rhost = if ip >> 24 == 0 {
         let mut domain = Vec::new();
-        execute_or_pass_error_v4!(
+        exec_or_ret_err_v4!(
             breader.read_until(0, &mut domain).await,
             "cannot read domain",
             &mut bwriter
@@ -126,9 +132,7 @@ where
         handle_connect(breader, bwriter, &rhost, rport, handler_resources, false).await
     } else {
         warn!("invalid or unsupported SOCKSv4 command {command}");
-        bwriter
-            .write_all(&[0x00, 0x5b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
-            .await?;
+        bwriter.write_all(v4_reply!(0x5b)).await?;
         bwriter.flush().await?;
         Err(Error::SocksRequest)
     }
@@ -166,22 +170,15 @@ where
         info!("client is not SOCKSv5");
         return Err(Error::SocksVersion(version));
     }
-    let command = execute_or_pass_error_v5!(
-        breader.read_u8().await,
-        0x01,
-        "cannot read command",
-        &mut bwriter
-    );
+    let command = exec_or_ret_err_v5!(breader.read_u8().await, "cannot read command", &mut bwriter);
     trace!("command: {command}");
-    let _reserved = execute_or_pass_error_v5!(
+    let _reserved = exec_or_ret_err_v5!(
         breader.read_u8().await,
-        0x01,
         "cannot read reserved",
         &mut bwriter
     );
-    let address_type = execute_or_pass_error_v5!(
+    let address_type = exec_or_ret_err_v5!(
         breader.read_u8().await,
-        0x01,
         "cannot read address type",
         &mut bwriter
     );
@@ -190,9 +187,8 @@ where
         0x01 => {
             // IPv4
             let mut addr = [0; 4];
-            execute_or_pass_error_v5!(
+            exec_or_ret_err_v5!(
                 breader.read_exact(&mut addr).await,
-                0x01,
                 "cannot read address",
                 &mut bwriter
             );
@@ -202,9 +198,8 @@ where
             // Domain name
             let len = breader.read_u8().await?;
             let mut addr = vec![0; len as usize];
-            execute_or_pass_error_v5!(
+            exec_or_ret_err_v5!(
                 breader.read_exact(&mut addr).await,
-                0x01,
                 "cannot read domain",
                 &mut bwriter
             );
@@ -213,9 +208,8 @@ where
         0x04 => {
             // IPv6
             let mut addr = [0; 16];
-            execute_or_pass_error_v5!(
+            exec_or_ret_err_v5!(
                 breader.read_exact(&mut addr).await,
-                0x01,
                 "cannot read address",
                 &mut bwriter
             );
@@ -223,19 +217,12 @@ where
         }
         _ => {
             info!("invalid address type {address_type}");
-            bwriter
-                .write_all(&[0x05, 0x08, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
-                .await?;
+            bwriter.write_all(v5_reply!(0x08)).await?;
             bwriter.flush().await?;
             return Err(Error::SocksRequest);
         }
     };
-    let rport = execute_or_pass_error_v5!(
-        breader.read_u16().await,
-        0x01,
-        "cannot read port",
-        &mut bwriter
-    );
+    let rport = exec_or_ret_err_v5!(breader.read_u16().await, "cannot read port", &mut bwriter);
     debug!("got request {command} for {rhost}:{rport}");
     match command {
         0x01 => {
@@ -246,9 +233,7 @@ where
             // BIND
             // We don't support this because I can't ask the remote host to bind
             warn!("BIND is not supported");
-            bwriter
-                .write_all(&[0x05, 0x07, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
-                .await?;
+            bwriter.write_all(v5_reply!(0x07)).await?;
             bwriter.flush().await?;
             Err(Error::SocksRequest)
         }
@@ -266,9 +251,7 @@ where
         }
         _ => {
             warn!("invalid command {command}");
-            bwriter
-                .write_all(&[0x05, 0x07, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
-                .await?;
+            bwriter.write_all(v5_reply!(0x07)).await?;
             bwriter.flush().await?;
             Err(Error::SocksRequest)
         }
@@ -291,19 +274,14 @@ where
     let channel_request =
         request_tcp_channel(&handler_resources.stream_command_tx, rhost.into(), rport).await;
     let channel = if version_is_5 {
-        let channel =
-            execute_or_pass_error_v5!(channel_request, 0x01, "cannot get channel", &mut writer);
+        let channel = exec_or_ret_err_v5!(channel_request, "cannot get channel", &mut writer);
         // Send back a successful response
-        writer
-            .write_all(&[0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
-            .await?;
+        writer.write_all(v5_reply!(0x00)).await?;
         channel
     } else {
-        let channel = execute_or_pass_error_v4!(channel_request, "cannot get channel", &mut writer);
+        let channel = exec_or_ret_err_v4!(channel_request, "cannot get channel", &mut writer);
         // Send back a successful response
-        writer
-            .write_all(&[0x00, 0x5a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
-            .await?;
+        writer.write_all(v4_reply!(0x5a)).await?;
         channel
     };
     writer.flush().await?;
@@ -324,18 +302,13 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let socket = execute_or_pass_error_v5!(
+    let socket = exec_or_ret_err_v5!(
         UdpSocket::bind((local_addr, 0)).await,
-        0x01,
         "cannot get udp socket",
         &mut writer
     );
-    let sock_local_addr = execute_or_pass_error_v5!(
-        socket.local_addr(),
-        0x01,
-        "cannot get local address",
-        &mut writer
-    );
+    let sock_local_addr =
+        exec_or_ret_err_v5!(socket.local_addr(), "cannot get local address", &mut writer);
     let local_port = sock_local_addr.port().to_be_bytes();
     let local_ip = sock_local_addr.ip();
     let relay_task = tokio::spawn(udp_relay(
