@@ -5,7 +5,7 @@
 //! Whenever a new connection is made, it tries to create a new channel
 //! from the main loop and then spawns a new task to handle the connection.
 
-pub(super) mod socks5;
+pub(super) mod socks;
 mod tcp;
 mod udp;
 
@@ -15,7 +15,7 @@ use crate::dupe::Dupe;
 use crate::mux::DatagramFrame;
 use crate::parse_remote::{LocalSpec, RemoteSpec};
 use crate::parse_remote::{Protocol, Remote};
-use socks5::handle_socks_connection;
+use socks::handle_socks_connection;
 use tcp::{handle_tcp, handle_tcp_stdio};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
@@ -72,8 +72,8 @@ pub(crate) enum Error {
     RHostTooLong(#[from] std::num::TryFromIntError),
 
     // These are for the socks server
-    #[error("only supports SOCKSv5")]
-    Socksv4,
+    #[error("unsupported SOCKS version: {0}")]
+    SocksVersion(u8),
     #[error("invalid domain name: {0}")]
     DomainName(#[from] std::string::FromUtf8Error),
     #[error("only supports NOAUTH")]

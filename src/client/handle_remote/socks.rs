@@ -7,9 +7,9 @@ use crate::client::ClientIdMapEntry;
 use crate::dupe::Dupe;
 use crate::mux::{DatagramFrame, IntKey};
 use bytes::{Buf, Bytes, BytesMut};
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
-use tokio::io::BufWriter;
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, BufWriter};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::UdpSocket;
 use tracing::{debug, info, trace, warn};
@@ -20,13 +20,29 @@ use tracing::{debug, info, trace, warn};
 /// $err: The error code to send to the client (RFC 1928)
 /// $edesc: The error description to log
 /// $writer: The writer to write the error response to
-macro_rules! execute_or_pass_error {
+macro_rules! execute_or_pass_error_v5 {
     ($ex:expr, $err:literal, $edesc:literal, $writer:expr) => {
         match $ex {
             Ok(v) => v,
             Err(e) => {
+                info!("{}: {}", $edesc, e);
                 $writer
                     .write_all(&[0x05, $err, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+                    .await?;
+                $writer.flush().await?;
+                return Err(e.into());
+            }
+        }
+    };
+}
+macro_rules! execute_or_pass_error_v4 {
+    ($ex:expr, $edesc:literal, $writer:expr) => {
+        match $ex {
+            Ok(v) => v,
+            Err(e) => {
+                info!("{}: {}", $edesc, e);
+                $writer
+                    .write_all(&[0x00, 0x5b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
                     .await?;
                 $writer.flush().await?;
                 return Err(e.into());
@@ -50,15 +66,87 @@ where
     W: AsyncWrite + Unpin,
 {
     let mut breader = BufReader::new(reader);
-    let mut bwriter = BufWriter::new(writer);
-    // Complete the handshake
+    let bwriter = BufWriter::new(writer);
     let version = breader.read_u8().await?;
-    if version != 5 {
-        info!("client is not SOCKSv5");
-        return Err(Error::Socksv4);
+    match version {
+        4 => {
+            // SOCKS4
+            handle_socks4_connection(breader, bwriter, handler_resources).await
+        }
+        5 => {
+            // SOCKS5
+            handle_socks5_connection(breader, bwriter, local_addr, handler_resources).await
+        }
+        version => {
+            info!("client is not SOCKSv4 or SOCKSv5");
+            Err(Error::SocksVersion(version))
+        }
     }
-    let nmethods = breader.read_u8().await?;
-    let mut methods = vec![0; nmethods as usize];
+}
+
+async fn handle_socks4_connection<R, W>(
+    mut breader: R,
+    mut bwriter: W,
+    handler_resources: &HandlerResources,
+) -> Result<(), Error>
+where
+    R: AsyncBufRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let command =
+        execute_or_pass_error_v4!(breader.read_u8().await, "cannot read command", &mut bwriter);
+    let rport =
+        execute_or_pass_error_v4!(breader.read_u16().await, "cannot read port", &mut bwriter);
+    let ip = execute_or_pass_error_v4!(breader.read_u32().await, "cannot read ip", &mut bwriter);
+    let mut user_id = Vec::new();
+    execute_or_pass_error_v4!(
+        breader.read_until(0, &mut user_id).await,
+        "cannot read user id",
+        &mut bwriter
+    );
+    let rhost = if ip >> 24 == 0 {
+        let mut domain = Vec::new();
+        execute_or_pass_error_v4!(
+            breader.read_until(0, &mut domain).await,
+            "cannot read domain",
+            &mut bwriter
+        );
+        // Remove the null byte
+        domain.pop();
+        String::from_utf8(domain)?
+    } else {
+        Ipv4Addr::from(ip).to_string()
+    };
+    info!(
+        "SOCKSv4 request for {}:{} from {}",
+        rhost, rport, user_id[0]
+    );
+    if command == 0x01 {
+        // CONNECT
+        handle_connect(breader, bwriter, &rhost, rport, handler_resources, false).await
+    } else {
+        warn!("invalid or unsupported SOCKSv4 command {command}");
+        bwriter
+            .write_all(&[0x00, 0x5b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+            .await?;
+        bwriter.flush().await?;
+        Err(Error::SocksRequest)
+    }
+}
+
+async fn handle_socks5_connection<R, W>(
+    mut breader: R,
+    mut bwriter: W,
+    local_addr: &str,
+    handler_resources: &HandlerResources,
+) -> Result<(), Error>
+where
+    R: AsyncBufRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    // Complete the handshake
+    let num_methods = breader.read_u8().await?;
+    let mut methods = vec![0; num_methods as usize];
     breader.read_exact(&mut methods).await?;
     if !methods.contains(&0x00) {
         info!("client does not support NOAUTH");
@@ -76,22 +164,22 @@ where
     let version = breader.read_u8().await?;
     if version != 5 {
         info!("client is not SOCKSv5");
-        return Err(Error::Socksv4);
+        return Err(Error::SocksVersion(version));
     }
-    let command = execute_or_pass_error!(
+    let command = execute_or_pass_error_v5!(
         breader.read_u8().await,
         0x01,
         "cannot read command",
         &mut bwriter
     );
     trace!("command: {command}");
-    let _reserved = execute_or_pass_error!(
+    let _reserved = execute_or_pass_error_v5!(
         breader.read_u8().await,
         0x01,
         "cannot read reserved",
         &mut bwriter
     );
-    let address_type = execute_or_pass_error!(
+    let address_type = execute_or_pass_error_v5!(
         breader.read_u8().await,
         0x01,
         "cannot read address type",
@@ -102,7 +190,7 @@ where
         0x01 => {
             // IPv4
             let mut addr = [0; 4];
-            execute_or_pass_error!(
+            execute_or_pass_error_v5!(
                 breader.read_exact(&mut addr).await,
                 0x01,
                 "cannot read address",
@@ -114,7 +202,7 @@ where
             // Domain name
             let len = breader.read_u8().await?;
             let mut addr = vec![0; len as usize];
-            execute_or_pass_error!(
+            execute_or_pass_error_v5!(
                 breader.read_exact(&mut addr).await,
                 0x01,
                 "cannot read domain",
@@ -125,7 +213,7 @@ where
         0x04 => {
             // IPv6
             let mut addr = [0; 16];
-            execute_or_pass_error!(
+            execute_or_pass_error_v5!(
                 breader.read_exact(&mut addr).await,
                 0x01,
                 "cannot read address",
@@ -142,7 +230,7 @@ where
             return Err(Error::SocksRequest);
         }
     };
-    let rport = execute_or_pass_error!(
+    let rport = execute_or_pass_error_v5!(
         breader.read_u16().await,
         0x01,
         "cannot read port",
@@ -152,7 +240,7 @@ where
     match command {
         0x01 => {
             // CONNECT
-            handle_connect(breader, bwriter, &rhost, rport, handler_resources).await
+            handle_connect(breader, bwriter, &rhost, rport, handler_resources, true).await
         }
         0x02 => {
             // BIND
@@ -193,22 +281,31 @@ async fn handle_connect<R, W>(
     rhost: &str,
     rport: u16,
     handler_resources: &HandlerResources,
+    version_is_5: bool,
 ) -> Result<(), Error>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
     // Establish a connection to the remote host
-    let channel = execute_or_pass_error!(
-        request_tcp_channel(&handler_resources.stream_command_tx, rhost.into(), rport).await,
-        0x01,
-        "cannot get channel",
-        &mut writer
-    );
-    // Send back a successful response
-    writer
-        .write_all(&[0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
-        .await?;
+    let channel_request =
+        request_tcp_channel(&handler_resources.stream_command_tx, rhost.into(), rport).await;
+    let channel = if version_is_5 {
+        let channel =
+            execute_or_pass_error_v5!(channel_request, 0x01, "cannot get channel", &mut writer);
+        // Send back a successful response
+        writer
+            .write_all(&[0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+            .await?;
+        channel
+    } else {
+        let channel = execute_or_pass_error_v4!(channel_request, "cannot get channel", &mut writer);
+        // Send back a successful response
+        writer
+            .write_all(&[0x00, 0x5a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+            .await?;
+        channel
+    };
     writer.flush().await?;
     let (remote_rx, remote_tx) = tokio::io::split(channel);
     pipe_streams(reader, writer, remote_rx, remote_tx).await?;
@@ -227,13 +324,13 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let socket = execute_or_pass_error!(
+    let socket = execute_or_pass_error_v5!(
         UdpSocket::bind((local_addr, 0)).await,
         0x01,
         "cannot get udp socket",
         &mut writer
     );
-    let sock_local_addr = execute_or_pass_error!(
+    let sock_local_addr = execute_or_pass_error_v5!(
         socket.local_addr(),
         0x01,
         "cannot get local address",
@@ -294,6 +391,7 @@ where
                 .await?;
         }
     }
+    writer.flush().await?;
     // My crude way to detect when the client closes the connection
     reader.read(&mut [0; 1]).await.ok();
     relay_task.abort();

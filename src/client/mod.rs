@@ -238,7 +238,7 @@ async fn on_connected(
                     let udp_client_id_map = udp_client_id_map.read().await;
                     if let Some(information) = udp_client_id_map.get(&client_id) {
                         if information.socks5 {
-                            handle_remote::socks5::send_udp_relay_response(
+                            handle_remote::socks::send_udp_relay_response(
                                 &information.socket,
                                 &information.addr,
                                 &data,
