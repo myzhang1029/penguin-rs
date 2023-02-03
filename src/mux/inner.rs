@@ -104,7 +104,7 @@ impl<S> Dupe for MultiplexorInner<S> {
 
 impl<S> MultiplexorInner<S>
 where
-    S: AsyncRead + AsyncWrite + Unpin + 'static,
+    S: AsyncRead + AsyncWrite + Unpin,
 {
     /// Processing task
     /// Does the following:
@@ -206,7 +206,7 @@ where
 
 impl<S> MultiplexorInner<S>
 where
-    S: AsyncRead + AsyncWrite + Unpin + 'static,
+    S: AsyncRead + AsyncWrite + Unpin,
 {
     /// Process an incoming message
     /// Returns `Ok(true)` if a `Close` message was received.

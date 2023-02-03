@@ -24,7 +24,7 @@ impl<S> LockedWebSocket<S> {
 
 impl<S> LockedWebSocket<S>
 where
-    S: AsyncRead + AsyncWrite + Unpin + 'static,
+    S: AsyncRead + AsyncWrite + Unpin,
 {
     /// Lock and send the resulting `Message` from a computation.
     /// The computation is only executed if the sink is ready.

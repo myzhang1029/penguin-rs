@@ -24,10 +24,7 @@ async fn connect_succeeds() {
         );
     });
 
-    let stream = client_mux
-        .client_new_stream_channel(vec![], 0)
-        .await
-        .unwrap();
+    let stream = client_mux.client_new_stream_channel(&[], 0).await.unwrap();
     info!("sport = {}, dport = {}", stream.our_port, stream.their_port);
     debug!("Waiting for server task to finish");
     server_task.await.unwrap();
@@ -98,17 +95,14 @@ async fn connected_stream_passes_data() {
 
     let mut output_bytes: Vec<u8> = vec![];
 
-    let mut conn = client_mux
-        .client_new_stream_channel(vec![], 0)
-        .await
-        .unwrap();
+    let mut conn = client_mux.client_new_stream_channel(&[], 0).await.unwrap();
     while output_bytes.len() < len {
         let mut buf = [0u8; 2048];
         let bytes = conn.read(&mut buf).await.unwrap();
         if bytes == 0 {
             break;
         }
-        output_bytes.extend_from_slice(&buf[..bytes]);
+        output_bytes.extend(&buf[..bytes]);
         info!("Read {} bytes", output_bytes.len());
     }
 
@@ -138,17 +132,14 @@ async fn test_early_eof_detected() {
 
     let mut output_bytes: Vec<u8> = vec![];
 
-    let mut conn = client_mux
-        .client_new_stream_channel(vec![], 0)
-        .await
-        .unwrap();
+    let mut conn = client_mux.client_new_stream_channel(&[], 0).await.unwrap();
     while output_bytes.len() < len + 2 {
         let mut buf = [0u8; 2048];
         let bytes = conn.read(&mut buf).await.unwrap();
         if bytes == 0 {
             break;
         }
-        output_bytes.extend_from_slice(&buf[..bytes]);
+        output_bytes.extend(&buf[..bytes]);
         info!("Read {} bytes", output_bytes.len());
     }
 
@@ -184,20 +175,11 @@ async fn test_several_channels() {
         assert_eq!(buf[..bytes], b"hello"[..]);
         info!("server conn1 read = {:?}", bytes);
     });
-    let mut conn1 = client_mux
-        .client_new_stream_channel(vec![], 0)
-        .await
-        .unwrap();
+    let mut conn1 = client_mux.client_new_stream_channel(&[], 0).await.unwrap();
     info!("client conn1 = {:?}", conn1);
-    let mut conn2 = client_mux
-        .client_new_stream_channel(vec![], 0)
-        .await
-        .unwrap();
+    let mut conn2 = client_mux.client_new_stream_channel(&[], 0).await.unwrap();
     info!("client conn2 = {:?}", conn2);
-    let mut conn3 = client_mux
-        .client_new_stream_channel(vec![], 0)
-        .await
-        .unwrap();
+    let mut conn3 = client_mux.client_new_stream_channel(&[], 0).await.unwrap();
     info!("client conn3 = {:?}", conn3);
     conn1.write_all(b"hello").await.unwrap();
     conn1.shutdown().await.unwrap();

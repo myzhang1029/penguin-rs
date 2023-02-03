@@ -309,7 +309,7 @@ async fn test_socks5_udp_v4() {
         udp_socket.connect((bind_addr, bind_port)).await.unwrap();
         let request_header = vec![0x00, 0x00, 0x00, 0x01, 0x7f, 0x00, 0x00, 0x01, 0x37, 0x27];
         let mut request = request_header.clone();
-        request.extend_from_slice(&input_bytes);
+        request.extend(&input_bytes);
         udp_socket.send(&request).await.unwrap();
         let mut buf = vec![0u8; input_len + request_header.len()];
         let n = udp_socket.recv(&mut buf).await.unwrap();
@@ -385,7 +385,7 @@ async fn test_socks5_udp_v6() {
         udp_socket.connect((bind_addr, bind_port)).await.unwrap();
         let request_header = vec![0x00, 0x00, 0x00, 0x01, 0x7f, 0x00, 0x00, 0x01, 0x63, 0x03];
         let mut request = request_header.clone();
-        request.extend_from_slice(&input_bytes);
+        request.extend(&input_bytes);
         udp_socket.send(&request).await.unwrap();
         let mut buf = vec![0u8; input_len + request_header.len()];
         let n = udp_socket.recv(&mut buf).await.unwrap();

@@ -74,11 +74,7 @@ impl<S> Drop for MuxStream<S> {
     }
 }
 
-// Proxy the AsyncRead trait to the underlying stream so that users don't access `stream`
-impl<S> AsyncRead for MuxStream<S>
-where
-    S: AsyncRead + AsyncWrite + Unpin + 'static,
-{
+impl<S> AsyncRead for MuxStream<S> {
     /// Read data from the stream.
     /// There are two cases where this function gives EOF:
     /// 1. One `Message` contains an empty payload.
@@ -170,7 +166,8 @@ where
                 debug!("congestion window race condition, retrying");
             }
             Poll::Ready(
-                StreamFrame::new_psh(self.our_port, self.their_port, buf.to_vec().into()).into(),
+                StreamFrame::new_psh(self.our_port, self.their_port, Bytes::copy_from_slice(buf))
+                    .into(),
             )
         }))
         .map_err(tungstenite_error_to_io_error)?;

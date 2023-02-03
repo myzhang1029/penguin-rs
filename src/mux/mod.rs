@@ -14,6 +14,7 @@ mod test;
 
 use crate::config;
 use crate::dupe::Dupe;
+use bytes::Bytes;
 use inner::MultiplexorInner;
 use rand::distributions::uniform::SampleUniform;
 use rand::Rng;
@@ -30,6 +31,7 @@ use tokio_tungstenite::WebSocketStream;
 use tracing::{error, trace, warn};
 
 pub use frame::{DatagramFrame, Frame, StreamFlag, StreamFrame};
+#[allow(clippy::module_name_repetitions)]
 pub use stream::MuxStream;
 pub use tungstenite::protocol::Role;
 
@@ -55,7 +57,7 @@ pub enum Error {
 
     // These are the ones that shouldn't normally happen
     #[error("Datagram target host longer than 255 octets")]
-    DatagramHostTooLong(#[from] <Vec<u8> as TryFrom<DatagramFrame>>::Error),
+    DatagramHostTooLong(#[from] <Bytes as TryFrom<DatagramFrame>>::Error),
     #[error("Invalid frame: {0}")]
     InvalidFrame(#[from] frame::Error),
     #[error("Received `Text` message")]
@@ -119,7 +121,7 @@ where
     #[tracing::instrument(skip(self), level = "debug")]
     pub async fn client_new_stream_channel(
         &self,
-        host: Vec<u8>,
+        host: &[u8],
         port: u16,
     ) -> Result<MuxStream<S>, Error> {
         assert_eq!(self.inner.role, Role::Client);
@@ -132,7 +134,7 @@ where
         trace!("sending `Syn`");
         self.inner
             .ws
-            .send_with(|| StreamFrame::new_syn(&host, port, sport, config::RWND).into())
+            .send_with(|| StreamFrame::new_syn(host, port, sport, config::RWND).into())
             .await
             .map_err(Error::SendStreamFrame)?;
         self.inner
@@ -171,10 +173,10 @@ where
     #[tracing::instrument(skip(self), level = "debug")]
     #[inline]
     pub async fn send_datagram(&self, frame: DatagramFrame) -> Result<(), Error> {
-        let message: tungstenite::Message = frame.try_into()?;
+        let payload: Bytes = frame.try_into()?;
         self.inner
             .ws
-            .send_with(|| message.clone())
+            .send_with(|| tungstenite::Message::Binary(payload.dupe().into()))
             .await
             .map_err(Error::SendDatagram)?;
         Ok(())

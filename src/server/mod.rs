@@ -179,18 +179,23 @@ async fn backend_or_404_handler(
     State(state): State<ServerState<'static>>,
     mut req: Request<Body>,
 ) -> Response {
-    if let Some(backend) = state.backend {
-        let path = req.uri().path();
-        let path_query = req
+    if let Some(BackendUrl {
+        scheme,
+        authority,
+        path: backend_path,
+    }) = state.backend.cloned()
+    {
+        let req_path = req.uri().path();
+        let req_path_query = req
             .uri()
             .path_and_query()
-            .map_or(path, http::uri::PathAndQuery::as_str);
+            .map_or(req_path, http::uri::PathAndQuery::as_str);
 
         let uri = Uri::builder()
             // `expect`: `BackendUrl` is validated by clap.
-            .scheme(backend.scheme.clone())
-            .authority(backend.authority.clone())
-            .path_and_query(format!("{}{path_query}", backend.path.path()))
+            .scheme(scheme)
+            .authority(authority)
+            .path_and_query(format!("{}{req_path_query}", backend_path.path()))
             .build()
             .expect("Failed to build URI for backend (this is a bug)");
         *req.uri_mut() = uri;

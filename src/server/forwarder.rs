@@ -3,6 +3,7 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use crate::config;
+use crate::dupe::Dupe;
 use crate::mux::DatagramFrame;
 use bytes::BytesMut;
 use thiserror::Error;
@@ -61,7 +62,7 @@ pub(super) async fn udp_forward_to(
                 buf.truncate(len);
                 let datagram_frame = DatagramFrame {
                     sid: client_id,
-                    host: rhost.clone(),
+                    host: rhost.dupe(),
                     port: rport,
                     data: buf.freeze(),
                 };

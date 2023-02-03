@@ -115,7 +115,7 @@ impl StreamFrame {
         );
         syn_payload.put_u64(rwnd);
         syn_payload.put_u16(dest_port);
-        syn_payload.extend_from_slice(dest_host);
+        syn_payload.extend(dest_host);
         Self {
             sport,
             dport: 0,
@@ -225,7 +225,7 @@ impl From<StreamFrame> for Vec<u8> {
         encoded.put_u16(frame.sport);
         encoded.put_u16(frame.dport);
         encoded.put_u8(frame.flag as u8);
-        encoded.extend_from_slice(&frame.data);
+        encoded.extend(&frame.data);
         encoded
     }
 }
@@ -244,10 +244,10 @@ impl TryFrom<DatagramFrame> for Vec<u8> {
         let mut encoded = Self::with_capacity(size);
         encoded.put_u8(3);
         encoded.put_u8(u8::try_from(frame.host.len())?);
-        encoded.extend_from_slice(&frame.host);
+        encoded.extend(&frame.host);
         encoded.put_u16(frame.port);
         encoded.put_u32(frame.sid);
-        encoded.extend_from_slice(&frame.data);
+        encoded.extend(&frame.data);
         Ok(encoded)
     }
 }
@@ -271,6 +271,19 @@ impl From<StreamFrame> for Message {
 }
 
 impl TryFrom<DatagramFrame> for Message {
+    type Error = TryFromIntError;
+    fn try_from(frame: DatagramFrame) -> Result<Self, Self::Error> {
+        Vec::<u8>::try_from(frame).map(Into::into)
+    }
+}
+
+impl From<StreamFrame> for Bytes {
+    fn from(frame: StreamFrame) -> Self {
+        Vec::<u8>::from(frame).into()
+    }
+}
+
+impl TryFrom<DatagramFrame> for Bytes {
     type Error = TryFromIntError;
     fn try_from(frame: DatagramFrame) -> Result<Self, Self::Error> {
         Vec::<u8>::try_from(frame).map(Into::into)

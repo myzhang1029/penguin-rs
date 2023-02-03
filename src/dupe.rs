@@ -15,5 +15,5 @@ impl<T> Dupe for tokio::sync::mpsc::Sender<T> {}
 impl<T> Dupe for tokio::sync::mpsc::UnboundedSender<T> {}
 impl Dupe for std::task::Waker {}
 impl Dupe for axum_server::tls_rustls::RustlsConfig {}
-
+impl Dupe for bytes::Bytes {}
 impl<T: Dupe> Dupe for Option<T> {}

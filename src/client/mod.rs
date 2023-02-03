@@ -76,6 +76,7 @@ impl Dupe for HandlerResources {
 
 /// Type stored in the client ID map
 #[derive(Clone, Debug)]
+#[allow(clippy::module_name_repetitions)]
 pub struct ClientIdMapEntry {
     /// The address of the client
     pub addr: SocketAddr,
@@ -275,7 +276,7 @@ async fn get_send_stream_chan_or_put_back(
 ) -> Result<bool, crate::mux::Error> {
     trace!("requesting a new TCP channel");
     match mux
-        .client_new_stream_channel(stream_command.host.clone(), stream_command.port)
+        .client_new_stream_channel(&stream_command.host, stream_command.port)
         .await
     {
         Ok(stream) => {
