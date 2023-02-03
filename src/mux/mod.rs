@@ -36,43 +36,34 @@ pub use tungstenite::protocol::Role;
 /// Multiplexor error
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-    #[error(transparent)]
-    Tungstenite(#[from] tungstenite::Error),
-    #[error("requester exited before receiving the stream")]
+    #[error("Requester exited before receiving the stream")]
     SendStreamToClient,
-    #[error("mux is already closed")]
+    #[error("Mux is already closed")]
     Closed,
 
+    // These are tungstenite errors separated by their origin
+    #[error("Failed to receive message: {0}")]
+    Next(tungstenite::Error),
+    #[error("Failed to flush messages: {0}")]
+    Flush(tungstenite::Error),
+    #[error("Failed to send datagram: {0}")]
+    SendDatagram(tungstenite::Error),
+    #[error("Failed to send stream frame: {0}")]
+    SendStreamFrame(tungstenite::Error),
+    #[error("Failed to send ping: {0}")]
+    SendPing(tungstenite::Error),
+
     // These are the ones that shouldn't normally happen
-    #[error("datagram host longer than 255 octets")]
+    #[error("Datagram target host longer than 255 octets")]
     DatagramHostTooLong(#[from] <Vec<u8> as TryFrom<DatagramFrame>>::Error),
-    #[error("invalid frame: {0}")]
+    #[error("Invalid frame: {0}")]
     InvalidFrame(#[from] frame::Error),
-    #[error("received `Text` message")]
+    #[error("Received `Text` message")]
     TextMessage,
-    #[error("server received `SynAck` frame")]
+    #[error("Server received `SynAck` frame")]
     ServerReceivedSynAck,
-    #[error("client received `Syn` frame")]
+    #[error("Client received `Syn` frame")]
     ClientReceivedSyn,
-}
-
-impl From<Error> for std::io::Error {
-    fn from(e: Error) -> Self {
-        match e {
-            Error::Io(e) => e,
-            Error::Tungstenite(e) => tungstenite_error_to_io_error(e),
-            e => Self::new(std::io::ErrorKind::Other, e),
-        }
-    }
-}
-
-fn tungstenite_error_to_io_error(e: tungstenite::Error) -> std::io::Error {
-    match e {
-        tungstenite::Error::Io(e) => e,
-        e => std::io::Error::new(std::io::ErrorKind::Other, e),
-    }
 }
 
 #[derive(Debug)]
@@ -142,8 +133,13 @@ where
         self.inner
             .ws
             .send_with(|| StreamFrame::new_syn(&host, port, sport, config::RWND).into())
-            .await?;
-        self.inner.ws.flush_ignore_closed().await?;
+            .await
+            .map_err(Error::SendStreamFrame)?;
+        self.inner
+            .ws
+            .flush_ignore_closed()
+            .await
+            .map_err(Error::Flush)?;
         trace!("sending stream to user");
         let stream = self
             .stream_rx
@@ -176,7 +172,11 @@ where
     #[inline]
     pub async fn send_datagram(&self, frame: DatagramFrame) -> Result<(), Error> {
         let message: tungstenite::Message = frame.try_into()?;
-        self.inner.ws.send_with(|| message.clone()).await?;
+        self.inner
+            .ws
+            .send_with(|| message.clone())
+            .await
+            .map_err(Error::SendDatagram)?;
         Ok(())
     }
 }

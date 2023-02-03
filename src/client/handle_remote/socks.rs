@@ -460,7 +460,7 @@ pub async fn send_udp_relay_response(
     socket: &UdpSocket,
     target: &SocketAddr,
     data: &[u8],
-) -> std::io::Result<()> {
+) -> std::io::Result<usize> {
     // Write the header
     let (target_addr, target_atyp) = match target.ip() {
         IpAddr::V4(ip) => (ip.octets().to_vec(), 0x01),
@@ -470,6 +470,5 @@ pub async fn send_udp_relay_response(
     content.extend_from_slice(&target_addr);
     content.extend_from_slice(&target.port().to_be_bytes());
     content.extend_from_slice(data);
-    socket.send_to(&content, target).await?;
-    Ok(())
+    socket.send_to(&content, target).await
 }

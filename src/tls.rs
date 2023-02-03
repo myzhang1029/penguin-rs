@@ -31,15 +31,15 @@ impl ServerCertVerifier for EmptyVerifier {
 /// Error type for TLS configuration
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("error reading certificate, key, or CA: {0}")]
+    #[error("Error reading certificate, key, or CA: {0}")]
     ReadCert(#[from] std::io::Error),
-    #[error("empty client certificate store")]
+    #[error("Empty client certificate store")]
     EmptyClientCertStore,
-    #[error("failed to parse CA store: {0}")]
+    #[error("Failed to parse CA store: {0}")]
     CaStoreParse(#[from] webpki::Error),
-    #[error("rustls error: {0}")]
+    #[error("Rustls error: {0}")]
     Rustls(#[from] rustls::Error),
-    #[error("unsupported private key type")]
+    #[error("Unsupported private key type")]
     PrivateKeyNotSupported,
 }
 

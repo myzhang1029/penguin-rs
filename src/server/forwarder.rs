@@ -18,7 +18,7 @@ use tracing::{debug, trace};
 pub(super) enum Error {
     #[error(transparent)]
     Io(#[from] std::io::Error),
-    #[error("invalid host: {0}")]
+    #[error("Invalid host: {0}")]
     Host(#[from] std::str::Utf8Error),
 }
 

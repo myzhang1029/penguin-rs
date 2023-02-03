@@ -3,7 +3,6 @@
 
 use super::frame::StreamFrame;
 use super::locked_sink::LockedWebSocket;
-use super::tungstenite_error_to_io_error;
 use crate::config;
 use bytes::Bytes;
 use futures_util::task::AtomicWaker;
@@ -71,7 +70,7 @@ impl<S> Drop for MuxStream<S> {
         self.dropped_ports_tx
             .send((self.our_port, self.their_port))
             // Maybe the task has already exited, who knows
-            .unwrap_or_else(|_| warn!("Failed to notify task of dropped port"));
+            .ok();
     }
 }
 
@@ -210,5 +209,12 @@ where
         // This line is allowed to fail, because the sink might have been closed altogether
         ready!(self.ws.poll_flush(cx)).ok();
         Poll::Ready(Ok(()))
+    }
+}
+
+fn tungstenite_error_to_io_error(e: tungstenite::Error) -> std::io::Error {
+    match e {
+        tungstenite::Error::Io(e) => e,
+        e => std::io::Error::new(std::io::ErrorKind::Other, e),
     }
 }

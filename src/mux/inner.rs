@@ -134,10 +134,10 @@ where
                     interval.tick().await;
                     trace!("sending ping");
                     // Tungstenite should deliver `Ping` immediately
-                    if let Err(e) = us.ws.send_with(|| Message::Ping(vec![])).await {
-                        error!("Failed to send ping: {}", e);
-                        break Err(e.into());
-                    }
+                    us.ws
+                        .send_with(|| Message::Ping(vec![]))
+                        .await
+                        .map_err(Error::SendPing)?;
                 }
             } else {
                 futures_util::future::pending::<()>().await;
@@ -165,7 +165,8 @@ where
                     .send_with(|| {
                         StreamFrame::new_ack(our_port, their_port, psh_recvd_since).into()
                     })
-                    .await?;
+                    .await
+                    .map_err(Error::SendStreamFrame)?;
             }
             // Only happens when the last sender (i.e. `ack_tx` in `MultiplexorInner`)
             // is dropped.
@@ -174,23 +175,12 @@ where
         let us = self.dupe();
         let process_message_future = async move {
             while let Some(msg) = us.ws.next().await {
-                let msg = match msg {
-                    Ok(msg) => msg,
-                    Err(e) => {
-                        error!("Failed to receive message: {}", e);
-                        return Err(e.into());
-                    }
-                };
+                let msg = msg.map_err(Error::Next)?;
                 trace!("received message length = {}", msg.len());
                 // Messages cannot be processed concurrently
                 // because doing so will break stream ordering
-                if let Err(e) = us
-                    .process_message(msg, &mut datagram_tx, &mut stream_tx)
-                    .await
-                {
-                    error!("Failed to process message: {}", e);
-                    return Err(e);
-                }
+                us.process_message(msg, &mut datagram_tx, &mut stream_tx)
+                    .await?;
             }
             Ok::<(), Error>(())
         };
@@ -220,7 +210,7 @@ where
 {
     /// Process an incoming message
     /// Returns `Ok(true)` if a `Close` message was received.
-    #[tracing::instrument(skip(msg, datagram_tx, stream_tx), level = "trace")]
+    #[tracing::instrument(skip(msg, datagram_tx, stream_tx), level = "debug")]
     #[inline]
     async fn process_message(
         &self,
@@ -259,7 +249,7 @@ where
             Message::Ping(_data) => {
                 // `tokio-tungstenite` handles `Ping` messages automatically
                 trace!("received ping");
-                self.ws.flush_ignore_closed().await?;
+                self.ws.flush_ignore_closed().await.map_err(Error::Flush)?;
                 Ok(false)
             }
             Message::Pong(_data) => {
@@ -307,8 +297,9 @@ where
         let send_rst = || async {
             self.ws
                 .send_with(|| StreamFrame::new_rst(our_port, their_port).into())
-                .await?;
-            self.ws.flush_ignore_closed().await
+                .await
+                .map_err(Error::SendStreamFrame)?;
+            self.ws.flush_ignore_closed().await.map_err(Error::Flush)
         };
         match flag {
             StreamFlag::Syn => {
@@ -333,8 +324,9 @@ where
                     .send_with(|| {
                         StreamFrame::new_synack(our_port, their_port, config::RWND).into()
                     })
-                    .await?;
-                self.ws.flush_ignore_closed().await?;
+                    .await
+                    .map_err(Error::SendStreamFrame)?;
+                self.ws.flush_ignore_closed().await.map_err(Error::Flush)?;
             }
             StreamFlag::SynAck => {
                 if self.role == Role::Server {

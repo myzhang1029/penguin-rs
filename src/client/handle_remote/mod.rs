@@ -58,25 +58,21 @@ pub(super) use {complete_or_continue, complete_or_continue_if_retryable};
 pub enum Error {
     #[error(transparent)]
     Io(#[from] std::io::Error),
-    #[error(transparent)]
-    Task(#[from] tokio::task::JoinError),
-    #[error("cannot receive stream from the main loop")]
+    #[error("Cannot receive stream from the main loop")]
     ReceiveStream(#[from] oneshot::error::RecvError),
-    #[error("main loop cannot send stream")]
-    SendStream,
-    #[error("main loop cannot send datagram")]
+    #[error("Cannot request stream from the main loop")]
+    RequestStream,
+    #[error("Cannot send datagram to the main loop")]
     SendDatagram,
-    #[error("remote host longer than 255 octets")]
-    RHostTooLong(#[from] std::num::TryFromIntError),
 
     // These are for the socks server
-    #[error("unsupported SOCKS version: {0}")]
+    #[error("Unsupported SOCKS version: {0}")]
     SocksVersion(u8),
-    #[error("invalid domain name: {0}")]
+    #[error("Invalid domain name: {0}")]
     DomainName(#[from] std::string::FromUtf8Error),
-    #[error("only supports NOAUTH")]
+    #[error("Only supports NOAUTH")]
     OtherAuth,
-    #[error("cannot read socks request")]
+    #[error("Cannot read socks request")]
     SocksRequest,
 }
 

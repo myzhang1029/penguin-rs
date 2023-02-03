@@ -60,9 +60,9 @@ use tungstenite::Message;
 /// Conversion errors
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("invalid frame type: {0}")]
+    #[error("Invalid frame type: {0}")]
     InvalidFrameType(u8),
-    #[error("invalid stream flag: {0}")]
+    #[error("Invalid stream flag: {0}")]
     InvalidStreamFlag(u8),
 }
 

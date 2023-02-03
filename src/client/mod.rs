@@ -26,17 +26,15 @@ use tracing::{error, info, trace, warn};
 /// Errors
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("failed to parse remote: {0}")]
+    #[error("Failed to parse remote: {0}")]
     ParseRemote(#[from] crate::parse_remote::Error),
-    #[error("failed to connect WebSocket: {0}")]
+    #[error("Failed to connect WebSocket: {0}")]
     Connect(#[from] ws_connect::Error),
-    #[error(transparent)]
-    WebSocketIO(#[from] std::io::Error),
-    #[error("max retry count reached")]
+    #[error("Maximum retry count reached")]
     MaxRetryCountReached,
     #[error(transparent)]
     Mux(#[from] crate::mux::Error),
-    #[error("remote handler exited: {0}")]
+    #[error("Remote handler exited: {0}")]
     RemoteHandlerExited(#[from] handle_remote::Error),
 }
 
@@ -221,7 +219,7 @@ async fn on_connected(
             }
             Some(datagram) = datagram_rx.recv() => {
                 if let Err(e) = mux.send_datagram(datagram).await {
-                    error!("Failed to send datagram: {e}");
+                    error!("{e}");
                 }
             }
             Some(dgram_frame) = mux.get_datagram() => {
@@ -235,14 +233,18 @@ async fn on_connected(
                 } else {
                     let udp_client_id_map = udp_client_id_map.read().await;
                     if let Some(information) = udp_client_id_map.get(&client_id) {
+                        let send_result =
                         if information.socks5 {
                             handle_remote::socks::send_udp_relay_response(
                                 &information.socket,
                                 &information.addr,
                                 &data,
-                            ).await?;
-                        } else if let Err(e) = information.socket.send_to(&data, &information.addr).await {
-                            error!("Failed to send datagram to client: {e}");
+                            ).await
+                        } else {
+                            information.socket.send_to(&data, &information.addr).await
+                        };
+                        if let Err(e) = send_result {
+                            warn!("Failed to send datagram to client: {e}");
                         }
                     } else {
                         // Just drop the datagram

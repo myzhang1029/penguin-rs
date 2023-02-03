@@ -17,9 +17,9 @@ use tungstenite::{client::IntoClientRequest, handshake::client::Request};
 /// Error type for `WebSocket` connection.
 #[derive(Error, Debug)]
 pub enum Error {
-    /// Invalid URL
-    #[error("tungstenite error: {0}")]
-    Tungstenite(#[from] tungstenite::error::Error),
+    /// Invalid URL or cannot connect
+    #[error("Tungstenite error: {0}")]
+    Tungstenite(#[from] tungstenite::Error),
     /// TLS error
     #[error(transparent)]
     Tls(#[from] crate::tls::Error),

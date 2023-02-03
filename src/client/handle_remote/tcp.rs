@@ -29,7 +29,7 @@ pub(super) async fn request_tcp_channel(
     stream_command_tx
         .send(stream_request)
         .await
-        .map_err(|_| Error::SendStream)?;
+        .map_err(|_| Error::RequestStream)?;
     Ok(rx.await?)
 }
 

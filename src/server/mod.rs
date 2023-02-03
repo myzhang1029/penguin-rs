@@ -45,12 +45,14 @@ type WebSocket = WebSocketStream<Upgraded>;
 /// Server Errors
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("invalid listening host: {0}")]
+    #[error("Invalid listening host: {0}")]
     InvalidHost(#[from] std::net::AddrParseError),
     #[error(transparent)]
     Tls(#[from] crate::tls::Error),
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
+    #[error("Cannot register signal handler: {0}")]
+    Signal(std::io::Error),
+    #[error("Cannot bind to socket: {0}")]
+    Bind(std::io::Error),
     #[error("HTTP server error: {0}")]
     Hyper(#[from] hyper::Error),
 }
@@ -143,7 +145,8 @@ pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
         ));
         axum_server::bind_rustls(sockaddr, config)
             .serve(app.into_make_service())
-            .await?;
+            .await
+            .map_err(Error::Bind)?;
     } else {
         info!("Listening on ws://{sockaddr}/ws");
         axum::Server::bind(&sockaddr)
@@ -161,8 +164,8 @@ async fn reload_cert_on_signal(
     key_path: &str,
     client_ca_path: Option<&str>,
 ) -> Result<(), Error> {
-    let mut sigusr1 =
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined1())?;
+    let mut sigusr1 = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined1())
+        .map_err(Error::Signal)?;
     loop {
         sigusr1.recv().await;
         info!("Reloading TLS certificate");
