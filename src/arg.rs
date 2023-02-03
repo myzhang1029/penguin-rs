@@ -17,22 +17,22 @@ use thiserror::Error;
 #[command(propagate_version = true)]
 pub struct PenguinCli {
     #[clap(subcommand)]
-    pub(crate) subcommand: Commands,
+    pub subcommand: Commands,
     #[arg(short, long, conflicts_with = "quiet", action = ArgAction::Count, global = true)]
-    pub(crate) verbose: u8,
+    pub verbose: u8,
     #[arg(short, long, conflicts_with = "verbose", action = ArgAction::Count, global = true)]
-    pub(crate) quiet: u8,
+    pub quiet: u8,
 }
 
 /// Global args to avoid cloning
-pub(crate) static ARGS: OnceCell<PenguinCli> = OnceCell::new();
+pub static ARGS: OnceCell<PenguinCli> = OnceCell::new();
 
 impl PenguinCli {
     pub fn get_global() -> &'static Self {
         ARGS.get().expect("ARGS is not initialized (this is a bug)")
     }
 
-    pub(crate) fn parse_global() {
+    pub fn parse_global() {
         ARGS.set(Self::parse())
             .expect("`parse_global` should not be called twice (this is a bug)");
     }
@@ -45,7 +45,7 @@ pub enum Commands {
     Client(ClientArgs),
     /// Penguin server
     #[clap(name = "server")]
-    Server(Box<ServerArgs>),
+    Server(ServerArgs),
 }
 
 // Descriptions are mainly directly stripped from myzhang1029/penguin
@@ -53,7 +53,7 @@ pub enum Commands {
 #[derive(Args, Debug)]
 pub struct ClientArgs {
     /// URL to the penguin server.
-    pub(crate) server: ServerUrl,
+    pub server: ServerUrl,
     /// Remote connections tunneled through the server, each of
     /// which come in the form:
     ///
@@ -106,73 +106,73 @@ pub struct ClientArgs {
     // so the range of available ports is 1..=65535,
     // giving 65535 available remotes.
     #[arg(num_args=1..=65535, required = true)]
-    pub(crate) remote: Vec<Remote>,
+    pub remote: Vec<Remote>,
     /// An optional Pre-Shared Key for WebSocket upgrade to present
     /// to the server in the HTTP header X-Penguin-PSK. If the server requires
     /// this key but the client does not present the correct key, the upgrade
     /// to WebSocket silently fails.
     #[arg(long)]
-    pub(crate) ws_psk: Option<HeaderValue>,
+    pub ws_psk: Option<HeaderValue>,
     /// An optional keepalive interval. Since the underlying
     /// transport is HTTP, in many instances we'll be traversing through
     /// proxies, often these proxies will close idle connections. You must
     /// specify a time in seconds (set to 0 to disable).
     #[arg(long, default_value_t = 25)]
-    pub(crate) keepalive: u64,
+    pub keepalive: u64,
     /// Maximum number of times to retry before exiting.
     /// Defaults 0, meaning unlimited.
     #[arg(long, default_value_t = 0)]
-    pub(crate) max_retry_count: u32,
+    pub max_retry_count: u32,
     /// Maximum wait time (in milliseconds) before retrying after a
     /// disconnection.
     #[arg(long, default_value_t = 300000)]
-    pub(crate) max_retry_interval: u64,
+    pub max_retry_interval: u64,
     /// An optional HTTP CONNECT or SOCKS5 proxy which will be
     /// used to reach the penguin server. Authentication can be specified
     /// inside the URL.
     /// For example, http://admin:password@my-server.com:8081
     ///         or: socks://admin:password@my-server.com:1080
     #[arg(short = 'x', long)]
-    pub(crate) proxy: Option<String>,
+    pub proxy: Option<String>,
     /// Set a custom header in the form "HeaderName: HeaderContent".
     /// Can be used multiple times.
     /// (e.g --header "Foo: Bar" --header "Hello: World")
     #[arg(short = 'H', long)]
-    pub(crate) header: Vec<Header>,
+    pub header: Vec<Header>,
     /// Optionally set the 'Host' header (defaults to the host
     /// found in the server url).
     #[arg(long)]
-    pub(crate) hostname: Option<HeaderValue>,
+    pub hostname: Option<HeaderValue>,
     /// An optional root certificate bundle used to verify the
     /// penguin server. Only valid when connecting to the server with
     /// "https" or "wss". By default, the operating system CAs will be used.
     #[arg(short, long)]
-    pub(crate) tls_ca: Option<String>,
+    pub tls_ca: Option<String>,
     /// Skip server TLS certificate verification of
     /// chain and host name (if TLS is used for transport connections to
     /// server). If set, client accepts any TLS certificate presented by
     /// the server and any host name in that certificate. This only affects
     /// transport https (wss) connection.
     #[arg(short = 'k', long)]
-    pub(crate) tls_skip_verify: bool,
+    pub tls_skip_verify: bool,
     /// A path to a PEM encoded private key used for client
     /// authentication (mutual-TLS).
     #[arg(long, requires = "tls_cert")]
-    pub(crate) tls_key: Option<String>,
+    pub tls_key: Option<String>,
     /// A path to a PEM encoded certificate matching the provided
     /// private key. The certificate must have client authentication
     /// enabled (mutual-TLS).
     #[arg(long, requires = "tls_key")]
-    pub(crate) tls_cert: Option<String>,
+    pub tls_cert: Option<String>,
     /// For compatibility with `chisel` only. This option is a no-op.
     #[arg(long = "pid")]
-    pub(crate) _pid: bool,
+    pub _pid: bool,
     /// For compatibility with `chisel` only. This option is a no-op.
     #[arg(long = "fingerprint")]
-    pub(crate) _fingerprint: Option<String>,
+    pub _fingerprint: Option<String>,
     /// For compatibility with `chisel` only. This option is a no-op.
     #[arg(long = "auth")]
-    pub(crate) _auth: Option<String>,
+    pub _auth: Option<String>,
 }
 
 /// Penguin server arguments.
@@ -182,66 +182,66 @@ pub struct ServerArgs {
     /// Defines the HTTP listening host - the network interface
     /// (defaults to ::).
     #[arg(long, default_value = "::")]
-    pub(crate) host: String,
+    pub host: String,
     /// Defines the HTTP listening port (defaults to port 8080).
     #[arg(short, long, default_value_t = 8080)]
-    pub(crate) port: u16,
+    pub port: u16,
     /// Specifies another HTTP server to proxy requests to when
     /// penguin receives a normal HTTP request. Useful for hiding penguin in
     /// plain sight.
     #[arg(long)]
-    pub(crate) backend: Option<BackendUrl>,
+    pub backend: Option<BackendUrl>,
     /// Try harder to hide from Active Probes (disable /health and
     /// /version endpoints and HTTP headers that could potentially be used
     /// to fingerprint penguin). It is strongly recommended to use --ws-psk
     /// and TLS.
     #[arg(long)]
-    pub(crate) obfs: bool,
+    pub obfs: bool,
     /// Content to send with a 404 response. Defaults to 'Not found'.
     #[arg(long = "404-resp", default_value = "Not found")]
-    pub(crate) not_found_resp: String,
+    pub not_found_resp: String,
     /// An optional Pre-Shared Key for WebSocket upgrade. If this
     /// option is supplied but the client does not present the correct key
     /// in the HTTP header X-Penguin-PSK, the upgrade to WebSocket silently fails.
     #[arg(long)]
-    pub(crate) ws_psk: Option<HeaderValue>,
+    pub ws_psk: Option<HeaderValue>,
     /// Enables TLS and provides optional path to a PEM-encoded
     /// TLS private key. When this flag is set, you must also set --tls-cert,
     /// and you cannot set --tls-domain.
     #[arg(long, requires = "tls_cert")]
-    pub(crate) tls_key: Option<String>,
+    pub tls_key: Option<String>,
     /// Enables TLS and provides optional path to a PEM-encoded
     /// TLS certificate. When this flag is set, you must also set --tls-key,
     /// and you cannot set --tls-domain.
     #[arg(long, requires = "tls_key")]
-    pub(crate) tls_cert: Option<String>,
+    pub tls_cert: Option<String>,
     /// A path to a PEM encoded CA certificate bundle or a directory
     /// holding multiple PEM encode CA certificate bundle files, which is used to
     /// validate client connections. The provided CA certificates will be used
     /// instead of the system roots. This is commonly used to implement mutual-TLS.
     #[arg(long)]
-    pub(crate) tls_ca: Option<String>,
+    pub tls_ca: Option<String>,
     /// For compatibility with `chisel` only. This option is a no-op.
     #[arg(long = "pid")]
-    pub(crate) _pid: bool,
+    pub _pid: bool,
     /// For compatibility with `chisel` only. This option is a no-op.
     #[arg(long = "socks5")]
-    pub(crate) _socks5: bool,
+    pub _socks5: bool,
     /// For compatibility with `chisel` only. This option is a no-op.
     #[arg(long = "reverse")]
-    pub(crate) _reverse: bool,
+    pub _reverse: bool,
     /// For compatibility with `chisel` only. This option is a no-op.
     #[arg(long = "keepalive", default_value_t = 0)]
-    pub(crate) _keepalive: u64,
+    pub _keepalive: u64,
     /// For compatibility with `chisel` only. This option is a no-op.
     #[arg(long = "auth")]
-    pub(crate) _auth: Option<String>,
+    pub _auth: Option<String>,
     /// For compatibility with `chisel` only. This option is a no-op.
     #[arg(long = "authfile")]
-    pub(crate) _authfile: Option<String>,
+    pub _authfile: Option<String>,
     /// For compatibility with `chisel` only. This option is a no-op.
     #[arg(long = "key")]
-    pub(crate) _key: Option<String>,
+    pub _key: Option<String>,
 }
 
 /// Server URL parsing errors
@@ -381,8 +381,8 @@ pub enum HeaderError {
 /// HTTP Header
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Header {
-    pub(crate) name: HeaderName,
-    pub(crate) value: HeaderValue,
+    pub name: HeaderName,
+    pub value: HeaderValue,
 }
 
 impl FromStr for Header {

@@ -13,9 +13,10 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::MissedTickBehavior;
-use tracing::{debug, error, trace};
+use tracing::{debug, error, trace, warn};
 use tungstenite::Message;
 
 #[derive(Debug)]
@@ -55,6 +56,8 @@ pub(super) struct MultiplexorInner<S> {
     /// Channel for queuing `Ack` frames to be sent
     /// (in the form (our_port, their_port, psh_recvd_since)).
     pub(super) ack_tx: mpsc::UnboundedSender<(u16, u16, u64)>,
+    /// Whether the multiplexor has been closed
+    pub(super) closed: Arc<AtomicBool>,
 }
 
 impl<S> std::fmt::Debug for MultiplexorInner<S> {
@@ -77,6 +80,7 @@ impl<S> Clone for MultiplexorInner<S> {
             streams: self.streams.clone(),
             dropped_ports_tx: self.dropped_ports_tx.clone(),
             ack_tx: self.ack_tx.clone(),
+            closed: self.closed.clone(),
         }
     }
 }
@@ -93,6 +97,7 @@ impl<S> Dupe for MultiplexorInner<S> {
             streams: self.streams.dupe(),
             dropped_ports_tx: self.dropped_ports_tx.dupe(),
             ack_tx: self.ack_tx.dupe(),
+            closed: self.closed.dupe(),
         }
     }
 }
@@ -118,62 +123,94 @@ where
         mut dropped_ports_rx: mpsc::UnboundedReceiver<(u16, u16)>,
         mut ack_rx: mpsc::UnboundedReceiver<(u16, u16, u64)>,
     ) -> Result<(), Error> {
-        let mut keepalive_interval = MaybeInterval::new(self.keepalive_interval);
-        // If we missed a tick, it is probably doing networking, so we don't need to
-        // send a ping
-        keepalive_interval.maybe_set_missed_tick_behavior(MissedTickBehavior::Skip);
-        let result = loop {
-            trace!("task loop");
-            tokio::select! {
-                Some((our_port, their_port)) = dropped_ports_rx.recv() => {
-                    if our_port == 0 {
-                        debug!("mux dropped");
-                        break Ok(());
-                    }
-                    self.close_port(our_port, their_port, false).await;
-                }
-                Some((our_port, their_port, psh_recvd_since)) = ack_rx.recv() => {
-                    trace!("sending `Ack` for port {}", our_port);
-                    self.ws.send_with(|| {
-                        StreamFrame::new_ack(our_port, their_port, psh_recvd_since).into()
-                    }).await?;
-                }
-                Some(msg) = self.ws.next() => {
-                    let msg = match msg {
-                        Ok(msg) => msg,
-                        Err(e) => {
-                            error!("Failed to receive message: {}", e);
-                            break Err(e.into());
-                        }
-                    };
-                    trace!("received message length = {}", msg.len());
-                    // Messages cannot be processed concurrently
-                    // because doing so will break stream ordering
-                    if let Err(e) = self.process_message(msg, &mut datagram_tx, &mut stream_tx).await {
-                        error!("Failed to process message: {}", e);
-                        break Err(e);
-                    }
-                }
-                _ = keepalive_interval.tick() => {
+        let us = self.dupe();
+        let keepalive_task_future = async move {
+            if let Some(keepalive_interval) = self.keepalive_interval {
+                let mut interval = tokio::time::interval(keepalive_interval);
+                // If we missed a tick, it is probably doing networking, so we don't need to
+                // send a ping
+                interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+                loop {
+                    interval.tick().await;
                     trace!("sending ping");
                     // Tungstenite should deliver `Ping` immediately
-                    if let Err(e) = self.ws.send_with(|| Message::Ping(vec![])).await {
+                    if let Err(e) = us.ws.send_with(|| Message::Ping(vec![])).await {
                         error!("Failed to send ping: {}", e);
                         break Err(e.into());
                     }
                 }
-                else => {
-                    // Everything is closed, we are probably done
-                    break Ok(());
-                }
+            } else {
+                futures_util::future::pending::<()>().await;
+                Ok::<(), Error>(())
             }
         };
-        match &result {
-            Ok(()) => debug!("Multiplexor task exited"),
-            Err(e) => error!("Multiplexor task failed: {e}"),
-        }
+        let us = self.dupe();
+        let close_port_future = async move {
+            while let Some((our_port, their_port)) = dropped_ports_rx.recv().await {
+                if our_port == 0 {
+                    debug!("mux dropped");
+                    break;
+                }
+                us.close_port(our_port, their_port, false).await;
+            }
+            // Only happens when the last sender (i.e. `dropped_ports_tx` in `MultiplexorInner`)
+            // is dropped.
+            Ok::<(), Error>(())
+        };
+        let us = self.dupe();
+        let send_ack_future = async move {
+            while let Some((our_port, their_port, psh_recvd_since)) = ack_rx.recv().await {
+                trace!("sending `Ack` for port {}", our_port);
+                us.ws
+                    .send_with(|| {
+                        StreamFrame::new_ack(our_port, their_port, psh_recvd_since).into()
+                    })
+                    .await?;
+            }
+            // Only happens when the last sender (i.e. `ack_tx` in `MultiplexorInner`)
+            // is dropped.
+            Ok::<(), Error>(())
+        };
+        let us = self.dupe();
+        let process_message_future = async move {
+            while let Some(msg) = us.ws.next().await {
+                let msg = match msg {
+                    Ok(msg) => msg,
+                    Err(e) => {
+                        error!("Failed to receive message: {}", e);
+                        return Err(e.into());
+                    }
+                };
+                trace!("received message length = {}", msg.len());
+                // Messages cannot be processed concurrently
+                // because doing so will break stream ordering
+                if let Err(e) = us
+                    .process_message(msg, &mut datagram_tx, &mut stream_tx)
+                    .await
+                {
+                    error!("Failed to process message: {}", e);
+                    return Err(e);
+                }
+            }
+            Ok::<(), Error>(())
+        };
+        let result = tokio::try_join!(
+            keepalive_task_future,
+            close_port_future,
+            send_ack_future,
+            process_message_future
+        );
         self.shutdown().await;
-        result
+        match result {
+            Ok(_) => {
+                debug!("Multiplexor task exited");
+                Ok(())
+            }
+            Err(e) => {
+                error!("Multiplexor task failed: {e}");
+                Err(e)
+            }
+        }
     }
 }
 
@@ -197,7 +234,20 @@ where
                 match frame {
                     Frame::Datagram(datagram_frame) => {
                         trace!("received datagram frame: {:?}", datagram_frame);
-                        datagram_tx.send(datagram_frame).await?;
+                        // Only fails if the receiver is dropped or the queue is full.
+                        // The first case means the multiplexor itself is dropped;
+                        // In the second case, we just drop the frame to avoid blocking.
+                        // It is UDP, after all.
+                        if let Err(e) = datagram_tx.try_send(datagram_frame) {
+                            match e {
+                                TrySendError::Full(_) => {
+                                    warn!("dropped datagram frame: {:?}", e);
+                                }
+                                TrySendError::Closed(_) => {
+                                    return Err(Error::Closed);
+                                }
+                            }
+                        }
                     }
                     Frame::Stream(stream_frame) => {
                         trace!("received stream frame: {:?}", stream_frame);
@@ -325,21 +375,21 @@ where
                 // And our end can still send
             }
             StreamFlag::Psh => {
-                let streams = self.streams.read().await;
-                if let Some(stream_data) = streams.get(&our_port) {
-                    let sender = &stream_data.sender;
-                    if sender.send(data).await.is_ok() {
-                    } else {
-                        // The receiver is closed
-                        drop(streams);
-                        send_rst().await?;
+                {
+                    let mut streams = self.streams.write().await;
+                    if let Some(stream_data) = streams.get(&our_port) {
+                        if stream_data.sender.send(data).await.is_err() {
+                            // The corresponding `MuxStream` is dropped
+                            streams.remove(&our_port);
+                            // and let it fall through to send `Rst`
+                        } else {
+                            // The data is sent successfully
+                            return Ok(());
+                        }
                     }
-                } else {
-                    // The port does not exist
-                    drop(streams);
-                    send_rst().await?;
-                    return Ok(());
-                };
+                }
+                // The port does not exist
+                send_rst().await?;
             }
         }
         Ok(())
@@ -392,7 +442,7 @@ where
         stream_tx
             .send(stream)
             .await
-            .map_err(|e| Error::SendStreamToClient(e.to_string()))
+            .map_err(|_| Error::SendStreamToClient)
     }
 
     /// Close a port. That is, send `Rst` if `Fin` is not sent,
@@ -431,34 +481,5 @@ where
         drop(streams);
         // This also effectively `Rst`s all streams
         self.ws.close().await.ok();
-    }
-}
-
-/// An interval or a never-resolving future
-#[derive(Debug)]
-struct MaybeInterval {
-    interval: Option<tokio::time::Interval>,
-}
-
-impl MaybeInterval {
-    fn new(interval: Option<tokio::time::Duration>) -> Self {
-        Self {
-            interval: interval.map(tokio::time::interval),
-        }
-    }
-
-    fn maybe_set_missed_tick_behavior(&mut self, behavior: MissedTickBehavior) {
-        if let Some(interval) = &mut self.interval {
-            interval.set_missed_tick_behavior(behavior);
-        }
-    }
-
-    async fn tick(&mut self) {
-        if let Some(interval) = &mut self.interval {
-            interval.tick().await;
-        } else {
-            let never = futures_util::future::pending::<()>();
-            never.await;
-        }
     }
 }

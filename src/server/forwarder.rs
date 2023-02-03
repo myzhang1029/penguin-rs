@@ -20,8 +20,6 @@ pub(super) enum Error {
     Io(#[from] std::io::Error),
     #[error("invalid host: {0}")]
     Host(#[from] std::str::Utf8Error),
-    #[error("cannot send `DatagramFrame` to main loop: {0}")]
-    DatagramSend(#[from] tokio::sync::mpsc::error::SendError<crate::mux::DatagramFrame>),
 }
 
 /// Send a UDP datagram to the given host and port and wait for a response
@@ -67,7 +65,10 @@ pub(super) async fn udp_forward_to(
                     port: rport,
                     data: buf.freeze(),
                 };
-                datagram_tx.send(datagram_frame).await?;
+                if datagram_tx.send(datagram_frame).await.is_err() {
+                    // The main loop has exited, so we should exit too.
+                    break;
+                }
             }
             Ok(Err(e)) => {
                 return Err(e.into());

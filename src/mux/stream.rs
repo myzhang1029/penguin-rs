@@ -109,10 +109,11 @@ where
                 // Reset the counter
                 self.psh_recvd_since.store(0, Ordering::SeqCst);
                 // Send an `Ack` frame
-                // TODO: handle error
-                self.ack_tx
-                    .send((self.our_port, self.their_port, new))
-                    .unwrap();
+                self.ack_tx.send((self.our_port, self.their_port, new)).ok();
+                // If the previous line fails, the task has exited.
+                // In this case, we don't care about the `Ack` frame and the
+                // user will discover the error when they try to write or read
+                // to EOF.
             }
         } else {
             // There is some data left in `self.buf`.

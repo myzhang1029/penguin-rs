@@ -22,7 +22,7 @@ use tracing_subscriber::{filter, fmt, prelude::*, reload};
 
 /// Errors
 #[derive(Debug, Error)]
-pub(crate) enum Error {
+enum Error {
     #[error(transparent)]
     Client(#[from] client::Error),
     #[error(transparent)]
@@ -63,8 +63,9 @@ fn spawn_deadlock_detection() {
     });
 }
 
-/// Real entry point
-async fn main_real() -> Result<(), Error> {
+#[tokio::main]
+/// Entry point
+async fn main() -> Result<(), Error> {
     #[cfg(not(feature = "tokio-console"))]
     let reload_handle = {
         let fmt_layer = fmt::Layer::default()
@@ -111,12 +112,4 @@ async fn main_real() -> Result<(), Error> {
         arg::Commands::Server(args) => server::server_main(args).await?,
     }
     Ok(())
-}
-
-#[tokio::main]
-async fn main() {
-    if let Err(e) = main_real().await {
-        error!("Giving up: {e}");
-        std::process::exit(1);
-    }
 }

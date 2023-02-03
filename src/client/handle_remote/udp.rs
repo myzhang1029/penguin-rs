@@ -43,7 +43,11 @@ pub(super) async fn handle_udp(
             sid: client_id,
             data: buf.freeze(),
         };
-        handler_resources.datagram_tx.send(frame).await?;
+        handler_resources
+            .datagram_tx
+            .send(frame)
+            .await
+            .map_err(|_| Error::SendDatagram)?;
     }
 }
 
@@ -65,6 +69,10 @@ pub(super) async fn handle_udp_stdio(
             sid: 0,
             data: line.into(),
         };
-        handler_resources.datagram_tx.send(frame).await?;
+        handler_resources
+            .datagram_tx
+            .send(frame)
+            .await
+            .map_err(|_| Error::SendDatagram)?;
     }
 }

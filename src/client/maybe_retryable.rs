@@ -48,7 +48,7 @@ impl MaybeRetryableError for crate::mux::Error {
         match self {
             Self::Io(e) => e.retryable(),
             Self::Tungstenite(e) => e.retryable(),
-            Self::StreamTxClosed => true,
+            Self::Closed => true,
             _ => false,
         }
     }

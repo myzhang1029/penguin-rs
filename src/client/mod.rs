@@ -3,7 +3,7 @@
 
 mod handle_remote;
 mod maybe_retryable;
-pub(crate) mod ws_connect;
+pub mod ws_connect;
 
 use crate::arg::ClientArgs;
 use crate::config;
@@ -25,7 +25,7 @@ use tracing::{error, info, trace, warn};
 
 /// Errors
 #[derive(Debug, Error)]
-pub(crate) enum Error {
+pub enum Error {
     #[error("failed to parse remote: {0}")]
     ParseRemote(#[from] crate::parse_remote::Error),
     #[error("failed to connect WebSocket: {0}")]
@@ -36,8 +36,6 @@ pub(crate) enum Error {
     MaxRetryCountReached,
     #[error(transparent)]
     Mux(#[from] crate::mux::Error),
-    #[error("cannot put sender back to the queue: {0}")]
-    CommandPutBack(#[from] mpsc::error::SendError<StreamCommand>),
     #[error("remote handler exited: {0}")]
     RemoteHandlerExited(#[from] handle_remote::Error),
 }
@@ -47,7 +45,7 @@ type MuxStream = crate::mux::MuxStream<MaybeTlsStream<TcpStream>>;
 // Send the information about how to send the stream to the listener
 /// Type that local listeners send to the main loop to request a connection
 #[derive(Debug)]
-pub(super) struct StreamCommand {
+pub struct StreamCommand {
     /// Channel to send the stream back to the listener
     pub tx: oneshot::Sender<MuxStream>,
     pub host: Vec<u8>,
@@ -57,7 +55,7 @@ pub(super) struct StreamCommand {
 /// Data for a function to be able to use the mux/connection
 /// May be cheaply cloned for new `tokio::spawn` tasks.
 #[derive(Clone, Debug)]
-pub(super) struct HandlerResources {
+pub struct HandlerResources {
     /// Send a request for a TCP channel to the main loop
     pub stream_command_tx: mpsc::Sender<StreamCommand>,
     /// Send a UDP datagram to the main loop
@@ -80,7 +78,7 @@ impl Dupe for HandlerResources {
 
 /// Type stored in the client ID map
 #[derive(Clone, Debug)]
-pub(super) struct ClientIdMapEntry {
+pub struct ClientIdMapEntry {
     /// The address of the client
     pub addr: SocketAddr,
     /// The UDP socket used to communicate with the client
@@ -103,7 +101,7 @@ impl ClientIdMapEntry {
 }
 
 #[tracing::instrument(level = "trace")]
-pub(crate) async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
+pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
     // TODO: Temporary, remove when implemented
     // Blocked on `snapview/tungstenite-rs#177`
     if args.proxy.is_some() {
@@ -272,7 +270,7 @@ async fn get_send_stream_chan_or_put_back(
     mux: &mut Multiplexor<MaybeTlsStream<TcpStream>>,
     stream_command: StreamCommand,
     stream_command_tx: &mut mpsc::Sender<StreamCommand>,
-) -> Result<bool, Error> {
+) -> Result<bool, crate::mux::Error> {
     trace!("requesting a new TCP channel");
     match mux
         .client_new_stream_channel(stream_command.host.clone(), stream_command.port)
@@ -289,11 +287,18 @@ async fn get_send_stream_chan_or_put_back(
         Err(e) => {
             if e.retryable() {
                 warn!("Connection error: {e}");
-                stream_command_tx.send(stream_command).await?;
+                // Put the command back so we can retry
+                // `expect`: we should never fail to put back a command because the
+                // receiver is always in scope when `get_send_stream_chan_or_put_back`
+                // is called.
+                stream_command_tx
+                    .send(stream_command)
+                    .await
+                    .expect("failed to put back command (this is a bug)");
                 Ok(false)
             } else {
                 error!("Connection error: {e}");
-                Err(e.into())
+                Err(e)
             }
         }
     }

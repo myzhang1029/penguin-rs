@@ -9,17 +9,15 @@ pub(super) mod socks;
 mod tcp;
 mod udp;
 
-use super::StreamCommand;
 use crate::client::HandlerResources;
 use crate::dupe::Dupe;
-use crate::mux::DatagramFrame;
 use crate::parse_remote::{LocalSpec, RemoteSpec};
 use crate::parse_remote::{Protocol, Remote};
 use socks::handle_socks_connection;
 use tcp::{handle_tcp, handle_tcp_stdio};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 use tracing::{debug, error};
 use udp::{handle_udp, handle_udp_stdio};
 
@@ -57,7 +55,7 @@ pub(super) use {complete_or_continue, complete_or_continue_if_retryable};
 
 /// Errors
 #[derive(Debug, Error)]
-pub(crate) enum Error {
+pub enum Error {
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
@@ -65,9 +63,9 @@ pub(crate) enum Error {
     #[error("cannot receive stream from the main loop")]
     ReceiveStream(#[from] oneshot::error::RecvError),
     #[error("main loop cannot send stream")]
-    SendStream(#[from] mpsc::error::SendError<StreamCommand>),
+    SendStream,
     #[error("main loop cannot send datagram")]
-    SendDatagram(#[from] mpsc::error::SendError<DatagramFrame>),
+    SendDatagram,
     #[error("remote host longer than 255 octets")]
     RHostTooLong(#[from] std::num::TryFromIntError),
 

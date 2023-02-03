@@ -26,7 +26,10 @@ pub(super) async fn request_tcp_channel(
         host: dest_host,
         port: dest_port,
     };
-    stream_command_tx.send(stream_request).await?;
+    stream_command_tx
+        .send(stream_request)
+        .await
+        .map_err(|_| Error::SendStream)?;
     Ok(rx.await?)
 }
 
@@ -70,7 +73,7 @@ pub(super) async fn handle_tcp(
 
 /// Handle a TCP Stdio->Inet remote.
 #[tracing::instrument(skip(handler_resources))]
-pub(crate) async fn handle_tcp_stdio(
+pub async fn handle_tcp_stdio(
     rhost: &str,
     rport: u16,
     handler_resources: &HandlerResources,

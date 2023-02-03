@@ -19,6 +19,7 @@ use rand::distributions::uniform::SampleUniform;
 use rand::Rng;
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::{
@@ -39,6 +40,12 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Tungstenite(#[from] tungstenite::Error),
+    #[error("requester exited before receiving the stream")]
+    SendStreamToClient,
+    #[error("mux is already closed")]
+    Closed,
+
+    // These are the ones that shouldn't normally happen
     #[error("datagram host longer than 255 octets")]
     DatagramHostTooLong(#[from] <Vec<u8> as TryFrom<DatagramFrame>>::Error),
     #[error("invalid frame: {0}")]
@@ -49,14 +56,6 @@ pub enum Error {
     ServerReceivedSynAck,
     #[error("client received `Syn` frame")]
     ClientReceivedSyn,
-    #[error(transparent)]
-    SendFrameToChannel(#[from] tokio::sync::mpsc::error::SendError<Vec<u8>>),
-    #[error(transparent)]
-    SendDatagramToClient(#[from] tokio::sync::mpsc::error::SendError<DatagramFrame>),
-    #[error("cannot send stream to client: {0}")]
-    SendStreamToClient(String),
-    #[error("Mux received no stream")]
-    StreamTxClosed,
 }
 
 impl From<Error> for std::io::Error {
@@ -100,15 +99,15 @@ where
         let (stream_tx, stream_rx) = tokio::sync::mpsc::channel(config::STREAM_BUFFER_SIZE);
         let (dropped_ports_tx, dropped_ports_rx) = tokio::sync::mpsc::unbounded_channel();
         let (ack_tx, ack_rx) = tokio::sync::mpsc::unbounded_channel();
-        let locked_sink_stream = locked_sink::LockedWebSocket::new(ws);
 
         let inner = MultiplexorInner {
             role,
-            ws: locked_sink_stream,
+            ws: locked_sink::LockedWebSocket::new(ws),
             keepalive_interval,
             streams: Arc::new(RwLock::new(HashMap::new())),
             dropped_ports_tx,
             ack_tx,
+            closed: Arc::new(AtomicBool::new(false)),
         };
         tokio::spawn(
             inner
@@ -133,6 +132,9 @@ where
         port: u16,
     ) -> Result<MuxStream<S>, Error> {
         assert_eq!(self.inner.role, Role::Client);
+        if self.inner.closed.load(Ordering::Relaxed) {
+            return Err(Error::Closed);
+        }
         // Allocate a new port
         let sport = u16::next_available_key(&*self.inner.streams.read().await);
         trace!("sport = {sport}");
@@ -149,7 +151,7 @@ where
             .await
             .recv()
             .await
-            .ok_or(Error::StreamTxClosed)?;
+            .ok_or(Error::Closed)?;
         Ok(stream)
     }
 

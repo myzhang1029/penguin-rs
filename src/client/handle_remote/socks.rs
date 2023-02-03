@@ -123,10 +123,7 @@ where
     } else {
         Ipv4Addr::from(ip).to_string()
     };
-    info!(
-        "SOCKSv4 request for {}:{} from {}",
-        rhost, rport, user_id[0]
-    );
+    debug!("SOCKSv4 request for {}:{} from {:?}", rhost, rport, user_id);
     if command == 0x01 {
         // CONNECT
         handle_connect(breader, bwriter, &rhost, rport, handler_resources, false).await
@@ -223,7 +220,7 @@ where
         }
     };
     let rport = exec_or_ret_err_v5!(breader.read_u16().await, "cannot read port", &mut bwriter);
-    debug!("got request {command} for {rhost}:{rport}");
+    debug!("SOCKSv5 {command} for {rhost}:{rport}");
     match command {
         0x01 => {
             // CONNECT
@@ -397,7 +394,11 @@ async fn udp_relay(
             sid: client_id,
             data,
         };
-        handler_resources.datagram_tx.send(datagram_frame).await?;
+        handler_resources
+            .datagram_tx
+            .send(datagram_frame)
+            .await
+            .map_err(|_| Error::SendDatagram)?;
     }
 }
 
@@ -455,7 +456,7 @@ async fn handle_udp_relay_header<'buf>(
 }
 
 /// Send a UDP relay response
-pub(crate) async fn send_udp_relay_response(
+pub async fn send_udp_relay_response(
     socket: &UdpSocket,
     target: &SocketAddr,
     data: &[u8],
