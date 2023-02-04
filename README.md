@@ -82,7 +82,7 @@ $ iperf3 -c 127.0.0.1 # penguin with TLS
 ## Protocol
 Servers and clients with the same protocol version are compatible with each other. However, for the best performance, it is recommended to use the same version of `penguin` on both sides.
 
-The current protocol version is `penguin-v6`.
+The current protocol version is `penguin-v6`. See [PROTOCOL.md](PROTOCOL.md) for details.
 
 ## License
 GPL v3.0 or later or Apache License 2.0.
