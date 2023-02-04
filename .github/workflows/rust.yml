@@ -1,4 +1,4 @@
-name: Rust
+name: Rust Build and Test
 
 on:
   push:
@@ -11,8 +11,18 @@ env:
 
 jobs:
   build:
+    runs-on: ${{ matrix.config.os }}
 
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+        - name: Intel macOS
+          os: macos-latest
+        - name: Linux
+          os: ubuntu-latest
+        - name: Windows
+          os: windows-latest
 
     steps:
     - uses: actions/checkout@v3
@@ -20,7 +30,7 @@ jobs:
         submodules: true
 
     - name: Install Rust toolchain
-      uses: actions-rs/toolchain@16499b5e05bf2e26879000db0c1d13f7e13fa3af #@v1
+      uses: actions-rs/toolchain@v1
       with:
         profile: minimal
         toolchain: stable
@@ -40,9 +50,12 @@ jobs:
       env:
         RUSTFLAGS: -Cinstrument-coverage
 
+    # Only process coverage on Linux
     - name: Process coverage data
       run: grcov . --binary-path ./target/debug/ -s . -t lcov --branch --ignore-not-existing --ignore "/*" -o lcov.info
+      if: ${{ matrix.config.os == 'ubuntu-latest' }}
 
     - uses: codecov/codecov-action@v3
       with:
         files: ./lcov.info
+      if: ${{ matrix.config.os == 'ubuntu-latest' }}

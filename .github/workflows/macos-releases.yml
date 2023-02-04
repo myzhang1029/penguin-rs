@@ -1,0 +1,40 @@
+name: Build macOS Releases
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build macOS Releases
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout source
+      uses: actions/checkout@v2
+
+    - name: Rust Cache
+      uses: Swatinem/rust-cache@v1
+
+    - name: Install aarch64 toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: stable
+        target: aarch64-apple-darwin
+        override: true
+
+    - name: Build release
+      run: |
+        cargo build --release --target x86_64-apple-darwin
+        cargo build --release --target aarch64-apple-darwin
+
+    - name: Upload binary
+      uses: actions/upload-artifact@v2.2.4
+      with:
+        path: target/*/release/penguin

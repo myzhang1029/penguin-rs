@@ -1,0 +1,61 @@
+name: Cross-compile Releases
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Cross-compile for ${{ matrix.config.rust_target }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      # Unsupported targets are either
+      # 1. unsupported by Rust, `ring`, or `mio`, or
+      # 2. without `AtomicU64`.
+      matrix:
+        config:
+        - rust_target: aarch64-linux-android
+        - rust_target: aarch64-unknown-linux-gnu
+        - rust_target: aarch64-unknown-linux-musl
+        - rust_target: arm-unknown-linux-gnueabihf
+        - rust_target: arm-unknown-linux-musleabihf
+        - rust_target: armv7-linux-androideabi
+        - rust_target: armv7-unknown-linux-gnueabihf
+        - rust_target: armv7-unknown-linux-musleabihf
+        - rust_target: i586-unknown-linux-gnu
+        - rust_target: i586-unknown-linux-musl
+        - rust_target: i686-linux-android
+        - rust_target: i686-pc-windows-gnu
+        - rust_target: i686-unknown-linux-gnu
+        - rust_target: i686-unknown-linux-musl
+        - rust_target: x86_64-linux-android
+        - rust_target: x86_64-pc-windows-gnu
+        - rust_target: x86_64-unknown-illumos
+        - rust_target: x86_64-unknown-linux-gnu
+        - rust_target: x86_64-unknown-linux-musl
+        - rust_target: x86_64-unknown-netbsd
+
+    steps:
+    - name: Checkout source
+      uses: actions/checkout@v2
+
+    - name: Install dependencies
+      run: cargo install cross
+
+    - name: Build release
+      run: cross build --release --target ${{ matrix.config.rust_target }}
+
+    - name: Upload binary
+      uses: actions/upload-artifact@v2.2.4
+      with:
+        name: penguin-${{ matrix.config.rust_target }}
+        path: |
+          target/${{ matrix.config.rust_target }}/release/penguin
+          target/${{ matrix.config.rust_target }}/release/penguin.exe
