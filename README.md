@@ -1,7 +1,7 @@
 # Rusty Penguin
 ![Logo](https://raw.githubusercontent.com/myzhang1029/penguin-rs/main/logo.png)
 
-[![Build Releases](https://github.com/myzhang1029/penguin-rs/actions/workflows/releases.yml/badge.svg)](https://github.com/myzhang1029/penguin-rs/actions/workflows/releases.yml)
+[![Rust Build and Test](https://github.com/myzhang1029/penguin-rs/actions/workflows/rust.yml/badge.svg)](https://github.com/myzhang1029/penguin-rs/actions/workflows/rust.yml)
 [![Crates.io](https://img.shields.io/crates/v/rusty-penguin.svg)](https://crates.io/crates/rusty-penguin)
 [![Dependency Status](https://deps.rs/repo/github/myzhang1029/penguin-rs/status.svg)](https://deps.rs/repo/github/myzhang1029/penguin-rs)
 [![Codecov](https://codecov.io/gh/myzhang1029/penguin-rs/branch/main/graph/badge.svg?token=L0TE5i23sn)](https://codecov.io/gh/myzhang1029/penguin-rs)
