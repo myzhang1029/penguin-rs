@@ -58,7 +58,7 @@ mod tests {
         let key_path = tmpdir.path().join("key.pem");
         let cert_path = tmpdir.path().join("cert.pem");
         let mut cert_params = CertificateParams::new(vec!["example.com".into()]);
-        cert_params.alg = &rcgen::PKCS_ED25519;
+        cert_params.alg = &rcgen::PKCS_ECDSA_P384_SHA384;
         let custom_crt = Certificate::from_params(cert_params).unwrap();
         let crt = custom_crt.serialize_pem().unwrap();
         let crt_key = custom_crt.serialize_private_key_pem();
