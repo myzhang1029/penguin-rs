@@ -1,11 +1,13 @@
 use super::*;
 use crate::{arg::ServerUrl, parse_remote::Remote};
+#[allow(unused_imports)]
 use once_cell::sync::{Lazy, OnceCell};
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     str::FromStr,
     time::Duration,
 };
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 use tempfile::TempDir;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -70,6 +72,8 @@ fn make_client_args(servhost: &str, servport: u16, remotes: Vec<Remote>) -> arg:
 
 /// Generate a self-signed server cert into a temporary directory.
 /// Returns the path to the directory. The cert is named `cert.pem` and the key is named `privkey.pem`.
+// macOS and Windows's native TLS don't support Ed25519 nor ECDSA-based certificates.
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 async fn make_server_cert() -> TempDir {
     let mut cert_params = rcgen::CertificateParams::new(vec!["localhost".to_string()]);
     cert_params.alg = &rcgen::PKCS_ECDSA_P384_SHA384;
@@ -84,6 +88,7 @@ async fn make_server_cert() -> TempDir {
     tokio::fs::write(&key_path, key).await.unwrap();
     dir
 }
+
 #[tokio::test]
 async fn test_it_works() {
     static SERVER_ARGS: Lazy<arg::ServerArgs> = Lazy::new(|| make_server_args("127.0.0.1", 30554));
@@ -153,8 +158,7 @@ async fn test_it_works_v6() {
 }
 
 #[tokio::test]
-// These platforms' native TLS implementations don't work well with self-signed certs.
-#[cfg(not(all(any(target_os = "macos", target_os = "windows"), feature = "nativetls")))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 async fn test_it_works_tls_simple() {
     static SERVER_ARGS: OnceCell<arg::ServerArgs> = OnceCell::new();
     static CLIENT_ARGS: Lazy<arg::ClientArgs> = Lazy::new(|| arg::ClientArgs {

@@ -10,6 +10,9 @@ use rustls::{
 use rustls_pemfile::Item;
 use std::sync::Arc;
 
+/// Type alias for the inner TLS identity type.
+pub type TlsIdentityInner = ServerConfig;
+
 /// Skip TLS verification
 pub struct EmptyVerifier;
 
@@ -31,7 +34,7 @@ pub async fn make_server_config(
     cert_path: &str,
     key_path: &str,
     client_ca_path: Option<&str>,
-) -> Result<ServerConfig, Error> {
+) -> Result<TlsIdentityInner, Error> {
     // Load certificate
     // `expect`: we only get `None` if `key_path` and `cert_path` are `None`,
     // which is not the case here.
@@ -182,6 +185,23 @@ mod test {
         let key_path = tmpdir.path().join("key.pem");
         let cert_path = tmpdir.path().join("cert.pem");
         let custom_crt = generate_simple_self_signed(vec!["example.com".into()]).unwrap();
+        let crt = custom_crt.serialize_pem().unwrap();
+        let crt_key = custom_crt.serialize_private_key_pem();
+        tokio::fs::write(&cert_path, crt).await.unwrap();
+        tokio::fs::write(&key_path, crt_key).await.unwrap();
+        let loaded_cert = try_load_certificate(
+            Some(key_path.to_str().unwrap()),
+            Some(cert_path.to_str().unwrap()),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let (loaded_cert, loaded_key) = loaded_cert;
+        assert_eq!(loaded_cert.len(), 1);
+        assert_eq!(loaded_key.0, custom_crt.serialize_private_key_der());
+        let mut cert_params = rcgen::CertificateParams::new(vec!["example.com".into()]);
+        cert_params.alg = &rcgen::PKCS_ED25519;
+        let custom_crt = rcgen::Certificate::from_params(cert_params).unwrap();
         let crt = custom_crt.serialize_pem().unwrap();
         let crt_key = custom_crt.serialize_private_key_pem();
         tokio::fs::write(&cert_path, crt).await.unwrap();

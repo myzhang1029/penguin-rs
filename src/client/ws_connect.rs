@@ -63,7 +63,7 @@ pub async fn handshake(
     }
     // Now add custom headers
     for header in extra_headers {
-        req_headers.insert(header.name.clone(), header.value.clone());
+        req_headers.insert(&header.name, header.value.clone());
     }
 
     let connector = if is_tls {

@@ -5,7 +5,7 @@ mod native;
 mod rustls;
 
 #[cfg(feature = "__rustls")]
-use ::rustls::ServerConfig;
+use self::rustls::{make_client_config, make_server_config, TlsIdentityInner};
 use arc_swap::ArcSwap;
 use hyper::client::HttpConnector;
 #[cfg(feature = "__rustls")]
@@ -13,12 +13,15 @@ use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 #[cfg(feature = "nativetls")]
 use hyper_tls::HttpsConnector;
 #[cfg(feature = "nativetls")]
-use native_tls::TlsConnector;
+use native::{make_client_config, make_server_config, TlsIdentityInner};
 use std::sync::Arc;
 use thiserror::Error;
 use tokio_tungstenite::Connector;
 
 pub use acceptor::{TlsAcceptor, TlsStream};
+
+/// A hot-swappable container for a TLS key and certificate.
+pub type TlsIdentity = Arc<ArcSwap<TlsIdentityInner>>;
 
 /// Error type for TLS configuration
 #[derive(Error, Debug)]
@@ -65,66 +68,28 @@ pub fn make_client_https() -> HttpsConnector<HttpConnector> {
     HttpsConnector::new()
 }
 
-/// Make a `Connector` with native TLS.
-#[cfg(feature = "nativetls")]
+/// Make a `Connector`.
 pub async fn make_tls_connector(
     tls_cert: Option<&str>,
     tls_key: Option<&str>,
     tls_ca: Option<&str>,
     tls_insecure: bool,
 ) -> Result<Connector, Error> {
-    let mut tls_config_builder = TlsConnector::builder();
-    tls_config_builder
-        .danger_accept_invalid_certs(tls_insecure)
-        .danger_accept_invalid_hostnames(tls_insecure);
-    if let Some(tls_ca) = tls_ca {
-        let ca = tokio::fs::read(tls_ca).await?;
-        tls_config_builder.add_root_certificate(native_tls::Certificate::from_pem(&ca)?);
-    }
-    if let Some(tls_cert) = tls_cert {
-        let cert = tokio::fs::read(tls_cert).await?;
-        let key = tokio::fs::read(tls_key.unwrap_or(tls_cert)).await?;
-        tls_config_builder.identity(native_tls::Identity::from_pkcs8(&cert, &key)?);
-    }
-    let tls_config = tls_config_builder.build()?;
-    Ok(Connector::NativeTls(tls_config))
+    let tls_config = make_client_config(tls_cert, tls_key, tls_ca, tls_insecure).await?;
+    #[cfg(feature = "__rustls")]
+    let result = Ok(Connector::Rustls(tls_config.into()));
+    #[cfg(feature = "nativetls")]
+    let result = Ok(Connector::NativeTls(tls_config));
+    result
 }
 
-/// Make a `Connector` with rustls.
-#[cfg(feature = "__rustls")]
-pub async fn make_tls_connector(
-    tls_cert: Option<&str>,
-    tls_key: Option<&str>,
-    tls_ca: Option<&str>,
-    tls_insecure: bool,
-) -> Result<Connector, Error> {
-    let tls_config = rustls::make_client_config(tls_cert, tls_key, tls_ca, tls_insecure).await?;
-    Ok(Connector::Rustls(tls_config.into()))
-}
-
-#[cfg(feature = "__rustls")]
-pub type TlsIdentity = Arc<ArcSwap<ServerConfig>>;
-#[cfg(feature = "nativetls")]
-pub type TlsIdentity = Arc<ArcSwap<tokio_native_tls::TlsAcceptor>>;
-
-#[cfg(feature = "__rustls")]
 pub async fn make_tls_identity(
     cert_path: &str,
     key_path: &str,
     client_ca_path: Option<&str>,
 ) -> Result<TlsIdentity, Error> {
-    let config = rustls::make_server_config(cert_path, key_path, client_ca_path).await?;
-    Ok(Arc::new(ArcSwap::from_pointee(config)))
-}
-#[cfg(feature = "nativetls")]
-pub async fn make_tls_identity(
-    cert_path: &str,
-    key_path: &str,
-    client_ca_path: Option<&str>,
-) -> Result<TlsIdentity, Error> {
-    let identity = native::make_tls_identity(cert_path, key_path, client_ca_path).await?;
-    let raw_acceptor = native_tls::TlsAcceptor::builder(identity).build()?;
-    Ok(Arc::new(ArcSwap::from_pointee(raw_acceptor.into())))
+    let identity = make_server_config(cert_path, key_path, client_ca_path).await?;
+    Ok(Arc::new(ArcSwap::from_pointee(identity)))
 }
 
 pub async fn reload_tls_identity(
@@ -133,12 +98,7 @@ pub async fn reload_tls_identity(
     key_path: &str,
     client_ca_path: Option<&str>,
 ) -> Result<(), Error> {
-    #[cfg(feature = "__rustls")]
-    let new = rustls::make_server_config(cert_path, key_path, client_ca_path).await?;
-    #[cfg(feature = "nativetls")]
-    let new = native::make_tls_identity(cert_path, key_path, client_ca_path).await?;
-    #[cfg(feature = "nativetls")]
-    let new = native_tls::TlsAcceptor::builder(new).build()?.into();
+    let new = make_server_config(cert_path, key_path, client_ca_path).await?;
     identity.store(Arc::new(new));
     Ok(())
 }

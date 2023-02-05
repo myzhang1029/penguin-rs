@@ -56,7 +56,7 @@ pub enum Error {
 
     // These are the ones that shouldn't normally happen
     #[error("Datagram target host longer than 255 octets")]
-    DatagramHostTooLong(#[from] <Bytes as TryFrom<DatagramFrame>>::Error),
+    DatagramHostTooLong(#[from] <Vec<u8> as TryFrom<DatagramFrame>>::Error),
     #[error("Invalid frame: {0}")]
     InvalidFrame(#[from] frame::Error),
     #[error("Received `Text` message")]
@@ -172,7 +172,7 @@ where
     #[tracing::instrument(skip(self), level = "debug")]
     #[inline]
     pub async fn send_datagram(&self, frame: DatagramFrame) -> Result<(), Error> {
-        let payload: Bytes = frame.try_into()?;
+        let payload: Bytes = Vec::<u8>::try_from(frame)?.into();
         self.inner
             .ws
             .send_with(|| tungstenite::Message::Binary(payload.dupe().into()))

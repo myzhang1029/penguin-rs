@@ -110,7 +110,7 @@ impl State<'static> {
             scheme,
             authority,
             path: backend_path,
-        }) = self.backend.cloned()
+        }) = self.backend
         {
             let req_path = req.uri().path();
             let req_path_query = req
@@ -120,8 +120,8 @@ impl State<'static> {
 
             let uri = Uri::builder()
                 // `expect`: `BackendUrl` is validated by clap.
-                .scheme(scheme)
-                .authority(authority)
+                .scheme(scheme.clone())
+                .authority(authority.clone())
                 .path_and_query(format!("{}{req_path_query}", backend_path.path()))
                 .build()
                 .expect("Failed to build URI for backend (this is a bug)");

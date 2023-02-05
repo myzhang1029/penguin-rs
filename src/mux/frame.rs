@@ -107,6 +107,7 @@ impl Debug for StreamFrame {
 
 impl StreamFrame {
     /// Create a new `Syn` frame.
+    #[inline]
     pub fn new_syn(dest_host: &[u8], dest_port: u16, sport: u16, rwnd: u64) -> Self {
         let host_len = dest_host.len();
         let mut syn_payload = BytesMut::with_capacity(
@@ -124,6 +125,7 @@ impl StreamFrame {
     }
     /// Create a new `SynAck` frame.
     #[must_use]
+    #[inline]
     pub fn new_synack(sport: u16, dport: u16, rwnd: u64) -> Self {
         Self {
             sport,
@@ -134,6 +136,7 @@ impl StreamFrame {
     }
     /// Create a new `Ack` frame.
     #[must_use]
+    #[inline]
     pub fn new_ack(sport: u16, dport: u16, psh_recvd_since: u64) -> Self {
         Self {
             sport,
@@ -144,6 +147,7 @@ impl StreamFrame {
     }
     /// Create a new `Rst` frame.
     #[must_use]
+    #[inline]
     pub const fn new_rst(sport: u16, dport: u16) -> Self {
         Self {
             sport,
@@ -154,6 +158,7 @@ impl StreamFrame {
     }
     /// Create a new `Fin` frame.
     #[must_use]
+    #[inline]
     pub const fn new_fin(sport: u16, dport: u16) -> Self {
         Self {
             sport,
@@ -164,6 +169,7 @@ impl StreamFrame {
     }
     /// Create a new `Psh` frame.
     #[must_use]
+    #[inline]
     pub const fn new_psh(sport: u16, dport: u16, data: Bytes) -> Self {
         Self {
             sport,
@@ -211,6 +217,7 @@ pub enum Frame {
 impl From<StreamFrame> for Vec<u8> {
     /// Convert a `StreamFrame` to bytes.
     #[tracing::instrument(level = "trace")]
+    #[inline]
     fn from(frame: StreamFrame) -> Self {
         let size = 1
             + std::mem::size_of::<u16>()
@@ -233,6 +240,7 @@ impl TryFrom<DatagramFrame> for Vec<u8> {
 
     /// Convert a `DatagramFrame` to bytes. Gives an error when
     /// `DatagramFrame::host` is longer than 255 octets.
+    #[inline]
     fn try_from(frame: DatagramFrame) -> Result<Self, Self::Error> {
         let size = 1
             + frame.host.len()
@@ -253,6 +261,7 @@ impl TryFrom<DatagramFrame> for Vec<u8> {
 impl TryFrom<Frame> for Vec<u8> {
     type Error = TryFromIntError;
 
+    #[inline]
     fn try_from(frame: Frame) -> Result<Self, Self::Error> {
         match frame {
             Frame::Stream(frame) => Ok(frame.into()),
@@ -261,38 +270,10 @@ impl TryFrom<Frame> for Vec<u8> {
     }
 }
 
-// I thought these was automatically implemented by the compiler
-impl From<StreamFrame> for Message {
-    fn from(frame: StreamFrame) -> Self {
-        Vec::<u8>::from(frame).into()
-    }
-}
-
-impl TryFrom<DatagramFrame> for Message {
-    type Error = TryFromIntError;
-    fn try_from(frame: DatagramFrame) -> Result<Self, Self::Error> {
-        Vec::<u8>::try_from(frame).map(Into::into)
-    }
-}
-
-impl From<StreamFrame> for Bytes {
-    fn from(frame: StreamFrame) -> Self {
-        Vec::<u8>::from(frame).into()
-    }
-}
-
-impl TryFrom<DatagramFrame> for Bytes {
-    type Error = TryFromIntError;
-    fn try_from(frame: DatagramFrame) -> Result<Self, Self::Error> {
-        Vec::<u8>::try_from(frame).map(Into::into)
-    }
-}
-
-// `Message` has `From<Vec<u8>>` so it automatically have `TryFrom<Frame>`.
-
 impl TryFrom<Bytes> for StreamFrame {
     type Error = Error;
 
+    #[inline]
     fn try_from(mut data: Bytes) -> Result<Self, Self::Error> {
         let sport = data.get_u16();
         let dport = data.get_u16();
@@ -315,6 +296,7 @@ impl TryFrom<Bytes> for StreamFrame {
 }
 
 impl From<Bytes> for DatagramFrame {
+    #[inline]
     fn from(mut data: Bytes) -> Self {
         let host_len = data.get_u8();
         let host = data.split_to(host_len as usize);
@@ -329,18 +311,35 @@ impl From<Bytes> for DatagramFrame {
     }
 }
 
-impl TryFrom<Vec<u8>> for Frame {
+impl TryFrom<Bytes> for Frame {
     type Error = Error;
 
     #[tracing::instrument(skip_all, level = "trace")]
-    fn try_from(data: Vec<u8>) -> Result<Self, Self::Error> {
-        let mut data = Bytes::from(data);
+    #[inline]
+    fn try_from(mut data: Bytes) -> Result<Self, Self::Error> {
         let frame_type = data.get_u8();
         match frame_type {
             1 => Ok(Self::Stream(StreamFrame::try_from(data)?)),
             3 => Ok(Self::Datagram(DatagramFrame::from(data))),
             other => Err(Error::InvalidFrameType(other)),
         }
+    }
+}
+
+// I thought the rest was automatically implemented by the compiler.
+// Add when needed.
+impl From<StreamFrame> for Message {
+    #[inline]
+    fn from(frame: StreamFrame) -> Self {
+        Vec::<u8>::from(frame).into()
+    }
+}
+
+impl TryFrom<Vec<u8>> for Frame {
+    type Error = <Frame as TryFrom<Bytes>>::Error;
+    #[inline]
+    fn try_from(data: Vec<u8>) -> Result<Self, Self::Error> {
+        Self::try_from(Bytes::from(data))
     }
 }
 

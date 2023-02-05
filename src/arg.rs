@@ -356,14 +356,10 @@ impl FromStr for BackendUrl {
     }
 }
 
-impl ToString for BackendUrl {
-    fn to_string(&self) -> String {
-        let mut url = String::new();
-        url.push_str(self.scheme.as_str());
-        url.push_str("://");
-        url.push_str(self.authority.as_str());
-        url.push_str(self.path.as_str());
-        url
+impl std::fmt::Display for BackendUrl {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}://{}{}", self.scheme, self.authority, self.path)
     }
 }
 

@@ -1,14 +1,12 @@
 //! Based on `hyper-rustls` example
 //!
 
-use super::TlsIdentity;
+use super::{TlsIdentity, TlsIdentityInner};
 use futures_util::Future;
 use hyper::server::{
     accept::Accept,
     conn::{AddrIncoming, AddrStream},
 };
-#[cfg(feature = "__rustls")]
-use rustls::ServerConfig;
 use std::{
     io,
     pin::Pin,
@@ -40,23 +38,18 @@ pub struct TlsStream {
 }
 
 impl TlsStream {
-    #[cfg(feature = "__rustls")]
-    fn new(stream: AddrStream, config: Arc<ServerConfig>) -> TlsStream {
+    fn new(stream: AddrStream, config: Arc<TlsIdentityInner>) -> TlsStream {
+        #[cfg(feature = "__rustls")]
         let accept = tokio_rustls::TlsAcceptor::from(config).accept(stream);
-        TlsStream {
-            state: State::Handshaking(accept),
-        }
-    }
-    #[cfg(feature = "nativetls")]
-    fn new(stream: AddrStream, acceptor: Arc<tokio_native_tls::TlsAcceptor>) -> TlsStream {
-        let accept = async move {
-            acceptor
+        #[cfg(feature = "nativetls")]
+        let accept = Box::pin(async move {
+            config
                 .accept(stream)
                 .await
                 .map_err(|err| io::Error::new(io::ErrorKind::Other, err))
-        };
+        });
         TlsStream {
-            state: State::Handshaking(Box::pin(accept)),
+            state: State::Handshaking(accept),
         }
     }
 }
