@@ -4,7 +4,7 @@
 use crate::arg::ServerUrl;
 use crate::config;
 use crate::proto_version::PROTOCOL_VERSION;
-use crate::tls::make_rustls_client_config;
+use crate::tls::make_tls_connector;
 use http::header::HeaderValue;
 use thiserror::Error;
 use tokio::net::TcpStream;
@@ -67,8 +67,7 @@ pub async fn handshake(
     }
 
     let connector = if is_tls {
-        let config = make_rustls_client_config(tls_cert, tls_key, tls_ca, tls_insecure).await?;
-        Connector::Rustls(config.into())
+        make_tls_connector(tls_cert, tls_key, tls_ca, tls_insecure).await?
     } else {
         // No TLS
         warn!("Using insecure WebSocket connection");

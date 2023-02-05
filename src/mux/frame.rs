@@ -87,7 +87,6 @@ pub enum StreamFlag {
 /// Stream frame
 #[derive(Clone, PartialEq, Eq)]
 #[repr(C)]
-#[allow(clippy::module_name_repetitions)]
 pub struct StreamFrame {
     pub sport: u16,
     pub dport: u16,
@@ -177,7 +176,6 @@ impl StreamFrame {
 
 #[derive(Clone, PartialEq, Eq)]
 #[repr(C)]
-#[allow(clippy::module_name_repetitions)]
 pub struct DatagramFrame {
     /// Host of the other end
     /// host of the "remote" if sent from client;

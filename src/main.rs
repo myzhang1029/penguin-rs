@@ -2,6 +2,7 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 #![warn(missing_docs, missing_debug_implementations)]
 #![forbid(unsafe_code)]
+#![allow(clippy::module_name_repetitions)]
 
 mod arg;
 mod client;
@@ -113,3 +114,10 @@ async fn main() -> Result<(), Error> {
     }
     Ok(())
 }
+
+#[cfg(all(feature = "rustls-native-roots", feature = "rustls-webpki-roots"))]
+compile_error!("Only one of rustls-native-roots and rustls-webpki-roots can be enabled at a time");
+#[cfg(all(feature = "rustls-native-roots", feature = "nativetls"))]
+compile_error!("Only one of rustls-native-roots and nativetls can be enabled at a time");
+#[cfg(all(feature = "rustls-webpki-roots", feature = "nativetls"))]
+compile_error!("Only one of rustls-webpki-roots and nativetls can be enabled at a time");

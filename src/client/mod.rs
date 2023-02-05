@@ -76,7 +76,6 @@ impl Dupe for HandlerResources {
 
 /// Type stored in the client ID map
 #[derive(Clone, Debug)]
-#[allow(clippy::module_name_repetitions)]
 pub struct ClientIdMapEntry {
     /// The address of the client
     pub addr: SocketAddr,

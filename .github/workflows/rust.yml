@@ -23,6 +23,10 @@ jobs:
           os: ubuntu-latest
         - name: Windows
           os: windows-latest
+        tls:
+        - nativetls
+        - rustls-native-roots
+        - rustls-webpki-roots
 
     steps:
     - uses: actions/checkout@v3
@@ -41,21 +45,18 @@ jobs:
       run: cargo install grcov
 
     - name: Build
-      run: cargo build --verbose
+      run: cargo build --verbose --features ${{ matrix.tls }},tests-real-internet4 --no-default-features
       env:
         RUSTFLAGS: -Cinstrument-coverage
 
     - name: Run cargo tests
-      run: cargo test --verbose
+      run: cargo test --verbose --features ${{ matrix.tls }},tests-real-internet4 --no-default-features
       env:
         RUSTFLAGS: -Cinstrument-coverage
 
-    # Only process coverage on Linux
     - name: Process coverage data
       run: grcov . --binary-path ./target/debug/ -s . -t lcov --branch --ignore-not-existing --ignore "/*" -o lcov.info
-      if: ${{ matrix.config.os == 'ubuntu-latest' }}
 
     - uses: codecov/codecov-action@v3
       with:
         files: ./lcov.info
-      if: ${{ matrix.config.os == 'ubuntu-latest' }}

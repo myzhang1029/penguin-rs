@@ -22,6 +22,13 @@ jobs:
   rust-clippy-analyze:
     name: Run rust-clippy analyzing
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        tls:
+        - nativetls
+        - rustls-native-roots
+        - rustls-webpki-roots
     permissions:
       contents: read
       security-events: write
@@ -42,14 +49,16 @@ jobs:
       - name: Install required cargo
         run: cargo install clippy-sarif sarif-fmt
 
-      - name: Run rust-clippy
+      - name: Run rust-clippy with ${{ matrix.tls }}
         run:
           cargo clippy
-          --all-features
+          --no-default-features
+          --features ${{ matrix.tls }},tests-real-internet4,tests-real-internet6,tokio-console,deadlock_detection
           --message-format=json
           --
           -D warnings --verbose | clippy-sarif | tee rust-clippy-results.sarif | sarif-fmt
         continue-on-error: true
+
 
       - name: Upload analysis results to GitHub
         uses: github/codeql-action/upload-sarif@v1

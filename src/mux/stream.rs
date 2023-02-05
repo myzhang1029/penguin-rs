@@ -16,7 +16,6 @@ use tokio::sync::mpsc;
 use tracing::{debug, trace, warn};
 
 /// All parameters of a stream channel
-#[allow(clippy::module_name_repetitions)]
 pub struct MuxStream<S> {
     /// Receive stream frames
     pub(super) frame_rx: mpsc::Receiver<Bytes>,

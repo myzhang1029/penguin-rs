@@ -1,15 +1,14 @@
-//! TLS-related code
+//! TLS-related code for `rustls`.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use std::sync::Arc;
-
+use super::Error;
 use rustls::{
     client::{ServerCertVerified, ServerCertVerifier, ServerName},
     server::AllowAnyAuthenticatedClient,
     Certificate, ClientConfig, RootCertStore, ServerConfig,
 };
 use rustls_pemfile::Item;
-use thiserror::Error;
+use std::sync::Arc;
 
 /// Skip TLS verification
 pub struct EmptyVerifier;
@@ -28,22 +27,7 @@ impl ServerCertVerifier for EmptyVerifier {
     }
 }
 
-/// Error type for TLS configuration
-#[derive(Error, Debug)]
-pub enum Error {
-    #[error("Error reading certificate, key, or CA: {0}")]
-    ReadCert(#[from] std::io::Error),
-    #[error("Empty client certificate store")]
-    EmptyClientCertStore,
-    #[error("Failed to parse CA store: {0}")]
-    CaStoreParse(#[from] webpki::Error),
-    #[error("Rustls error: {0}")]
-    Rustls(#[from] rustls::Error),
-    #[error("Unsupported private key type")]
-    PrivateKeyNotSupported,
-}
-
-pub async fn make_rustls_server_config(
+pub async fn make_server_config(
     cert_path: &str,
     key_path: &str,
     client_ca_path: Option<&str>,
@@ -67,7 +51,7 @@ pub async fn make_rustls_server_config(
     Ok(config)
 }
 
-pub async fn make_rustls_client_config(
+pub async fn make_client_config(
     cert_path: Option<&str>,
     key_path: Option<&str>,
     ca_path: Option<&str>,
@@ -103,7 +87,8 @@ fn get_system_certs() -> Result<RootCertStore, Error> {
     }
     Ok(roots)
 }
-#[cfg(all(feature = "rustls-native-roots", not(feature = "rustls-native-roots")))]
+#[cfg(feature = "rustls-webpki-roots")]
+#[allow(clippy::unnecessary_wraps)]
 fn get_system_certs() -> Result<RootCertStore, Error> {
     let mut roots = RootCertStore::empty();
     roots.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
@@ -223,7 +208,7 @@ mod test {
         let crt_key = custom_crt.serialize_private_key_pem();
         tokio::fs::write(&cert_path, crt).await.unwrap();
         tokio::fs::write(&key_path, crt_key).await.unwrap();
-        let config = make_rustls_server_config(
+        let config = make_server_config(
             cert_path.to_str().unwrap(),
             key_path.to_str().unwrap(),
             None,
@@ -244,7 +229,7 @@ mod test {
         tokio::fs::write(&ca_path, custom_ca.serialize_pem().unwrap())
             .await
             .unwrap();
-        let config = make_rustls_client_config(None, None, Some(ca_path.to_str().unwrap()), true)
+        let config = make_client_config(None, None, Some(ca_path.to_str().unwrap()), true)
             .await
             .unwrap();
         assert_eq!(

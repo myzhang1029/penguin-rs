@@ -31,7 +31,6 @@ use tokio_tungstenite::WebSocketStream;
 use tracing::{error, trace, warn};
 
 pub use frame::{DatagramFrame, Frame, StreamFlag, StreamFrame};
-#[allow(clippy::module_name_repetitions)]
 pub use stream::MuxStream;
 pub use tungstenite::protocol::Role;
 

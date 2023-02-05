@@ -1,16 +1,15 @@
 use super::*;
 use crate::{arg::ServerUrl, parse_remote::Remote};
-use once_cell::sync::Lazy;
+use once_cell::sync::{Lazy, OnceCell};
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     str::FromStr,
     time::Duration,
 };
-#[cfg(any(feature = "tests-real-internet4", feature = "tests-real-internet6"))]
-use tokio::net::UdpSocket;
+use tempfile::TempDir;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream},
+    net::{TcpListener, TcpStream, UdpSocket},
 };
 
 #[ctor::ctor]
@@ -69,6 +68,22 @@ fn make_client_args(servhost: &str, servport: u16, remotes: Vec<Remote>) -> arg:
     }
 }
 
+/// Generate a self-signed server cert into a temporary directory.
+/// Returns the path to the directory. The cert is named `cert.pem` and the key is named `privkey.pem`.
+async fn make_server_cert() -> TempDir {
+    let mut cert_params = rcgen::CertificateParams::new(vec!["localhost".to_string()]);
+    cert_params.alg = &rcgen::PKCS_ECDSA_P384_SHA384;
+    let dir = tempfile::tempdir().unwrap();
+    let dir_path = dir.path().to_str().unwrap();
+    let cert_path = format!("{}/cert.pem", dir_path);
+    let key_path = format!("{}/privkey.pem", dir_path);
+    let cert = rcgen::Certificate::from_params(cert_params).unwrap();
+    let key = cert.serialize_private_key_pem();
+    let cert = cert.serialize_pem().unwrap();
+    tokio::fs::write(&cert_path, cert).await.unwrap();
+    tokio::fs::write(&key_path, key).await.unwrap();
+    dir
+}
 #[tokio::test]
 async fn test_it_works() {
     static SERVER_ARGS: Lazy<arg::ServerArgs> = Lazy::new(|| make_server_args("127.0.0.1", 30554));
@@ -129,6 +144,58 @@ async fn test_it_works_v6() {
     let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
     tokio::time::sleep(Duration::from_secs(2)).await;
     let mut sock = TcpStream::connect("[::1]:20246").await.unwrap();
+    sock.write_all(&input_bytes).await.unwrap();
+    sock.shutdown().await.unwrap();
+    let output_bytes = second_task.await.unwrap();
+    assert_eq!(input_bytes, output_bytes);
+    server_task.abort();
+    client_task.abort();
+}
+
+#[tokio::test]
+// These platforms' native TLS implementations don't work well with self-signed certs.
+#[cfg(not(all(any(target_os = "macos", target_os = "windows"), feature = "nativetls")))]
+async fn test_it_works_tls_simple() {
+    static SERVER_ARGS: OnceCell<arg::ServerArgs> = OnceCell::new();
+    static CLIENT_ARGS: Lazy<arg::ClientArgs> = Lazy::new(|| arg::ClientArgs {
+        server: ServerUrl::from_str(&format!("wss://127.0.0.1:20353/ws")).unwrap(),
+        remote: vec![Remote::from_str("127.0.0.1:24368:127.0.0.1:12034").unwrap()],
+        ws_psk: None,
+        keepalive: 0,
+        max_retry_count: 10,
+        max_retry_interval: 10,
+        proxy: None,
+        header: vec![],
+        tls_ca: None,
+        tls_cert: None,
+        tls_key: None,
+        tls_skip_verify: true,
+        hostname: Some(http::HeaderValue::from_static("localhost")),
+        _pid: false,
+        _fingerprint: None,
+        _auth: None,
+    });
+
+    let mut serv_cfg = make_server_args("127.0.0.1", 20353);
+    let cert_dir = make_server_cert().await;
+    serv_cfg.tls_cert = Some(format!("{}/cert.pem", cert_dir.path().display()));
+    serv_cfg.tls_key = Some(format!("{}/privkey.pem", cert_dir.path().display()));
+    SERVER_ARGS.set(serv_cfg).unwrap();
+
+    let input_bytes: Vec<u8> = (0..(1024 * 1024)).map(|_| rand::random::<u8>()).collect();
+    let input_len = input_bytes.len();
+    let second_task = tokio::spawn(async move {
+        let listener = TcpListener::bind("127.0.0.1:12034").await.unwrap();
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut output_bytes = vec![0u8; input_len];
+        stream.read_exact(&mut output_bytes).await.unwrap();
+        output_bytes
+    });
+
+    let client_task = tokio::spawn(crate::client::client_main(&CLIENT_ARGS));
+    let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS.get().unwrap()));
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let mut sock = TcpStream::connect("127.0.0.1:24368").await.unwrap();
     sock.write_all(&input_bytes).await.unwrap();
     sock.shutdown().await.unwrap();
     let output_bytes = second_task.await.unwrap();
