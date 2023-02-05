@@ -6,6 +6,7 @@ mod service;
 mod websocket;
 
 use crate::arg::ServerArgs;
+use crate::dupe::Dupe;
 use crate::tls::{make_tls_identity, reload_tls_identity, TlsAcceptor, TlsIdentity};
 use hyper::server::conn::AddrIncoming;
 use hyper::upgrade::Upgraded;

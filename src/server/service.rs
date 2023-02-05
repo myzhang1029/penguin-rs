@@ -288,14 +288,120 @@ mod test {
         assert_eq!(actual, expected);
     }
 
+    #[tokio::test]
+    async fn test_obfs_or_not() {
+        // Test `/health` without obfuscation
+        let mut state = State {
+            ws_psk: None,
+            backend: None,
+            not_found_resp: "not found in the test",
+            obfs: false,
+            client: Arc::new(Client::builder().build(make_client_https())),
+        };
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("http://example.com/health")
+            .body(Body::empty())
+            .unwrap();
+        let resp = state.call(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body_bytes = hyper::body::to_bytes(resp.into_body()).await.unwrap();
+        assert_eq!(body_bytes, "OK");
+        // Test `/health` with obfuscation
+        let mut state = State {
+            ws_psk: None,
+            backend: None,
+            not_found_resp: "not found in the test",
+            obfs: true,
+            client: Arc::new(Client::builder().build(make_client_https())),
+        };
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("http://example.com/health")
+            .body(Body::empty())
+            .unwrap();
+        let resp = state.call(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let body_bytes = hyper::body::to_bytes(resp.into_body()).await.unwrap();
+        assert_eq!(body_bytes, "not found in the test");
+        // Test `/version` without obfuscation
+        let mut state = State {
+            ws_psk: None,
+            backend: None,
+            not_found_resp: "not found in the test",
+            obfs: false,
+            client: Arc::new(Client::builder().build(make_client_https())),
+        };
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("http://example.com/version")
+            .body(Body::empty())
+            .unwrap();
+        let resp = state.call(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body_bytes = hyper::body::to_bytes(resp.into_body()).await.unwrap();
+        assert_eq!(body_bytes, env!("CARGO_PKG_VERSION"));
+        // Test `/version` with obfuscation
+        let mut state = State {
+            ws_psk: None,
+            backend: None,
+            not_found_resp: "not found in the test",
+            obfs: true,
+            client: Arc::new(Client::builder().build(make_client_https())),
+        };
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("http://example.com/health")
+            .body(Body::empty())
+            .unwrap();
+        let resp = state.call(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let body_bytes = hyper::body::to_bytes(resp.into_body()).await.unwrap();
+        assert_eq!(body_bytes, "not found in the test");
+    }
+
     #[cfg(any(feature = "tests-real-internet4", feature = "tests-real-internet6"))]
     #[tokio::test]
-    async fn test_stealth_websocket_upgrade_from_request_parts() {
+    async fn test_backend() {
         use once_cell::sync::Lazy;
         use std::str::FromStr;
         static BACKEND: Lazy<BackendUrl> =
-            Lazy::new(|| BackendUrl::from_str("http://example.com").unwrap());
-        let state = State {
+            Lazy::new(|| BackendUrl::from_str("http://httpbin.org").unwrap());
+        // Test that the backend is actually working
+        let mut state = State {
+            ws_psk: None,
+            backend: Some(&BACKEND),
+            not_found_resp: "not found in the test",
+            obfs: false,
+            client: Arc::new(Client::builder().build(make_client_https())),
+        };
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("http://example.com/status/200")
+            .body(Body::empty())
+            .unwrap();
+        let resp = state.call(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let mut state = State {
+            ws_psk: None,
+            backend: Some(&BACKEND),
+            not_found_resp: "not found in the test",
+            obfs: false,
+            client: Arc::new(Client::builder().build(make_client_https())),
+        };
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("http://example.com/status/418")
+            .body(Body::empty())
+            .unwrap();
+        let resp = state.call(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::IM_A_TEAPOT);
+    }
+
+    #[tokio::test]
+    async fn test_stealth_websocket_upgrade_from_request_parts() {
+        // Test missing upgrade header
+        let mut state = State {
             ws_psk: None,
             backend: None,
             not_found_resp: "not found in the test",
@@ -310,14 +416,32 @@ mod test {
             .header("sec-websocket-protocol", &WANTED_PROTOCOL)
             .body(Body::empty())
             .unwrap();
-        let result = state.ws_handler(req).await.unwrap();
-        let (parts, body) = result.into_parts();
-        assert_eq!(parts.status, StatusCode::NOT_FOUND);
-        let body_content = hyper::body::to_bytes(body).await.unwrap();
-        assert_eq!(
-            body_content,
-            bytes::Bytes::from_static(b"not found in the test")
-        );
-        // Can't really test the rest because we need to have a `OnUpgrade`.
+        let result = state.call(req).await.unwrap();
+        assert_eq!(result.status(), StatusCode::NOT_FOUND);
+        let body_bytes = hyper::body::to_bytes(result.into_body()).await.unwrap();
+        assert_eq!(body_bytes, "not found in the test");
+        // Test wrong PSK
+        static PSK: HeaderValue = HeaderValue::from_static("correct PSK");
+        let mut state = State {
+            ws_psk: Some(&PSK),
+            backend: None,
+            not_found_resp: "not found in the test",
+            obfs: false,
+            client: Arc::new(Client::builder().build(make_client_https())),
+        };
+        let req = Request::builder()
+            .method(Method::GET)
+            .header("connection", "UpGrAdE")
+            .header("upgrade", "WEBSOCKET")
+            .header("sec-websocket-version", "13")
+            .header("sec-websocket-protocol", &WANTED_PROTOCOL)
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .header("x-penguin-psk", "wrong PSK")
+            .body(Body::empty())
+            .unwrap();
+        let result = state.call(req).await.unwrap();
+        assert_eq!(result.status(), StatusCode::NOT_FOUND);
+        let body_bytes = hyper::body::to_bytes(result.into_body()).await.unwrap();
+        assert_eq!(body_bytes, "not found in the test");
     }
 }
