@@ -176,6 +176,7 @@ async fn test_it_works_tls_simple() {
         tls_key: None,
         tls_skip_verify: true,
         hostname: Some(http::HeaderValue::from_static("localhost")),
+        channel_timeout: 10,
         _pid: false,
         _fingerprint: None,
         _auth: None,
