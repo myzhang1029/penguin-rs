@@ -2,12 +2,10 @@
 //! Pipes TCP streams or forwards UDP Datagrams to and from another host.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use std::net::SocketAddr;
-
-use crate::config;
-use crate::dupe::Dupe;
-use crate::mux::DatagramFrame;
+use crate::{config, Dupe};
 use bytes::BytesMut;
+use penguin_mux::DatagramFrame;
+use std::net::SocketAddr;
 use thiserror::Error;
 use tokio::net::TcpStream;
 use tokio::{

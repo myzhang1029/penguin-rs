@@ -14,9 +14,9 @@ use tracing::{error, info, warn};
 
 /// Request a channel from the mux
 #[inline]
-#[tracing::instrument(skip(stream_command_tx), level = "debug")]
+#[tracing::instrument(skip(stream_command_tx_permit), level = "debug")]
 pub(super) async fn request_tcp_channel(
-    stream_command_tx: &mpsc::Sender<StreamCommand>,
+    stream_command_tx_permit: mpsc::Permit<'_, StreamCommand>,
     dest_host: Vec<u8>,
     dest_port: u16,
 ) -> Result<MuxStream, Error> {
@@ -26,10 +26,7 @@ pub(super) async fn request_tcp_channel(
         host: dest_host,
         port: dest_port,
     };
-    stream_command_tx
-        .send(stream_request)
-        .await
-        .map_err(|_| Error::RequestStream)?;
+    stream_command_tx_permit.send(stream_request);
     Ok(rx.await?)
 }
 
@@ -57,11 +54,18 @@ pub(super) async fn handle_tcp(
 ) -> Result<(), Error> {
     let listener = open_tcp_listener(lhost, lport).await?;
     loop {
+        let stream_command_tx_permit = handler_resources
+            .stream_command_tx
+            .reserve()
+            .await
+            .map_err(|_| Error::RequestStream)?;
+        // Only `accept` when we have a permit to send a request.
+        // This way, the backpressure is propagated to the TCP listener.
         let (mut tcp_stream, _) = listener.accept().await?;
         // A new channel is created for each incoming TCP connection.
         // It's already TCP, anyways.
         let mut channel = super::complete_or_continue!(
-            request_tcp_channel(&handler_resources.stream_command_tx, rhost.into(), rport).await
+            request_tcp_channel(stream_command_tx_permit, rhost.into(), rport).await
         );
         tokio::spawn(async move {
             if let Err(error) = tokio::io::copy_bidirectional(&mut channel, &mut tcp_stream).await {
@@ -82,8 +86,13 @@ pub async fn handle_tcp_stdio(
     let mut stdout = tokio::io::stdout();
     // We want `loop` to be able to continue after a connection failure
     loop {
+        let stream_command_tx_permit = handler_resources
+            .stream_command_tx
+            .reserve()
+            .await
+            .map_err(|_| Error::RequestStream)?;
         let channel = super::complete_or_continue!(
-            request_tcp_channel(&handler_resources.stream_command_tx, rhost.into(), rport).await
+            request_tcp_channel(stream_command_tx_permit, rhost.into(), rport).await
         );
         let (channel_rx, channel_tx) = tokio::io::split(channel);
         let channel_rx = BufReader::new(channel_rx);

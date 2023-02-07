@@ -4,9 +4,9 @@
 use super::super::MaybeRetryableError;
 use super::Error;
 use crate::client::{ClientIdMapEntry, HandlerResources};
-use crate::dupe::Dupe;
-use crate::mux::{DatagramFrame, IntKey};
+use crate::Dupe;
 use bytes::{Bytes, BytesMut};
+use penguin_mux::{DatagramFrame, IntKey};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::UdpSocket;

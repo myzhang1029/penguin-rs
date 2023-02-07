@@ -7,10 +7,10 @@ pub mod ws_connect;
 
 use crate::arg::ClientArgs;
 use crate::config;
-use crate::dupe::Dupe;
-use crate::mux::{DatagramFrame, Multiplexor, Role};
+use crate::Dupe;
 use handle_remote::handle_remote;
 use maybe_retryable::MaybeRetryableError;
+use penguin_mux::{DatagramFrame, Multiplexor, Role};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -33,12 +33,12 @@ pub enum Error {
     #[error("Maximum retry count reached")]
     MaxRetryCountReached,
     #[error(transparent)]
-    Mux(#[from] crate::mux::Error),
+    Mux(#[from] penguin_mux::Error),
     #[error("Remote handler exited: {0}")]
     RemoteHandlerExited(#[from] handle_remote::Error),
 }
 
-type MuxStream = crate::mux::MuxStream<MaybeTlsStream<TcpStream>>;
+type MuxStream = penguin_mux::MuxStream<MaybeTlsStream<TcpStream>>;
 
 // Send the information about how to send the stream to the listener
 /// Type that local listeners send to the main loop to request a connection
@@ -213,9 +213,16 @@ async fn on_connected(
     let mut mux = Multiplexor::new(ws_stream, Role::Client, keepalive_duration);
     info!("Connected to server");
     loop {
+        // TODO: this can block when we are filled with requests
+        // `expect`: we should never fail to get a permit because the
+        // receiver is always in scope here.
+        let stream_command_tx_permit = stream_command_tx
+            .reserve()
+            .await
+            .expect("failed to put back command (this is a bug)");
         tokio::select! {
             Some(sender) = stream_command_rx.recv() => {
-                if !get_send_stream_chan_or_put_back(&mut mux, sender, stream_command_tx).await? {
+                if !get_send_stream_chan_or_put_back(&mut mux, sender, stream_command_tx_permit).await? {
                     break;
                 }
             }
@@ -224,7 +231,7 @@ async fn on_connected(
                     error!("{e}");
                 }
             }
-            Some(dgram_frame) = mux.get_datagram() => {
+            Ok(dgram_frame) = mux.get_datagram() => {
                 let client_id = dgram_frame.sid;
                 let data = dgram_frame.data;
                 if client_id == 0 {
@@ -273,8 +280,8 @@ async fn on_connected(
 async fn get_send_stream_chan_or_put_back(
     mux: &mut Multiplexor<MaybeTlsStream<TcpStream>>,
     stream_command: StreamCommand,
-    stream_command_tx: &mut mpsc::Sender<StreamCommand>,
-) -> Result<bool, crate::mux::Error> {
+    stream_command_tx_permit: mpsc::Permit<'_, StreamCommand>,
+) -> Result<bool, penguin_mux::Error> {
     trace!("requesting a new TCP channel");
     match mux
         .client_new_stream_channel(&stream_command.host, stream_command.port)
@@ -292,13 +299,7 @@ async fn get_send_stream_chan_or_put_back(
             if e.retryable() {
                 warn!("Connection error: {e}");
                 // Put the command back so we can retry
-                // `expect`: we should never fail to put back a command because the
-                // receiver is always in scope when `get_send_stream_chan_or_put_back`
-                // is called.
-                stream_command_tx
-                    .send(stream_command)
-                    .await
-                    .expect("failed to put back command (this is a bug)");
+                stream_command_tx_permit.send(stream_command);
                 Ok(false)
             } else {
                 error!("Connection error: {e}");

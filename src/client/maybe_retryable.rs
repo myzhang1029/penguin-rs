@@ -46,7 +46,7 @@ impl MaybeRetryableError for tungstenite::Error {
     }
 }
 
-impl MaybeRetryableError for crate::mux::Error {
+impl MaybeRetryableError for penguin_mux::Error {
     fn retryable(&self) -> bool {
         match self {
             Self::SendDatagram(e)

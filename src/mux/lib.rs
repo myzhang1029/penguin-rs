@@ -4,7 +4,10 @@
 //! It is tailored to the needs of `penguin`.
 //!
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
+#![deny(missing_docs, missing_debug_implementations)]
 
+mod config;
+pub mod dupe;
 mod frame;
 mod inner;
 mod locked_sink;
@@ -12,9 +15,8 @@ mod stream;
 #[cfg(test)]
 mod test;
 
-use crate::config;
-use crate::dupe::Dupe;
 use bytes::Bytes;
+use dupe::Dupe;
 use inner::MultiplexorInner;
 use rand::distributions::uniform::SampleUniform;
 use rand::Rng;
@@ -36,36 +38,56 @@ pub use tungstenite::protocol::Role;
 /// Multiplexor error
 #[derive(Debug, Error)]
 pub enum Error {
+    /// Requester exited before receiving the stream
+    /// (i.e. the `Receiver` was dropped before the task could send the stream)
     #[error("Requester exited before receiving the stream")]
     SendStreamToClient,
+    /// When
     #[error("Mux is already closed")]
     Closed,
 
     // These are tungstenite errors separated by their origin
+    /// Tungstenite error when polling the next message
     #[error("Failed to receive message: {0}")]
     Next(tungstenite::Error),
+    /// Tungstenite error when flushing messages
     #[error("Failed to flush messages: {0}")]
     Flush(tungstenite::Error),
+    /// Tungstenite error when sending a datagram
     #[error("Failed to send datagram: {0}")]
     SendDatagram(tungstenite::Error),
+    /// Tungstenite error when sending a stream frame
     #[error("Failed to send stream frame: {0}")]
     SendStreamFrame(tungstenite::Error),
+    /// Tungstenite error when sending a ping
     #[error("Failed to send ping: {0}")]
     SendPing(tungstenite::Error),
 
     // These are the ones that shouldn't normally happen
+    /// Datagram target host longer than 255 octets
     #[error("Datagram target host longer than 255 octets")]
     DatagramHostTooLong(#[from] <Vec<u8> as TryFrom<DatagramFrame>>::Error),
+    /// Received an invalid frame
     #[error("Invalid frame: {0}")]
     InvalidFrame(#[from] frame::Error),
+    /// The peer sent a `Text` message
+    /// "The client and server MUST NOT use other WebSocket data frame types"
     #[error("Received `Text` message")]
     TextMessage,
+    /// A `SynAck` frame was received by the server:
+    /// "clients MUST NOT send `SynAck` frames"
     #[error("Server received `SynAck` frame")]
     ServerReceivedSynAck,
+    /// A `Syn` frame was received by the client
+    /// "Servers MUST NOT send `Syn` frames"
     #[error("Client received `Syn` frame")]
     ClientReceivedSyn,
 }
 
+/// A variant of `std::result::Result` with `Error` as the error type
+pub type Result<T> = std::result::Result<T, Error>;
+
+/// A multiplexor over a `WebSocket` connection
 #[derive(Debug)]
 pub struct Multiplexor<S> {
     inner: MultiplexorInner<S>,
@@ -115,11 +137,7 @@ where
 
     /// Request a channel for `host` and `port`
     #[tracing::instrument(skip(self), level = "debug")]
-    pub async fn client_new_stream_channel(
-        &self,
-        host: &[u8],
-        port: u16,
-    ) -> Result<MuxStream<S>, Error> {
+    pub async fn client_new_stream_channel(&self, host: &[u8], port: u16) -> Result<MuxStream<S>> {
         assert_eq!(self.inner.role, Role::Client);
         // Allocate a new port
         let sport = u16::next_available_key(&*self.inner.streams.read().await);
@@ -142,30 +160,52 @@ where
             .await
             .recv()
             .await
+            // Happens if the task exits before sending the stream,
+            // thus `Closed` is the correct error
             .ok_or(Error::Closed)?;
         Ok(stream)
     }
 
     /// Get the next available stream channel
-    /// Returns `None` if the connection is closed
+    ///
+    /// # Errors
+    /// Returns `Error::Closed` if the connection is closed
     #[tracing::instrument(skip(self), level = "debug")]
-    pub async fn server_new_stream_channel(&self) -> Option<MuxStream<S>> {
+    pub async fn server_new_stream_channel(&self) -> Result<MuxStream<S>> {
         assert_eq!(self.inner.role, Role::Server);
-        self.stream_rx.write().await.recv().await
+        self.stream_rx
+            .write()
+            .await
+            .recv()
+            .await
+            .ok_or(Error::Closed)
     }
 
     /// Get the next available datagram
-    /// Returns `None` if the connection is closed
+    ///
+    /// # Errors
+    /// Returns `Error::Closed` if the connection is closed
     #[tracing::instrument(skip(self), level = "debug")]
     #[inline]
-    pub async fn get_datagram(&self) -> Option<DatagramFrame> {
-        self.datagram_rx.write().await.recv().await
+    pub async fn get_datagram(&self) -> Result<DatagramFrame> {
+        self.datagram_rx
+            .write()
+            .await
+            .recv()
+            .await
+            .ok_or(Error::Closed)
     }
 
     /// Send a datagram
+    ///
+    /// # Errors
+    /// - Returns `Error::DatagramHostTooLong` if the destination host is
+    /// longer than 255 octets.
+    /// - Returns `Error::SendDatagram` if the datagram could not be sent
+    /// due to a `tungstenite::Error`.
     #[tracing::instrument(skip(self), level = "debug")]
     #[inline]
-    pub async fn send_datagram(&self, frame: DatagramFrame) -> Result<(), Error> {
+    pub async fn send_datagram(&self, frame: DatagramFrame) -> Result<()> {
         let payload: Bytes = Vec::<u8>::try_from(frame)?.into();
         self.inner
             .ws

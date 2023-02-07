@@ -66,7 +66,7 @@ pub enum Error {
     InvalidStreamFlag(u8),
 }
 
-/// Stream frame flags
+/// Stream frame types
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
 pub enum StreamFlag {
@@ -85,12 +85,17 @@ pub enum StreamFlag {
 }
 
 /// Stream frame
+/// See PROTOCOL.md for details.
 #[derive(Clone, PartialEq, Eq)]
 #[repr(C)]
 pub struct StreamFrame {
+    /// Source port (2 bytes)
     pub sport: u16,
+    /// Destination port (2 bytes)
     pub dport: u16,
+    /// Frame type (1 byte)
     pub flag: StreamFlag,
+    /// Data
     pub data: Bytes,
 }
 
@@ -180,17 +185,22 @@ impl StreamFrame {
     }
 }
 
+/// Datagram frame.
+/// See PROTOCOL.md for details.
 #[derive(Clone, PartialEq, Eq)]
 #[repr(C)]
 pub struct DatagramFrame {
-    /// Host of the other end
+    /// Target host:
+    /// Host of the forwarding target
     /// host of the "remote" if sent from client;
     /// host of the "from" if sent from server.
     pub host: Bytes,
+    /// Target port:
+    /// Port of the forwarding target
     pub port: u16,
-    /// Source ID
+    /// User ID (4 bytes)
     pub sid: u32,
-    /// Payload
+    /// Data
     pub data: Bytes,
 }
 
@@ -205,6 +215,8 @@ impl Debug for DatagramFrame {
     }
 }
 
+/// Frame
+/// See PROTOCOL.md for details.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[repr(C)]
 pub enum Frame {

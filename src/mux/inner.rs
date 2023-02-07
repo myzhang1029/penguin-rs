@@ -1,12 +1,12 @@
 //! Client side of the multiplexor
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
+use super::config;
+use super::dupe::Dupe;
 use super::frame::{DatagramFrame, Frame, StreamFlag, StreamFrame};
 use super::locked_sink::LockedWebSocket;
 use super::stream::MuxStream;
-use super::{Error, IntKey, Role};
-use crate::config;
-use crate::dupe::Dupe;
+use super::{Error, IntKey, Result, Role};
 use bytes::{Buf, Bytes};
 use futures_util::task::AtomicWaker;
 use std::collections::HashMap;
@@ -20,7 +20,7 @@ use tracing::{debug, error, trace, warn};
 use tungstenite::Message;
 
 #[derive(Debug)]
-pub(super) struct MuxStreamData {
+pub struct MuxStreamData {
     /// Channel for sending data to `MuxStream`'s `AsyncRead`
     sender: mpsc::Sender<Bytes>,
     /// Whether writes should succeed.
@@ -36,25 +36,25 @@ pub(super) struct MuxStreamData {
 }
 
 /// Multiplexor inner
-pub(super) struct MultiplexorInner<S> {
+pub struct MultiplexorInner<S> {
     /// The role of this multiplexor
-    pub(super) role: Role,
+    pub role: Role,
     /// The underlying `Sink + Stream` of messages.
-    pub(super) ws: LockedWebSocket<S>,
+    pub ws: LockedWebSocket<S>,
     /// Interval between keepalive `Ping`s
-    pub(super) keepalive_interval: Option<std::time::Duration>,
+    pub keepalive_interval: Option<std::time::Duration>,
     /// Open stream channels: our_port -> `MuxStreamData`
-    pub(super) streams: Arc<RwLock<HashMap<u16, MuxStreamData>>>,
+    pub streams: Arc<RwLock<HashMap<u16, MuxStreamData>>>,
     /// Channel for notifying the task of a dropped `MuxStream`
     /// (in the form (our_port, their_port)).
     /// Sending (0, _) means that the multiplexor is being dropped and the
     /// task should exit.
     /// The reason we need `their_port` is to ensure the connection is `Rst`ed
     /// if the user did not call `poll_shutdown` on the `MuxStream`.
-    pub(super) dropped_ports_tx: mpsc::UnboundedSender<(u16, u16)>,
+    pub dropped_ports_tx: mpsc::UnboundedSender<(u16, u16)>,
     /// Channel for queuing `Ack` frames to be sent
     /// (in the form (our_port, their_port, psh_recvd_since)).
-    pub(super) ack_tx: mpsc::UnboundedSender<(u16, u16, u64)>,
+    pub ack_tx: mpsc::UnboundedSender<(u16, u16, u64)>,
 }
 
 impl<S> std::fmt::Debug for MultiplexorInner<S> {
@@ -213,7 +213,7 @@ where
         msg: Message,
         datagram_tx: &mut mpsc::Sender<DatagramFrame>,
         stream_tx: &mut mpsc::Sender<MuxStream<S>>,
-    ) -> Result<bool, Error> {
+    ) -> Result<bool> {
         match msg {
             Message::Binary(data) => {
                 let frame = data.try_into()?;
@@ -283,7 +283,7 @@ where
         &self,
         stream_frame: StreamFrame,
         stream_tx: &mut mpsc::Sender<MuxStream<S>>,
-    ) -> Result<(), Error> {
+    ) -> Result<()> {
         let StreamFrame {
             dport: our_port,
             sport: their_port,
@@ -392,7 +392,7 @@ where
         dest_port: u16,
         peer_rwnd: u64,
         stream_tx: &mut mpsc::Sender<MuxStream<S>>,
-    ) -> Result<(), Error> {
+    ) -> Result<()> {
         // `tx` is our end, `rx` is the user's end
         let (frame_tx, frame_rx) = mpsc::channel(config::STREAM_FRAME_BUFFER_SIZE);
         let can_write = Arc::new(AtomicBool::new(true));

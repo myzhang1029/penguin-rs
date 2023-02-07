@@ -1,5 +1,6 @@
-//! Inspired by facebook/gazebo's `Dupe`
+//! Inspired by facebook/gazebo's `Dupe`.
 
+/// Marker trait for types that can be cheaply cloned.
 pub trait Dupe: Clone {
     /// A cheap clone of the object.
     #[inline]

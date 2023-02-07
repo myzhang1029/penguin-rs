@@ -7,8 +7,6 @@
 mod arg;
 mod client;
 mod config;
-mod dupe;
-mod mux;
 mod parse_remote;
 mod proto_version;
 mod server;
@@ -20,6 +18,8 @@ use thiserror::Error;
 use tracing::{error, trace};
 #[cfg(not(feature = "tokio-console"))]
 use tracing_subscriber::{filter, fmt, prelude::*, reload};
+
+pub use penguin_mux::dupe::Dupe;
 
 /// Errors
 #[derive(Debug, Error)]

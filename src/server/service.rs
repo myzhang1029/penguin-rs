@@ -4,9 +4,9 @@
 use super::websocket::handle_websocket;
 use crate::arg::BackendUrl;
 use crate::config;
-use crate::dupe::Dupe;
 use crate::proto_version::PROTOCOL_VERSION;
 use crate::tls::make_client_https;
+use crate::Dupe;
 use base64::engine::general_purpose::STANDARD as B64_STANDARD_ENGINE;
 use base64::Engine;
 use http::{header, HeaderValue, Method, Request, Response, StatusCode, Uri};

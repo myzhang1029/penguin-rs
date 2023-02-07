@@ -3,15 +3,16 @@
 
 use super::tcp::{open_tcp_listener, request_tcp_channel};
 use super::{pipe_streams, Error, HandlerResources};
-use crate::client::ClientIdMapEntry;
-use crate::dupe::Dupe;
-use crate::mux::{DatagramFrame, IntKey};
+use crate::client::{ClientIdMapEntry, StreamCommand};
+use crate::Dupe;
 use bytes::{Buf, Bytes, BytesMut};
+use penguin_mux::{DatagramFrame, IntKey};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, BufWriter};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::UdpSocket;
+use tokio::sync::mpsc;
 use tracing::{debug, info, trace, warn};
 
 macro_rules! v5_reply {
@@ -145,7 +146,20 @@ where
     debug!("SOCKSv4 request for {}:{} from {:?}", rhost, rport, user_id);
     if command == 0x01 {
         // CONNECT
-        handle_connect(breader, bwriter, &rhost, rport, handler_resources, false).await
+        let stream_command_tx_permit = handler_resources
+            .stream_command_tx
+            .reserve()
+            .await
+            .map_err(|_| Error::RequestStream)?;
+        handle_connect(
+            breader,
+            bwriter,
+            &rhost,
+            rport,
+            stream_command_tx_permit,
+            false,
+        )
+        .await
     } else {
         warn!("invalid or unsupported SOCKSv4 command {command}");
         bwriter.write_all(v4_reply!(0x5b)).await?;
@@ -243,7 +257,20 @@ where
     match command {
         0x01 => {
             // CONNECT
-            handle_connect(breader, bwriter, &rhost, rport, handler_resources, true).await
+            let stream_command_tx_permit = handler_resources
+                .stream_command_tx
+                .reserve()
+                .await
+                .map_err(|_| Error::RequestStream)?;
+            handle_connect(
+                breader,
+                bwriter,
+                &rhost,
+                rport,
+                stream_command_tx_permit,
+                true,
+            )
+            .await
         }
         0x02 => {
             // BIND
@@ -279,7 +306,7 @@ async fn handle_connect<R, W>(
     mut writer: W,
     rhost: &str,
     rport: u16,
-    handler_resources: &HandlerResources,
+    stream_command_tx_permit: mpsc::Permit<'_, StreamCommand>,
     version_is_5: bool,
 ) -> Result<(), Error>
 where
@@ -287,8 +314,7 @@ where
     W: AsyncWrite + Unpin,
 {
     // Establish a connection to the remote host
-    let channel_request =
-        request_tcp_channel(&handler_resources.stream_command_tx, rhost.into(), rport).await;
+    let channel_request = request_tcp_channel(stream_command_tx_permit, rhost.into(), rport).await;
     let channel = if version_is_5 {
         let channel = exec_or_ret_err_v5!(channel_request, "cannot get channel", &mut writer);
         // Send back a successful response
