@@ -23,7 +23,7 @@ fn test_setup_log() {
         .with_timer(fmt::time::time())
         .with_writer(std::io::stderr);
     tracing_subscriber::registry()
-        .with(filter::LevelFilter::DEBUG)
+        .with(filter::LevelFilter::WARN)
         .with(fmt_layer)
         .init();
 }
@@ -537,7 +537,10 @@ async fn test_it_works_dns_v4() {
     let expected = b"\x37\x0a\x81\x80\x00\x01";
     sock.send_to(request, "127.0.0.1:20326").await.unwrap();
     let mut buf = [0u8; 1024];
-    sock.recv_from(&mut buf).await.unwrap();
+    tokio::time::timeout(config::UDP_PRUNE_TIMEOUT, sock.recv_from(&mut buf))
+        .await
+        .expect("Timed out waiting for DNS response")
+        .unwrap();
     assert_eq!(&buf[..6], expected);
     server_task.abort();
     client_task.abort();
@@ -563,7 +566,10 @@ async fn test_it_works_dns_v6() {
     let expected = b"\x39\x36\x81\x80\x00\x01";
     sock.send_to(request, ("::1", 20326)).await.unwrap();
     let mut buf = [0u8; 1024];
-    sock.recv_from(&mut buf).await.unwrap();
+    tokio::time::timeout(config::UDP_PRUNE_TIMEOUT, sock.recv_from(&mut buf))
+        .await
+        .expect("Timed out waiting for DNS response")
+        .unwrap();
     assert_eq!(&buf[..6], expected);
     server_task.abort();
     client_task.abort();

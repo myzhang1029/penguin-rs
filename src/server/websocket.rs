@@ -4,6 +4,7 @@
 use super::forwarder::tcp_forwarder_on_channel;
 use super::forwarder::udp_forward_to;
 use super::WebSocket;
+use crate::config;
 use crate::dupe::Dupe;
 use crate::mux::{DatagramFrame, Multiplexor, Role};
 use hyper::upgrade::Upgraded;
@@ -19,7 +20,8 @@ pub async fn handle_websocket(ws_stream: WebSocket) {
     debug!("WebSocket connection established");
     let mut jobs = JoinSet::new();
     // Channel for listeners to send UDP datagrams to the main loop
-    let (datagram_send_tx, mut datagram_send_rx) = mpsc::channel::<DatagramFrame>(32);
+    let (datagram_send_tx, mut datagram_send_rx) =
+        mpsc::channel::<DatagramFrame>(config::INCOMING_DATAGRAM_BUFFER_SIZE);
     loop {
         trace!("server WebSocket loop");
         tokio::select! {

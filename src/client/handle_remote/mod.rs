@@ -10,10 +10,9 @@ mod tcp;
 mod udp;
 
 use crate::client::HandlerResources;
-use crate::dupe::Dupe;
 use crate::parse_remote::{LocalSpec, RemoteSpec};
 use crate::parse_remote::{Protocol, Remote};
-use socks::handle_socks_connection;
+use socks::{handle_socks, handle_socks_connection};
 use tcp::{handle_tcp, handle_tcp_stdio};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
@@ -102,25 +101,17 @@ pub(super) async fn handle_remote(
         }
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Socks, _) => {
             // The parser guarantees that the protocol is TCP
-            let listener = tcp::open_tcp_listener(lhost.as_str(), *lport).await?;
-            loop {
-                let (tcp_stream, _) = listener.accept().await?;
-                let (tcp_rx, tcp_tx) = tokio::io::split(tcp_stream);
-                let handler_resources = handler_resources.dupe();
-                tokio::spawn(async move {
-                    handle_socks_connection(tcp_rx, tcp_tx, lhost, &handler_resources).await
-                });
-            }
+            handle_socks(lhost, *lport, &handler_resources).await
         }
         (LocalSpec::Stdio, RemoteSpec::Socks, _) => {
             // The parser guarantees that the protocol is TCP
-            Ok(handle_socks_connection(
+            handle_socks_connection(
                 tokio::io::stdin(),
                 tokio::io::stdout(),
                 "localhost",
                 &handler_resources,
             )
-            .await?)
+            .await
         }
     }
 }

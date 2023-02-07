@@ -38,7 +38,7 @@ pub struct TlsStream {
 }
 
 impl TlsStream {
-    fn new(stream: AddrStream, config: Arc<TlsIdentityInner>) -> TlsStream {
+    fn new(stream: AddrStream, config: Arc<TlsIdentityInner>) -> Self {
         #[cfg(feature = "__rustls")]
         let accept = tokio_rustls::TlsAcceptor::from(config).accept(stream);
         #[cfg(feature = "nativetls")]
@@ -48,7 +48,7 @@ impl TlsStream {
                 .await
                 .map_err(|err| io::Error::new(io::ErrorKind::Other, err))
         });
-        TlsStream {
+        Self {
             state: State::Handshaking(accept),
         }
     }
@@ -116,8 +116,8 @@ pub struct TlsAcceptor {
 }
 
 impl TlsAcceptor {
-    pub fn new(identity: TlsIdentity, incoming: AddrIncoming) -> TlsAcceptor {
-        TlsAcceptor { identity, incoming }
+    pub fn new(identity: TlsIdentity, incoming: AddrIncoming) -> Self {
+        Self { identity, incoming }
     }
 }
 

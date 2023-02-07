@@ -20,7 +20,6 @@ use rand::distributions::uniform::SampleUniform;
 use rand::Rng;
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::{
@@ -99,7 +98,6 @@ where
             streams: Arc::new(RwLock::new(HashMap::new())),
             dropped_ports_tx,
             ack_tx,
-            closed: Arc::new(AtomicBool::new(false)),
         };
         tokio::spawn(
             inner
@@ -116,7 +114,6 @@ where
     }
 
     /// Request a channel for `host` and `port`
-    /// Returns `None` if the connection is closed
     #[tracing::instrument(skip(self), level = "debug")]
     pub async fn client_new_stream_channel(
         &self,
@@ -124,9 +121,6 @@ where
         port: u16,
     ) -> Result<MuxStream<S>, Error> {
         assert_eq!(self.inner.role, Role::Client);
-        if self.inner.closed.load(Ordering::Relaxed) {
-            return Err(Error::Closed);
-        }
         // Allocate a new port
         let sport = u16::next_available_key(&*self.inner.streams.read().await);
         trace!("sport = {sport}");

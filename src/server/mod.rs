@@ -7,7 +7,7 @@ mod websocket;
 
 use crate::arg::ServerArgs;
 use crate::dupe::Dupe;
-use crate::tls::{make_tls_identity, reload_tls_identity, TlsAcceptor, TlsIdentity};
+use crate::tls::{make_tls_identity, reload_tls_identity, TlsAcceptor};
 use hyper::server::conn::AddrIncoming;
 use hyper::upgrade::Upgraded;
 use hyper::Server;
@@ -55,12 +55,23 @@ pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
         info!("Listening on wss://{sockaddr}/ws");
         let tls_config = make_tls_identity(tls_cert, tls_key, args.tls_ca.as_deref()).await?;
         #[cfg(unix)]
-        tokio::spawn(reload_cert_on_signal(
-            tls_config.dupe(),
-            tls_cert,
-            tls_key,
-            args.tls_ca.as_deref(),
-        ));
+        {
+            let mut sigusr1 =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined1())
+                    .map_err(Error::Signal)?;
+            let tls_config = tls_config.dupe();
+            tokio::spawn(async move {
+                while sigusr1.recv().await == Some(()) {
+                    info!("Reloading TLS certificate");
+                    if let Err(err) =
+                        reload_tls_identity(&tls_config, tls_cert, tls_key, args.tls_ca.as_deref())
+                            .await
+                    {
+                        error!("Cannot reload TLS certificate: {err}");
+                    }
+                }
+            });
+        }
         Server::builder(TlsAcceptor::new(tls_config, incoming))
             .serve(MakeStateService(state))
             .await?;
@@ -71,20 +82,4 @@ pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
             .await?;
     }
     Ok(())
-}
-
-#[cfg(unix)]
-async fn reload_cert_on_signal(
-    config: TlsIdentity,
-    cert_path: &str,
-    key_path: &str,
-    client_ca_path: Option<&str>,
-) -> Result<(), Error> {
-    let mut sigusr1 = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined1())
-        .map_err(Error::Signal)?;
-    loop {
-        sigusr1.recv().await;
-        info!("Reloading TLS certificate");
-        reload_tls_identity(&config, cert_path, key_path, client_ca_path).await?;
-    }
 }

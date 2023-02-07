@@ -1,7 +1,7 @@
 //! SOCKS 5 server.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use super::tcp::request_tcp_channel;
+use super::tcp::{open_tcp_listener, request_tcp_channel};
 use super::{pipe_streams, Error, HandlerResources};
 use crate::client::ClientIdMapEntry;
 use crate::dupe::Dupe;
@@ -59,10 +59,29 @@ macro_rules! exec_or_ret_err_v4 {
     };
 }
 
+#[tracing::instrument(skip(handler_resources), level = "debug")]
+#[inline]
+pub(super) async fn handle_socks(
+    lhost: &'static str,
+    lport: u16,
+    handler_resources: &HandlerResources,
+) -> Result<(), Error> {
+    let listener = open_tcp_listener(lhost, lport).await?;
+    loop {
+        let (tcp_stream, _) = listener.accept().await?;
+        let (tcp_rx, tcp_tx) = tokio::io::split(tcp_stream);
+        let handler_resources = handler_resources.dupe();
+        // TODO: handle errors: a failed stream request failed should propagate
+        tokio::spawn(async move {
+            handle_socks_connection(tcp_rx, tcp_tx, lhost, &handler_resources).await
+        });
+    }
+}
+
 /// Handle a SOCKS5 connection.
 /// Based on socksv5's example.
 /// We need to be able to request additional channels, so we need `command_tx`
-#[tracing::instrument(skip_all, level = "debug")]
+#[tracing::instrument(skip_all, level = "trace")]
 pub(super) async fn handle_socks_connection<R, W>(
     reader: R,
     writer: W,
@@ -147,7 +166,7 @@ where
 {
     // Complete the handshake
     let num_methods = breader.read_u8().await?;
-    let mut methods = vec![0; num_methods as usize];
+    let mut methods = vec![0; usize::from(num_methods)];
     breader.read_exact(&mut methods).await?;
     if !methods.contains(&0x00) {
         info!("client does not support NOAUTH");
@@ -194,7 +213,7 @@ where
         0x03 => {
             // Domain name
             let len = breader.read_u8().await?;
-            let mut addr = vec![0; len as usize];
+            let mut addr = vec![0; usize::from(len)];
             exec_or_ret_err_v5!(
                 breader.read_exact(&mut addr).await,
                 "cannot read domain",
@@ -403,7 +422,7 @@ async fn udp_relay(
 }
 
 /// Parse a UDP relay request
-async fn handle_udp_relay_header<'buf>(
+async fn handle_udp_relay_header(
     socket: &UdpSocket,
 ) -> Result<Option<(String, u16, Bytes, IpAddr, u16)>, Error> {
     let mut buf = BytesMut::zeroed(65536);
@@ -425,7 +444,7 @@ async fn handle_udp_relay_header<'buf>(
         }
         0x03 => {
             // Domain name
-            let len = buf[4] as usize;
+            let len = usize::from(buf[4]);
             let dst = String::from_utf8_lossy(&buf[5..5 + len]).to_string();
             let port = (u16::from(buf[5 + len]) << 8) | u16::from(buf[6 + len]);
             (dst, port, 7 + len)

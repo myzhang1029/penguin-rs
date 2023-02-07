@@ -26,8 +26,7 @@ pub(super) struct MuxStreamData {
     /// Whether writes should succeed.
     /// There are two cases for `false`:
     /// 1. `Fin` has been sent.
-    /// 2. The stream has been removed from `inner.streams`
-    ///    (or the mux has been dropped).
+    /// 2. The stream has been removed from `inner.streams`.
     can_write: Arc<AtomicBool>,
     /// Number of `Psh` frames we are allowed to send before waiting for a `Ack` frame.
     psh_send_remaining: Arc<AtomicU64>,
@@ -56,8 +55,6 @@ pub(super) struct MultiplexorInner<S> {
     /// Channel for queuing `Ack` frames to be sent
     /// (in the form (our_port, their_port, psh_recvd_since)).
     pub(super) ack_tx: mpsc::UnboundedSender<(u16, u16, u64)>,
-    /// Whether the multiplexor has been closed
-    pub(super) closed: Arc<AtomicBool>,
 }
 
 impl<S> std::fmt::Debug for MultiplexorInner<S> {
@@ -80,7 +77,6 @@ impl<S> Clone for MultiplexorInner<S> {
             streams: self.streams.clone(),
             dropped_ports_tx: self.dropped_ports_tx.clone(),
             ack_tx: self.ack_tx.clone(),
-            closed: self.closed.clone(),
         }
     }
 }
@@ -97,7 +93,6 @@ impl<S> Dupe for MultiplexorInner<S> {
             streams: self.streams.dupe(),
             dropped_ports_tx: self.dropped_ports_tx.dupe(),
             ack_tx: self.ack_tx.dupe(),
-            closed: self.closed.dupe(),
         }
     }
 }
@@ -112,17 +107,20 @@ where
     /// - Sends received datagrams to the `datagram_tx` channel
     /// - Sends received streams to the appropriate handler
     /// - Responds to ping/pong messages
+    // It doesn't make sense to return a `Result` here because we can't propagate
+    // the error to the user from a spawned task.
+    // Instead, the user will notice when `rx` channels return `None`.
     #[tracing::instrument(
         skip(datagram_tx, stream_tx, dropped_ports_rx, ack_rx),
         level = "trace"
     )]
     pub async fn task(
-        self,
+        mut self,
         mut datagram_tx: mpsc::Sender<DatagramFrame>,
         mut stream_tx: mpsc::Sender<MuxStream<S>>,
         mut dropped_ports_rx: mpsc::UnboundedReceiver<(u16, u16)>,
         mut ack_rx: mpsc::UnboundedReceiver<(u16, u16, u64)>,
-    ) -> Result<(), Error> {
+    ) {
         let us = self.dupe();
         let keepalive_task_future = async move {
             if let Some(keepalive_interval) = self.keepalive_interval {
@@ -194,11 +192,9 @@ where
         match result {
             Ok(_) => {
                 debug!("Multiplexor task exited");
-                Ok(())
             }
             Err(e) => {
                 error!("Multiplexor task failed: {e}");
-                Err(e)
             }
         }
     }
@@ -461,17 +457,20 @@ where
 
     /// Should really only be called when the mux is dropped
     #[tracing::instrument(level = "trace")]
-    async fn shutdown(&self) {
+    async fn shutdown(&mut self) {
         debug!("closing all connections");
-        let mut streams = self.streams.write().await;
-        for (_, stream_data) in streams.drain() {
-            // Make sure the user receives `EOF`.
-            stream_data.sender.send(Bytes::new()).await.ok();
-            // Stop all streams from sending stuff
-            stream_data.can_write.store(false, Ordering::Relaxed);
+        {
+            let mut streams = self.streams.write().await;
+            for (_, stream_data) in streams.drain() {
+                // Make sure the user receives `EOF`.
+                stream_data.sender.send(Bytes::new()).await.ok();
+                // Prevent the user from writing
+                stream_data.can_write.store(false, Ordering::Relaxed);
+                // Should we wake pending writers?
+                // stream_data.writer_waker.wake();
+            }
         }
-        drop(streams);
-        // This also effectively `Rst`s all streams
+        // This also effectively `Rst`s all streams on the other side
         self.ws.close().await.ok();
     }
 }

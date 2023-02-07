@@ -34,9 +34,12 @@ impl MaybeRetryableError for tungstenite::Error {
     fn retryable(&self) -> bool {
         match self {
             Self::Io(e) => e.retryable(),
-            Self::ConnectionClosed => true,
-            // Self::AlreadyClosed should not happen because tungstenite
-            // says that it indicates a bug in our code.
+            // `tungstenite` says that `AlreadyClosed`
+            // "indicates your code tries to operate on the connection when it really
+            // shouldn't anymore, so this really indicates a programmer error on your part."
+            // But I really don't care about its difference with `ConnectionClosed`
+            // because I dislike another indicator variable for closing.
+            Self::AlreadyClosed | Self::ConnectionClosed => true,
             Self::Protocol(e) => e.retryable(),
             _ => false,
         }

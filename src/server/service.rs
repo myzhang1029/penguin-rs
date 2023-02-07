@@ -98,9 +98,7 @@ impl State<'static> {
             client: Arc::new(Client::builder().build(make_client_https())),
         }
     }
-}
 
-impl State<'static> {
     /// Reverse proxy and 404
     async fn backend_or_404_handler(
         self,

@@ -299,7 +299,7 @@ impl From<Bytes> for DatagramFrame {
     #[inline]
     fn from(mut data: Bytes) -> Self {
         let host_len = data.get_u8();
-        let host = data.split_to(host_len as usize);
+        let host = data.split_to(usize::from(host_len));
         let port = data.get_u16();
         let sid = data.get_u32();
         Self {
@@ -336,7 +336,7 @@ impl From<StreamFrame> for Message {
 }
 
 impl TryFrom<Vec<u8>> for Frame {
-    type Error = <Frame as TryFrom<Bytes>>::Error;
+    type Error = <Self as TryFrom<Bytes>>::Error;
     #[inline]
     fn try_from(data: Vec<u8>) -> Result<Self, Self::Error> {
         Self::try_from(Bytes::from(data))

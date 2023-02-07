@@ -2,6 +2,8 @@
 //! Pipes TCP streams or forwards UDP Datagrams to and from another host.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
+use std::net::SocketAddr;
+
 use crate::config;
 use crate::dupe::Dupe;
 use crate::mux::DatagramFrame;
@@ -23,6 +25,43 @@ pub(super) enum Error {
     Host(#[from] std::str::Utf8Error),
 }
 
+/// Bind a UDP socket with the same address family as the given target,
+/// connect to the target, and send the given data.
+/// Finally, return the bound socket and the target address.
+#[inline]
+async fn bind_and_send(target: (&str, u16), data: &[u8]) -> Result<(UdpSocket, SocketAddr), Error> {
+    let targets = lookup_host(target).await?;
+    let mut last_err = None;
+    for target in targets {
+        let socket = match if target.is_ipv4() {
+            UdpSocket::bind(("0.0.0.0", 0)).await
+        } else {
+            UdpSocket::bind(("::", 0)).await
+        } {
+            Ok(socket) => socket,
+            Err(e) => {
+                last_err = Some(e);
+                continue;
+            }
+        };
+        debug!("bound to {}", socket.local_addr()?);
+        if let Err(e) = socket.connect(target).await {
+            last_err = Some(e);
+            continue;
+        }
+        socket.send(data).await?;
+        return Ok((socket, target));
+    }
+    Err(last_err
+        .unwrap_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "could not resolve to any address",
+            )
+        })
+        .into())
+}
+
 /// Send a UDP datagram to the given host and port and wait for a response
 /// in the following `UDP_PRUNE_TIMEOUT` seconds.
 #[tracing::instrument(skip(datagram_tx), level = "debug")]
@@ -36,23 +75,7 @@ pub(super) async fn udp_forward_to(
     let rport = datagram_frame.port;
     let data = datagram_frame.data;
     let client_id = datagram_frame.sid;
-    let target = lookup_host((rhost_str, rport))
-        .await?
-        .next()
-        .ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "could not resolve to any address",
-            )
-        })?;
-    let socket = if target.is_ipv4() {
-        UdpSocket::bind(("0.0.0.0", 0)).await?
-    } else {
-        UdpSocket::bind(("::", 0)).await?
-    };
-    debug!("bound to {}", socket.local_addr()?);
-    socket.connect(target).await?;
-    socket.send(&data).await?;
+    let (socket, target) = bind_and_send((rhost_str, rport), &data).await?;
     trace!("sent UDP packet to {target}");
     loop {
         let mut buf = BytesMut::zeroed(65536);
@@ -97,9 +120,9 @@ pub(super) async fn tcp_forwarder_on_channel(
 ) -> Result<(), Error> {
     let rhost = std::str::from_utf8(&channel.dest_host)?;
     let rport = channel.dest_port;
-    debug!("TCP forwarding to {}:{}", rhost, rport);
+    trace!("attempting TCP connect to {rhost} port={rport}");
     let mut rstream = TcpStream::connect((rhost, rport)).await?;
-    trace!("connected to {:?}", rstream.peer_addr());
+    debug!("TCP forwarding to {:?}", rstream.peer_addr());
     tokio::io::copy_bidirectional(&mut channel, &mut rstream).await?;
     trace!("TCP forwarding finished");
     Ok(())

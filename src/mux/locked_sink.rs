@@ -1,5 +1,6 @@
 //! A wrapper around `Sink + Stream` that can be cloned and shared between tasks.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
+#![deny(missing_docs)]
 
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;

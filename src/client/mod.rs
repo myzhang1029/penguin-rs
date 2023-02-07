@@ -109,9 +109,11 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
     // Initial retry interval is 200ms
     let mut current_retry_interval: u64 = 200;
     // Channel for listeners to request TCP channels the main loop
-    let (mut stream_cmd_tx, mut stream_cmd_rx) = mpsc::channel::<StreamCommand>(32);
+    let (mut stream_cmd_tx, mut stream_cmd_rx) =
+        mpsc::channel::<StreamCommand>(config::STREAM_REQUEST_COMMAND_SIZE);
     // Channel for listeners to send UDP datagrams to the main loop
-    let (datagram_send_tx, mut datagram_send_rx) = mpsc::channel::<DatagramFrame>(32);
+    let (datagram_send_tx, mut datagram_send_rx) =
+        mpsc::channel::<DatagramFrame>(config::INCOMING_DATAGRAM_BUFFER_SIZE);
     // Map of client IDs to (source, UdpSocket, bool)
     let udp_client_id_map: HashMap<u32, ClientIdMapEntry> = HashMap::new();
     let udp_client_id_map = Arc::new(RwLock::new(udp_client_id_map));
