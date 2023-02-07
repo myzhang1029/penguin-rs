@@ -3,6 +3,7 @@
 /// Marker trait for types that can be cheaply cloned.
 pub trait Dupe: Clone {
     /// A cheap clone of the object.
+    #[must_use]
     #[inline]
     fn dupe(&self) -> Self {
         self.clone()

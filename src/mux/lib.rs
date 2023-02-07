@@ -5,6 +5,7 @@
 //!
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 #![deny(missing_docs, missing_debug_implementations)]
+#![allow(clippy::module_name_repetitions)]
 
 mod config;
 pub mod dupe;

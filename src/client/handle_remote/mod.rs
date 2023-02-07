@@ -2,6 +2,8 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 //!
 //! These are persistent tasks that run for the lifetime of the client.
+//! They should try to handle connections as long as the client is alive,
+//! and if they fail, the entire client will fail.
 //! Whenever a new connection is made, it tries to create a new channel
 //! from the main loop and then spawns a new task to handle the connection.
 
@@ -12,11 +14,10 @@ mod udp;
 use crate::client::HandlerResources;
 use crate::parse_remote::{LocalSpec, RemoteSpec};
 use crate::parse_remote::{Protocol, Remote};
-use socks::{handle_socks, handle_socks_connection};
+use socks::{handle_socks, handle_socks_stdio};
 use tcp::{handle_tcp, handle_tcp_stdio};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
-use tokio::sync::oneshot;
 use tracing::{debug, error};
 use udp::{handle_udp, handle_udp_stdio};
 
@@ -57,22 +58,10 @@ pub(super) use {complete_or_continue, complete_or_continue_if_retryable};
 pub enum Error {
     #[error(transparent)]
     Io(#[from] std::io::Error),
-    #[error("Cannot receive stream from the main loop")]
-    ReceiveStream(#[from] oneshot::error::RecvError),
     #[error("Cannot request stream from the main loop")]
     RequestStream,
     #[error("Cannot send datagram to the main loop")]
     SendDatagram,
-
-    // These are for the socks server
-    #[error("Unsupported SOCKS version: {0}")]
-    SocksVersion(u8),
-    #[error("Invalid domain name: {0}")]
-    DomainName(#[from] std::string::FromUtf8Error),
-    #[error("Only supports NOAUTH")]
-    OtherAuth,
-    #[error("Cannot read socks request")]
-    SocksRequest,
 }
 
 /// Construct a TCP remote based on the description. These are simple because
@@ -105,13 +94,7 @@ pub(super) async fn handle_remote(
         }
         (LocalSpec::Stdio, RemoteSpec::Socks, _) => {
             // The parser guarantees that the protocol is TCP
-            handle_socks_connection(
-                tokio::io::stdin(),
-                tokio::io::stdout(),
-                "localhost",
-                &handler_resources,
-            )
-            .await
+            handle_socks_stdio(&handler_resources).await
         }
     }
 }

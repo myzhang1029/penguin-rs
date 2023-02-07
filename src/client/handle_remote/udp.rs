@@ -22,6 +22,7 @@ pub(super) async fn handle_udp(
     rport: u16,
     handler_resources: &HandlerResources,
 ) -> Result<(), Error> {
+    // Not being able to bind to the local port is a fatal error.
     let socket = UdpSocket::bind((lhost, lport)).await?;
     let socket = Arc::new(socket);
     let local_addr = socket
@@ -30,6 +31,7 @@ pub(super) async fn handle_udp(
     info!("Bound on {local_addr}");
     loop {
         let mut buf = BytesMut::zeroed(65536);
+        // `recv_from` can fail if the socket is closed, which is a fatal error.
         let (len, addr) = socket.recv_from(&mut buf).await?;
         buf.truncate(len);
         debug!("received {len} bytes from {addr}");
@@ -43,6 +45,7 @@ pub(super) async fn handle_udp(
             sid: client_id,
             data: buf.freeze(),
         };
+        // This fails only if main has exited, which is a fatal error.
         handler_resources
             .datagram_tx
             .send(frame)
@@ -69,6 +72,7 @@ pub(super) async fn handle_udp_stdio(
             sid: 0,
             data: line.into(),
         };
+        // This fails only if main has exited, which is a fatal error.
         handler_resources
             .datagram_tx
             .send(frame)

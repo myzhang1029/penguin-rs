@@ -64,6 +64,7 @@ fn make_client_args(servhost: &str, servport: u16, remotes: Vec<Remote>) -> arg:
         tls_key: None,
         tls_skip_verify: false,
         hostname: Some(http::HeaderValue::from_static("localhost")),
+        channel_timeout: 10,
         _pid: false,
         _fingerprint: None,
         _auth: None,

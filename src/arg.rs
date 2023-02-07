@@ -164,6 +164,9 @@ pub struct ClientArgs {
     /// enabled (mutual-TLS).
     #[arg(long, requires = "tls_key")]
     pub tls_cert: Option<String>,
+    /// Timeout for establishing channels (in seconds).
+    #[arg(long, default_value_t = 10)]
+    pub channel_timeout: u64,
     /// For compatibility with `chisel` only. This option is a no-op.
     #[arg(long = "pid")]
     pub _pid: bool,

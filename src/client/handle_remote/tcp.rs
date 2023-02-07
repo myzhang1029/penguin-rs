@@ -13,13 +13,14 @@ use tokio::{
 use tracing::{error, info, warn};
 
 /// Request a channel from the mux
+/// Returns an error if the main loop timed out waiting for a response.
 #[inline]
 #[tracing::instrument(skip(stream_command_tx_permit), level = "debug")]
 pub(super) async fn request_tcp_channel(
     stream_command_tx_permit: mpsc::Permit<'_, StreamCommand>,
     dest_host: Vec<u8>,
     dest_port: u16,
-) -> Result<MuxStream, Error> {
+) -> Result<MuxStream, oneshot::error::RecvError> {
     let (tx, rx) = oneshot::channel();
     let stream_request = StreamCommand {
         tx,
@@ -27,7 +28,7 @@ pub(super) async fn request_tcp_channel(
         port: dest_port,
     };
     stream_command_tx_permit.send(stream_request);
-    Ok(rx.await?)
+    rx.await
 }
 
 /// Open a TCP listener.
@@ -52,8 +53,10 @@ pub(super) async fn handle_tcp(
     rport: u16,
     handler_resources: &HandlerResources,
 ) -> Result<(), Error> {
+    // Not being able to open a TCP listener is a fatal error.
     let listener = open_tcp_listener(lhost, lport).await?;
     loop {
+        // This fails only if main has exited, which is a fatal error.
         let stream_command_tx_permit = handler_resources
             .stream_command_tx
             .reserve()
@@ -61,6 +64,7 @@ pub(super) async fn handle_tcp(
             .map_err(|_| Error::RequestStream)?;
         // Only `accept` when we have a permit to send a request.
         // This way, the backpressure is propagated to the TCP listener.
+        // Not being able to accept a TCP connection is a fatal error.
         let (mut tcp_stream, _) = listener.accept().await?;
         // A new channel is created for each incoming TCP connection.
         // It's already TCP, anyways.
@@ -86,6 +90,7 @@ pub async fn handle_tcp_stdio(
     let mut stdout = tokio::io::stdout();
     // We want `loop` to be able to continue after a connection failure
     loop {
+        // This fails only if main has exited, which is a fatal error.
         let stream_command_tx_permit = handler_resources
             .stream_command_tx
             .reserve()

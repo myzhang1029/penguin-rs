@@ -14,6 +14,7 @@ use penguin_mux::{DatagramFrame, Multiplexor, Role};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpStream, UdpSocket};
@@ -36,6 +37,8 @@ pub enum Error {
     Mux(#[from] penguin_mux::Error),
     #[error("Remote handler exited: {0}")]
     RemoteHandlerExited(#[from] handle_remote::Error),
+    #[error("Stream request timed out")]
+    StreamRequestTimeout,
 }
 
 type MuxStream = penguin_mux::MuxStream<MaybeTlsStream<TcpStream>>;
@@ -109,7 +112,7 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
     // Initial retry interval is 200ms
     let mut current_retry_interval: u64 = 200;
     // Channel for listeners to request TCP channels the main loop
-    let (mut stream_cmd_tx, mut stream_cmd_rx) =
+    let (stream_cmd_tx, mut stream_cmd_rx) =
         mpsc::channel::<StreamCommand>(config::STREAM_REQUEST_COMMAND_SIZE);
     // Channel for listeners to send UDP datagrams to the main loop
     let (datagram_send_tx, mut datagram_send_rx) =
@@ -144,20 +147,20 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
         {
             Ok(ws_stream) => {
                 tokio::select! {
+                    biased;
                     Some(result) = jobs.join_next() => {
                         // Quit immediately if any listener fails
                         // so maybe `systemd` can restart it
                         result.expect("JoinSet returned an error")?;
                     }
-                    result = on_connected(
+                    _ = on_connected(
                         ws_stream,
                         &mut stream_cmd_rx,
-                        &mut stream_cmd_tx,
                         &mut datagram_send_rx,
                         udp_client_id_map.dupe(),
                         args.keepalive,
+                        time::Duration::from_secs(args.channel_timeout),
                     ) => {
-                        result?;
                         warn!("Disconnected from server");
                         // Since we once connected, reset the retry count
                         current_retry_count = 0;
@@ -201,29 +204,24 @@ async fn on_connected(
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
     stream_command_rx: &mut mpsc::Receiver<StreamCommand>,
-    stream_command_tx: &mut mpsc::Sender<StreamCommand>,
     datagram_rx: &mut mpsc::Receiver<DatagramFrame>,
     udp_client_id_map: Arc<RwLock<HashMap<u32, ClientIdMapEntry>>>,
     keepalive: u64,
-) -> Result<(), Error> {
-    let keepalive_duration = match keepalive {
-        0 => None,
-        _ => Some(time::Duration::from_secs(keepalive)),
+    channel_timeout: Duration,
+) {
+    let keepalive_duration = if keepalive == 0 {
+        None
+    } else {
+        Some(time::Duration::from_secs(keepalive))
     };
     let mut mux = Multiplexor::new(ws_stream, Role::Client, keepalive_duration);
     info!("Connected to server");
     loop {
-        // TODO: this can block when we are filled with requests
-        // `expect`: we should never fail to get a permit because the
-        // receiver is always in scope here.
-        let stream_command_tx_permit = stream_command_tx
-            .reserve()
-            .await
-            .expect("failed to put back command (this is a bug)");
         tokio::select! {
             Some(sender) = stream_command_rx.recv() => {
-                if !get_send_stream_chan_or_put_back(&mut mux, sender, stream_command_tx_permit).await? {
-                    break;
+                if let Err(e) = get_send_stream_chan(&mut mux, sender, channel_timeout).await {
+                    error!("{e}");
+                    return;
                 }
             }
             Some(datagram) = datagram_rx.recv() => {
@@ -267,46 +265,30 @@ async fn on_connected(
             }
         }
     }
-    Ok(())
 }
 
 /// Get a new channel from the multiplexor and send it to the handler.
-/// If we fail, put the sender back onto the `mpsc`.
-/// This carries the semantics that `Err(_)` means we should not retry.
-/// Returns `true` if we got a new channel, `false` if we put the sender back
-/// (and we should probably go back to the main loop and reconnect).
+/// If we fail, the sender is dropped and we return an error.
 /// Datagrams are simply dropped if we fail to get a new channel.
 #[tracing::instrument(skip_all, level = "trace")]
-async fn get_send_stream_chan_or_put_back(
+async fn get_send_stream_chan(
     mux: &mut Multiplexor<MaybeTlsStream<TcpStream>>,
     stream_command: StreamCommand,
-    stream_command_tx_permit: mpsc::Permit<'_, StreamCommand>,
-) -> Result<bool, penguin_mux::Error> {
+    channel_timeout: Duration,
+) -> Result<(), Error> {
     trace!("requesting a new TCP channel");
-    match mux
-        .client_new_stream_channel(&stream_command.host, stream_command.port)
-        .await
-    {
-        Ok(stream) => {
-            trace!("got a new channel");
-            // `Err(_)` means "the corresponding receiver has already been deallocated"
-            // which means we don't care about the channel anymore.
-            stream_command.tx.send(stream).ok();
-            trace!("sent stream to handler (or handler died)");
-            Ok(true)
-        }
-        Err(e) => {
-            if e.retryable() {
-                warn!("Connection error: {e}");
-                // Put the command back so we can retry
-                stream_command_tx_permit.send(stream_command);
-                Ok(false)
-            } else {
-                error!("Connection error: {e}");
-                Err(e)
-            }
-        }
-    }
+    let stream = tokio::time::timeout(
+        channel_timeout,
+        mux.client_new_stream_channel(&stream_command.host, stream_command.port),
+    )
+    .await
+    .map_err(|_| Error::StreamRequestTimeout)??;
+    trace!("got a new channel");
+    // `Err(_)` means "the corresponding receiver has already been deallocated"
+    // which means we don't care about the channel anymore.
+    stream_command.tx.send(stream).ok();
+    trace!("sent stream to handler (or handler died)");
+    Ok(())
 }
 
 /// Prune the client ID map of entries that have not been used for a while.

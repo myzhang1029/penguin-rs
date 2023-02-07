@@ -2,7 +2,7 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::tcp::{open_tcp_listener, request_tcp_channel};
-use super::{pipe_streams, Error, HandlerResources};
+use super::{pipe_streams, HandlerResources};
 use crate::client::{ClientIdMapEntry, StreamCommand};
 use crate::Dupe;
 use bytes::{Buf, Bytes, BytesMut};
@@ -12,8 +12,35 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, BufWriter};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::UdpSocket;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinSet;
 use tracing::{debug, info, trace, warn};
+
+// Errors that can occur while handling a SOCKS request.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// Error writing to the client that is
+    /// not our fault.
+    #[error(transparent)]
+    Write(#[from] std::io::Error),
+    #[error("Client with version={0} is not SOCKSv4 or SOCKSv5")]
+    SocksVersion(u8),
+    #[error("Unsupported SOCKS command: {0}")]
+    InvalidCommand(u8),
+    #[error("Invalid SOCKS address type: {0}")]
+    AddressType(u8),
+    #[error("Cannot {0} in SOCKS request: {1}")]
+    ProcessSocksRequest(&'static str, std::io::Error),
+    #[error("Invalid domain name: {0}")]
+    DomainName(#[from] std::string::FromUtf8Error),
+    #[error("Client does not support NOAUTH")]
+    OtherAuth,
+    #[error("Timed out waiting for a new channel: {0}")]
+    Timeout(#[from] oneshot::error::RecvError),
+    /// Fatal error that we should propagate to main.
+    #[error(transparent)]
+    Fatal(#[from] super::Error),
+}
 
 macro_rules! v5_reply {
     ($rep:expr) => {
@@ -38,10 +65,9 @@ macro_rules! exec_or_ret_err_v5 {
         match $ex {
             Ok(v) => v,
             Err(e) => {
-                info!("{}: {}", $edesc, e);
                 $writer.write_all(v5_reply!(0x01)).await?;
                 $writer.flush().await?;
-                return Err(e.into());
+                return Err(Error::ProcessSocksRequest($edesc, e));
             }
         }
     };
@@ -51,10 +77,9 @@ macro_rules! exec_or_ret_err_v4 {
         match $ex {
             Ok(v) => v,
             Err(e) => {
-                info!("{}: {}", $edesc, e);
                 $writer.write_all(v4_reply!(0x5b)).await?;
                 $writer.flush().await?;
-                return Err(e.into());
+                return Err(Error::ProcessSocksRequest($edesc, e));
             }
         }
     };
@@ -66,17 +91,51 @@ pub(super) async fn handle_socks(
     lhost: &'static str,
     lport: u16,
     handler_resources: &HandlerResources,
-) -> Result<(), Error> {
+) -> Result<(), super::Error> {
+    // Failing to open the listener is a fatal error and should be propagated.
     let listener = open_tcp_listener(lhost, lport).await?;
+    let mut socks_jobs = JoinSet::new();
     loop {
-        let (tcp_stream, _) = listener.accept().await?;
-        let (tcp_rx, tcp_tx) = tokio::io::split(tcp_stream);
-        let handler_resources = handler_resources.dupe();
-        // TODO: handle errors: a failed stream request failed should propagate
-        tokio::spawn(async move {
-            handle_socks_connection(tcp_rx, tcp_tx, lhost, &handler_resources).await
-        });
+        tokio::select! {
+            biased;
+            Some(finished) = socks_jobs.join_next() => {
+                if let Err(e) = finished.expect("SOCKS job panicked (this is a bug)") {
+                    if let Error::Fatal(e) = e {
+                        return Err(e);
+                    }
+                    info!("{e}");
+                }
+            }
+            result = listener.accept() => {
+                // A failed accept() is a fatal error and should be propagated.
+                let (stream, _) = result?;
+                let (tcp_rx, tcp_tx) = tokio::io::split(stream);
+                let handler_resources = handler_resources.dupe();
+                socks_jobs.spawn(async move {
+                    handle_socks_connection(tcp_rx, tcp_tx, lhost, &handler_resources).await
+                });
+            }
+        }
     }
+}
+
+pub(super) async fn handle_socks_stdio(
+    handler_resources: &HandlerResources,
+) -> Result<(), super::Error> {
+    if let Err(e) = handle_socks_connection(
+        tokio::io::stdin(),
+        tokio::io::stdout(),
+        "localhost",
+        handler_resources,
+    )
+    .await
+    {
+        if let Error::Fatal(e) = e {
+            return Err(e);
+        }
+        info!("{e}");
+    }
+    Ok(())
 }
 
 /// Handle a SOCKS5 connection.
@@ -95,20 +154,14 @@ where
 {
     let mut breader = BufReader::new(reader);
     let bwriter = BufWriter::new(writer);
-    let version = breader.read_u8().await?;
+    let version = breader
+        .read_u8()
+        .await
+        .map_err(|e| Error::ProcessSocksRequest("read version", e))?;
     match version {
-        4 => {
-            // SOCKS4
-            handle_socks4_connection(breader, bwriter, handler_resources).await
-        }
-        5 => {
-            // SOCKS5
-            handle_socks5_connection(breader, bwriter, local_addr, handler_resources).await
-        }
-        version => {
-            info!("client is not SOCKSv4 or SOCKSv5");
-            Err(Error::SocksVersion(version))
-        }
+        4 => handle_socks4_connection(breader, bwriter, handler_resources).await,
+        5 => handle_socks5_connection(breader, bwriter, local_addr, handler_resources).await,
+        version => Err(Error::SocksVersion(version)),
     }
 }
 
@@ -121,20 +174,20 @@ where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let command = exec_or_ret_err_v4!(breader.read_u8().await, "cannot read command", &mut bwriter);
-    let rport = exec_or_ret_err_v4!(breader.read_u16().await, "cannot read port", &mut bwriter);
-    let ip = exec_or_ret_err_v4!(breader.read_u32().await, "cannot read ip", &mut bwriter);
+    let command = exec_or_ret_err_v4!(breader.read_u8().await, "read command", &mut bwriter);
+    let rport = exec_or_ret_err_v4!(breader.read_u16().await, "read port", &mut bwriter);
+    let ip = exec_or_ret_err_v4!(breader.read_u32().await, "read ip", &mut bwriter);
     let mut user_id = Vec::new();
     exec_or_ret_err_v4!(
         breader.read_until(0, &mut user_id).await,
-        "cannot read user id",
+        "read user id",
         &mut bwriter
     );
     let rhost = if ip >> 24 == 0 {
         let mut domain = Vec::new();
         exec_or_ret_err_v4!(
             breader.read_until(0, &mut domain).await,
-            "cannot read domain",
+            "read domain",
             &mut bwriter
         );
         // Remove the null byte
@@ -146,11 +199,12 @@ where
     debug!("SOCKSv4 request for {}:{} from {:?}", rhost, rport, user_id);
     if command == 0x01 {
         // CONNECT
+        // This fails only if main has exited, which is a fatal error.
         let stream_command_tx_permit = handler_resources
             .stream_command_tx
             .reserve()
             .await
-            .map_err(|_| Error::RequestStream)?;
+            .map_err(|_| super::Error::RequestStream)?;
         handle_connect(
             breader,
             bwriter,
@@ -161,10 +215,9 @@ where
         )
         .await
     } else {
-        warn!("invalid or unsupported SOCKSv4 command {command}");
         bwriter.write_all(v4_reply!(0x5b)).await?;
         bwriter.flush().await?;
-        Err(Error::SocksRequest)
+        Err(Error::InvalidCommand(command))
     }
 }
 
@@ -179,11 +232,15 @@ where
     W: AsyncWrite + Unpin,
 {
     // Complete the handshake
-    let num_methods = breader.read_u8().await?;
+    let num_methods =
+        exec_or_ret_err_v5!(breader.read_u8().await, "read num methods", &mut bwriter);
     let mut methods = vec![0; usize::from(num_methods)];
-    breader.read_exact(&mut methods).await?;
+    exec_or_ret_err_v5!(
+        breader.read_exact(&mut methods).await,
+        "read methods",
+        &mut bwriter
+    );
     if !methods.contains(&0x00) {
-        info!("client does not support NOAUTH");
         // Send back NO ACCEPTABLE METHODS
         // Note that we are not compliant with RFC 1928 here, as we MUST
         // support GSSAPI and SHOULD support USERNAME/PASSWORD
@@ -195,23 +252,15 @@ where
     bwriter.write_all(&[0x05, 0x00]).await?;
     bwriter.flush().await?;
     // Read the request
-    let version = breader.read_u8().await?;
+    let version = exec_or_ret_err_v5!(breader.read_u8().await, "read version", &mut bwriter);
     if version != 5 {
-        info!("client is not SOCKSv5");
         return Err(Error::SocksVersion(version));
     }
-    let command = exec_or_ret_err_v5!(breader.read_u8().await, "cannot read command", &mut bwriter);
+    let command = exec_or_ret_err_v5!(breader.read_u8().await, "read command", &mut bwriter);
     trace!("command: {command}");
-    let _reserved = exec_or_ret_err_v5!(
-        breader.read_u8().await,
-        "cannot read reserved",
-        &mut bwriter
-    );
-    let address_type = exec_or_ret_err_v5!(
-        breader.read_u8().await,
-        "cannot read address type",
-        &mut bwriter
-    );
+    let _reserved = exec_or_ret_err_v5!(breader.read_u8().await, "read reserved", &mut bwriter);
+    let address_type =
+        exec_or_ret_err_v5!(breader.read_u8().await, "read address type", &mut bwriter);
     trace!("address type: {address_type}");
     let rhost = match address_type {
         0x01 => {
@@ -219,18 +268,19 @@ where
             let mut addr = [0; 4];
             exec_or_ret_err_v5!(
                 breader.read_exact(&mut addr).await,
-                "cannot read address",
+                "read address",
                 &mut bwriter
             );
             std::net::Ipv4Addr::from(addr).to_string()
         }
         0x03 => {
             // Domain name
-            let len = breader.read_u8().await?;
+            let len =
+                exec_or_ret_err_v5!(breader.read_u8().await, "read domain length", &mut bwriter);
             let mut addr = vec![0; usize::from(len)];
             exec_or_ret_err_v5!(
                 breader.read_exact(&mut addr).await,
-                "cannot read domain",
+                "read domain",
                 &mut bwriter
             );
             String::from_utf8(addr)?
@@ -240,28 +290,28 @@ where
             let mut addr = [0; 16];
             exec_or_ret_err_v5!(
                 breader.read_exact(&mut addr).await,
-                "cannot read address",
+                "read address",
                 &mut bwriter
             );
             std::net::Ipv6Addr::from(addr).to_string()
         }
         _ => {
-            info!("invalid address type {address_type}");
             bwriter.write_all(v5_reply!(0x08)).await?;
             bwriter.flush().await?;
-            return Err(Error::SocksRequest);
+            return Err(Error::AddressType(address_type));
         }
     };
-    let rport = exec_or_ret_err_v5!(breader.read_u16().await, "cannot read port", &mut bwriter);
+    let rport = exec_or_ret_err_v5!(breader.read_u16().await, "read port", &mut bwriter);
     debug!("SOCKSv5 {command} for {rhost}:{rport}");
     match command {
         0x01 => {
             // CONNECT
+            // This fails only if main has exited, which is a fatal error.
             let stream_command_tx_permit = handler_resources
                 .stream_command_tx
                 .reserve()
                 .await
-                .map_err(|_| Error::RequestStream)?;
+                .map_err(|_| super::Error::RequestStream)?;
             handle_connect(
                 breader,
                 bwriter,
@@ -271,14 +321,6 @@ where
                 true,
             )
             .await
-        }
-        0x02 => {
-            // BIND
-            // We don't support this because I can't ask the remote host to bind
-            warn!("BIND is not supported");
-            bwriter.write_all(v5_reply!(0x07)).await?;
-            bwriter.flush().await?;
-            Err(Error::SocksRequest)
         }
         0x03 => {
             // UDP ASSOCIATE
@@ -292,11 +334,11 @@ where
             )
             .await
         }
+        // We don't support BIND because I can't ask the remote host to bind
         _ => {
-            warn!("invalid command {command}");
             bwriter.write_all(v5_reply!(0x07)).await?;
             bwriter.flush().await?;
-            Err(Error::SocksRequest)
+            Err(Error::InvalidCommand(command))
         }
     }
 }
@@ -314,17 +356,12 @@ where
     W: AsyncWrite + Unpin,
 {
     // Establish a connection to the remote host
-    let channel_request = request_tcp_channel(stream_command_tx_permit, rhost.into(), rport).await;
-    let channel = if version_is_5 {
-        let channel = exec_or_ret_err_v5!(channel_request, "cannot get channel", &mut writer);
-        // Send back a successful response
+    let channel = request_tcp_channel(stream_command_tx_permit, rhost.into(), rport).await?;
+    // Send back a successful response
+    if version_is_5 {
         writer.write_all(v5_reply!(0x00)).await?;
-        channel
     } else {
-        let channel = exec_or_ret_err_v4!(channel_request, "cannot get channel", &mut writer);
-        // Send back a successful response
         writer.write_all(v4_reply!(0x5a)).await?;
-        channel
     };
     writer.flush().await?;
     let (remote_rx, remote_tx) = tokio::io::split(channel);
@@ -346,11 +383,11 @@ where
 {
     let socket = exec_or_ret_err_v5!(
         UdpSocket::bind((local_addr, 0)).await,
-        "cannot get udp socket",
+        "bind udp socket",
         &mut writer
     );
     let sock_local_addr =
-        exec_or_ret_err_v5!(socket.local_addr(), "cannot get local address", &mut writer);
+        exec_or_ret_err_v5!(socket.local_addr(), "get local address", &mut writer);
     let local_port = sock_local_addr.port().to_be_bytes();
     let local_ip = sock_local_addr.ip();
     let relay_task = tokio::spawn(udp_relay(
@@ -439,11 +476,12 @@ async fn udp_relay(
             sid: client_id,
             data,
         };
+        // This fails only if main has exited, which is a fatal error.
         handler_resources
             .datagram_tx
             .send(datagram_frame)
             .await
-            .map_err(|_| Error::SendDatagram)?;
+            .map_err(|_| super::Error::SendDatagram)?;
     }
 }
 
