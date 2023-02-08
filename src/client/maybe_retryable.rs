@@ -19,7 +19,7 @@ impl MaybeRetryableError for std::io::Error {
     }
 }
 
-impl MaybeRetryableError for tungstenite::error::ProtocolError {
+impl MaybeRetryableError for tokio_tungstenite::tungstenite::error::ProtocolError {
     fn retryable(&self) -> bool {
         matches!(
             self,
@@ -30,7 +30,7 @@ impl MaybeRetryableError for tungstenite::error::ProtocolError {
     }
 }
 
-impl MaybeRetryableError for tungstenite::Error {
+impl MaybeRetryableError for tokio_tungstenite::tungstenite::Error {
     fn retryable(&self) -> bool {
         match self {
             Self::Io(e) => e.retryable(),

@@ -12,14 +12,14 @@ use tokio_tungstenite::{
     connect_async_tls_with_config, Connector, MaybeTlsStream, WebSocketStream,
 };
 use tracing::{debug, warn};
-use tungstenite::{client::IntoClientRequest, handshake::client::Request};
+use tokio_tungstenite::tungstenite::{client::IntoClientRequest, handshake::client::Request};
 
 /// Error type for `WebSocket` connection.
 #[derive(Error, Debug)]
 pub enum Error {
     /// Invalid URL or cannot connect
     #[error("Tungstenite error: {0}")]
-    Tungstenite(#[from] tungstenite::Error),
+    Tungstenite(#[from] tokio_tungstenite::tungstenite::Error),
     /// TLS error
     #[error(transparent)]
     Tls(#[from] crate::tls::Error),

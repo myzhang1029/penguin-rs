@@ -10,7 +10,7 @@ use std::task::{ready, Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_tungstenite::WebSocketStream;
 use tracing::trace;
-use tungstenite::Message;
+use tokio_tungstenite::tungstenite::{Result, Message};
 
 /// A wrapper around `Sink + Stream` that can be cloned and shared between tasks.
 pub struct LockedWebSocket<S>(Arc<Mutex<WebSocketStream<S>>>);
@@ -36,7 +36,7 @@ where
         &self,
         cx: &mut Context<'_>,
         msg_fn: impl FnOnce(&mut Context<'_>) -> Poll<Message>,
-    ) -> Poll<tungstenite::Result<()>> {
+    ) -> Poll<Result<()>> {
         let mut sink = self.0.lock();
         // `ready`: if we return here, nothing happens
         ready!(sink.poll_ready_unpin(cx))?;
@@ -47,13 +47,13 @@ where
     }
 
     #[inline]
-    pub async fn send_with(&self, msg_fn: impl Fn() -> Message) -> tungstenite::Result<()> {
+    pub async fn send_with(&self, msg_fn: impl Fn() -> Message) -> Result<()> {
         poll_fn(|cx| self.poll_send_with(cx, |_cx| Poll::Ready(msg_fn()))).await
     }
 
     /// Lock and flush the sink
     #[inline]
-    pub fn poll_flush(&self, cx: &mut Context<'_>) -> Poll<tungstenite::Result<()>> {
+    pub fn poll_flush(&self, cx: &mut Context<'_>) -> Poll<Result<()>> {
         self.0.lock().poll_flush_unpin(cx)
     }
 
@@ -63,10 +63,10 @@ where
     /// because the user should only discover this when they try to work with
     /// the stream for the next time.
     #[inline]
-    pub fn poll_flush_ignore_closed(&self, cx: &mut Context<'_>) -> Poll<tungstenite::Result<()>> {
+    pub fn poll_flush_ignore_closed(&self, cx: &mut Context<'_>) -> Poll<Result<()>> {
         match ready!(self.poll_flush(cx)) {
-            Ok(()) | Err(tungstenite::Error::ConnectionClosed) => Poll::Ready(Ok(())),
-            Err(tungstenite::Error::Io(ioerror))
+            Ok(()) | Err(tokio_tungstenite::tungstenite::Error::ConnectionClosed) => Poll::Ready(Ok(())),
+            Err(tokio_tungstenite::tungstenite::Error::Io(ioerror))
                 if ioerror.kind() == std::io::ErrorKind::BrokenPipe =>
             {
                 Poll::Ready(Ok(()))
@@ -76,28 +76,28 @@ where
     }
 
     #[inline]
-    pub async fn flush_ignore_closed(&self) -> tungstenite::Result<()> {
+    pub async fn flush_ignore_closed(&self) -> Result<()> {
         poll_fn(|cx| self.poll_flush_ignore_closed(cx)).await
     }
 
     /// Lock and close the sink
     #[inline]
-    pub fn poll_close(&self, cx: &mut Context<'_>) -> Poll<tungstenite::Result<()>> {
+    pub fn poll_close(&self, cx: &mut Context<'_>) -> Poll<Result<()>> {
         self.0.lock().poll_close_unpin(cx)
     }
 
     #[inline]
-    pub async fn close(&self) -> tungstenite::Result<()> {
+    pub async fn close(&self) -> Result<()> {
         poll_fn(|cx| self.poll_close(cx)).await
     }
 
     #[inline]
-    pub fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<tungstenite::Result<Message>>> {
+    pub fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Result<Message>>> {
         self.0.lock().poll_next_unpin(cx)
     }
 
     #[inline]
-    pub async fn next(&self) -> Option<tungstenite::Result<Message>> {
+    pub async fn next(&self) -> Option<Result<Message>> {
         poll_fn(|cx| self.poll_next(cx)).await
     }
 }

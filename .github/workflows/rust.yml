@@ -45,12 +45,12 @@ jobs:
       run: cargo install grcov
 
     - name: Build
-      run: cargo build --verbose --features ${{ matrix.tls }},tests-real-internet4 --no-default-features
+      run: cargo build --verbose --features ${{ matrix.tls }},tests-real-internet4,penguin-binary --no-default-features
       env:
         RUSTFLAGS: -Cinstrument-coverage
 
     - name: Run cargo tests
-      run: cargo test --verbose --features ${{ matrix.tls }},tests-real-internet4 --no-default-features
+      run: cargo test --verbose --features ${{ matrix.tls }},tests-real-internet4,penguin-binary --no-default-features
       env:
         RUSTFLAGS: -Cinstrument-coverage
 

@@ -17,7 +17,7 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::MissedTickBehavior;
 use tracing::{debug, error, trace, warn};
-use tungstenite::Message;
+use tokio_tungstenite::tungstenite::Message;
 
 #[derive(Debug)]
 pub struct MuxStreamData {

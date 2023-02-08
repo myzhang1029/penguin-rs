@@ -41,7 +41,7 @@ const VERBOSE_LOG_LEVEL: filter::LevelFilter = filter::LevelFilter::DEBUG;
 #[cfg(not(feature = "tokio-console"))]
 const VERBOSE_VERBOSE_LOG_LEVEL: filter::LevelFilter = filter::LevelFilter::TRACE;
 
-#[cfg(feature = "deadlock_detection")]
+#[cfg(feature = "deadlock-detection")]
 fn spawn_deadlock_detection() {
     use std::thread;
 
@@ -106,7 +106,7 @@ async fn main() -> Result<(), Error> {
                 .expect("Resetting log level failed (this is a bug)"),
         };
     }
-    #[cfg(feature = "deadlock_detection")]
+    #[cfg(feature = "deadlock-detection")]
     spawn_deadlock_detection();
     match &cli_args.subcommand {
         arg::Commands::Client(args) => client::client_main(args).await?,

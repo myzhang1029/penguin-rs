@@ -1,7 +1,7 @@
 //! Default configuration parameters for the server and client.
 
 use tokio::time;
-use tungstenite::protocol::WebSocketConfig;
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 
 pub const DEFAULT_WS_CONFIG: WebSocketConfig = WebSocketConfig {
     max_send_queue: None,

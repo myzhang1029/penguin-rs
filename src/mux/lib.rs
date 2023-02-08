@@ -29,12 +29,12 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
     sync::{mpsc, RwLock},
 };
-use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::{WebSocketStream, tungstenite::Message};
 use tracing::{error, trace, warn};
 
 pub use frame::{DatagramFrame, Frame, StreamFlag, StreamFrame};
 pub use stream::MuxStream;
-pub use tungstenite::protocol::Role;
+pub use tokio_tungstenite::tungstenite::protocol::Role;
 
 /// Multiplexor error
 #[derive(Debug, Error)]
@@ -50,19 +50,19 @@ pub enum Error {
     // These are tungstenite errors separated by their origin
     /// Tungstenite error when polling the next message
     #[error("Failed to receive message: {0}")]
-    Next(tungstenite::Error),
+    Next(tokio_tungstenite::tungstenite::Error),
     /// Tungstenite error when flushing messages
     #[error("Failed to flush messages: {0}")]
-    Flush(tungstenite::Error),
+    Flush(tokio_tungstenite::tungstenite::Error),
     /// Tungstenite error when sending a datagram
     #[error("Failed to send datagram: {0}")]
-    SendDatagram(tungstenite::Error),
+    SendDatagram(tokio_tungstenite::tungstenite::Error),
     /// Tungstenite error when sending a stream frame
     #[error("Failed to send stream frame: {0}")]
-    SendStreamFrame(tungstenite::Error),
+    SendStreamFrame(tokio_tungstenite::tungstenite::Error),
     /// Tungstenite error when sending a ping
     #[error("Failed to send ping: {0}")]
-    SendPing(tungstenite::Error),
+    SendPing(tokio_tungstenite::tungstenite::Error),
 
     // These are the ones that shouldn't normally happen
     /// Datagram target host longer than 255 octets
@@ -109,10 +109,10 @@ where
         role: Role,
         keepalive_interval: Option<std::time::Duration>,
     ) -> Self {
-        let (datagram_tx, datagram_rx) = tokio::sync::mpsc::channel(config::DATAGRAM_BUFFER_SIZE);
-        let (stream_tx, stream_rx) = tokio::sync::mpsc::channel(config::STREAM_BUFFER_SIZE);
-        let (dropped_ports_tx, dropped_ports_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (ack_tx, ack_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (datagram_tx, datagram_rx) = mpsc::channel(config::DATAGRAM_BUFFER_SIZE);
+        let (stream_tx, stream_rx) = mpsc::channel(config::STREAM_BUFFER_SIZE);
+        let (dropped_ports_tx, dropped_ports_rx) = mpsc::unbounded_channel();
+        let (ack_tx, ack_rx) = mpsc::unbounded_channel();
 
         let inner = MultiplexorInner {
             role,
@@ -210,7 +210,7 @@ where
         let payload: Bytes = Vec::<u8>::try_from(frame)?.into();
         self.inner
             .ws
-            .send_with(|| tungstenite::Message::Binary(payload.dupe().into()))
+            .send_with(|| Message::Binary(payload.dupe().into()))
             .await
             .map_err(Error::SendDatagram)?;
         Ok(())
