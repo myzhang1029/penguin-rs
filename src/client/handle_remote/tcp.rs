@@ -5,6 +5,7 @@ use super::super::MaybeRetryableError;
 use super::Error;
 use crate::client::HandlerResources;
 use crate::client::{MuxStream, StreamCommand};
+use bytes::Bytes;
 use tokio::{
     net::TcpListener,
     sync::{mpsc, oneshot},
@@ -17,7 +18,7 @@ use tracing::{error, info, warn};
 #[tracing::instrument(skip(stream_command_tx_permit), level = "debug")]
 pub(super) async fn request_tcp_channel(
     stream_command_tx_permit: mpsc::Permit<'_, StreamCommand>,
-    dest_host: Vec<u8>,
+    dest_host: Bytes,
     dest_port: u16,
 ) -> Result<MuxStream, oneshot::error::RecvError> {
     let (tx, rx) = oneshot::channel();
@@ -48,12 +49,13 @@ pub(super) async fn open_tcp_listener(lhost: &str, lport: u16) -> std::io::Resul
 pub(super) async fn handle_tcp(
     lhost: &str,
     lport: u16,
-    rhost: &str,
+    rhost: &'static str,
     rport: u16,
     handler_resources: &HandlerResources,
 ) -> Result<(), Error> {
     // Not being able to open a TCP listener is a fatal error.
     let listener = open_tcp_listener(lhost, lport).await?;
+    let rhost = rhost.as_bytes();
     loop {
         // This fails only if main has exited, which is a fatal error.
         let stream_command_tx_permit = handler_resources
@@ -68,7 +70,7 @@ pub(super) async fn handle_tcp(
         // A new channel is created for each incoming TCP connection.
         // It's already TCP, anyways.
         let mut channel = super::complete_or_continue!(
-            request_tcp_channel(stream_command_tx_permit, rhost.into(), rport).await
+            request_tcp_channel(stream_command_tx_permit, Bytes::from_static(rhost), rport).await
         );
         tokio::spawn(async move {
             if let Err(error) = tokio::io::copy_bidirectional(&mut channel, &mut tcp_stream).await {
@@ -81,11 +83,12 @@ pub(super) async fn handle_tcp(
 /// Handle a TCP Stdio->Inet remote.
 #[tracing::instrument(skip(handler_resources))]
 pub async fn handle_tcp_stdio(
-    rhost: &str,
+    rhost: &'static str,
     rport: u16,
     handler_resources: &HandlerResources,
 ) -> Result<(), Error> {
     let mut stdio = super::Stdio::new();
+    let rhost = rhost.as_bytes();
     // We want `loop` to be able to continue after a connection failure
     loop {
         // This fails only if main has exited, which is a fatal error.
@@ -95,7 +98,7 @@ pub async fn handle_tcp_stdio(
             .await
             .map_err(|_| Error::RequestStream)?;
         let mut channel = super::complete_or_continue!(
-            request_tcp_channel(stream_command_tx_permit, rhost.into(), rport).await
+            request_tcp_channel(stream_command_tx_permit, Bytes::from_static(rhost), rport).await
         );
         super::complete_or_continue_if_retryable!(
             tokio::io::copy_bidirectional(&mut stdio, &mut channel).await

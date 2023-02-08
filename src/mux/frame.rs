@@ -51,7 +51,7 @@
 //! send them back to the client with the same Source ID.
 #![allow(clippy::similar_names)]
 
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes};
 use std::{fmt::Debug, num::TryFromIntError};
 use thiserror::Error;
 use tokio_tungstenite::tungstenite::Message;
@@ -116,9 +116,8 @@ impl StreamFrame {
     #[inline]
     pub fn new_syn(dest_host: &[u8], dest_port: u16, sport: u16, rwnd: u64) -> Self {
         let host_len = dest_host.len();
-        let mut syn_payload = BytesMut::with_capacity(
-            std::mem::size_of::<u64>() + std::mem::size_of::<u16>() + host_len,
-        );
+        let mut syn_payload =
+            Vec::with_capacity(std::mem::size_of::<u64>() + std::mem::size_of::<u16>() + host_len);
         syn_payload.put_u64(rwnd);
         syn_payload.put_u16(dest_port);
         syn_payload.extend(dest_host);
@@ -126,7 +125,7 @@ impl StreamFrame {
             sport,
             dport: 0,
             flag: StreamFlag::Syn,
-            data: syn_payload.freeze(),
+            data: Bytes::from(syn_payload),
         }
     }
     /// Create a new `SynAck` frame.

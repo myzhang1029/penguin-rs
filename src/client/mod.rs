@@ -8,6 +8,7 @@ pub mod ws_connect;
 use crate::arg::ClientArgs;
 use crate::config;
 use crate::Dupe;
+use bytes::Bytes;
 use handle_remote::handle_remote;
 use maybe_retryable::MaybeRetryableError;
 use penguin_mux::{DatagramFrame, Multiplexor, Role};
@@ -49,7 +50,7 @@ type MuxStream = penguin_mux::MuxStream<MaybeTlsStream<TcpStream>>;
 pub struct StreamCommand {
     /// Channel to send the stream back to the listener
     pub tx: oneshot::Sender<MuxStream>,
-    pub host: Vec<u8>,
+    pub host: Bytes,
     pub port: u16,
 }
 

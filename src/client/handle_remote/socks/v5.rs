@@ -4,6 +4,7 @@
 use std::net::SocketAddr;
 
 use super::Error;
+use bytes::Bytes;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tracing::trace;
 
@@ -61,7 +62,7 @@ where
 /// # Errors
 /// Underlying I/O error with a description of the context.
 #[inline]
-pub async fn read_request<RW>(mut stream: RW) -> Result<(u8, String, u16), Error>
+pub async fn read_request<RW>(mut stream: RW) -> Result<(u8, Bytes, u16), Error>
 where
     RW: AsyncRead + AsyncWrite + Unpin,
 {
@@ -93,7 +94,7 @@ where
 /// # Errors
 /// Underlying I/O error with a description of the context.
 #[inline]
-async fn read_address<RW>(mut stream: RW) -> Result<String, Error>
+async fn read_address<RW>(mut stream: RW) -> Result<Bytes, Error>
 where
     RW: AsyncRead + AsyncWrite + Unpin,
 {
@@ -110,7 +111,7 @@ where
                 .read_exact(&mut addr)
                 .await
                 .map_err(|e| Error::ProcessSocksRequest("read address", e))?;
-            Ok(std::net::Ipv4Addr::from(addr).to_string())
+            Ok(std::net::Ipv4Addr::from(addr).to_string().into())
         }
         0x03 => {
             // Domain name
@@ -123,8 +124,7 @@ where
                 .read_exact(&mut addr)
                 .await
                 .map_err(|e| Error::ProcessSocksRequest("read domain address", e))?;
-            let name = String::from_utf8(addr)?;
-            Ok(name)
+            Ok(Bytes::from(addr))
         }
         0x04 => {
             // IPv6
@@ -133,7 +133,7 @@ where
                 .read_exact(&mut addr)
                 .await
                 .map_err(|e| Error::ProcessSocksRequest("read address", e))?;
-            Ok(std::net::Ipv6Addr::from(addr).to_string())
+            Ok(std::net::Ipv6Addr::from(addr).to_string().into())
         }
         _ => {
             // Unsupported address type

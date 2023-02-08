@@ -5,7 +5,7 @@ use super::super::MaybeRetryableError;
 use super::Error;
 use crate::client::{ClientIdMapEntry, HandlerResources};
 use crate::Dupe;
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use penguin_mux::{DatagramFrame, IntKey};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -30,7 +30,7 @@ pub(super) async fn handle_udp(
         .map_or(format!("{lhost}:{lport}"), |addr| addr.to_string());
     info!("Bound on {local_addr}");
     loop {
-        let mut buf = BytesMut::zeroed(65536);
+        let mut buf = vec![0; 65536];
         // `recv_from` can fail if the socket is closed, which is a fatal error.
         let (len, addr) = socket.recv_from(&mut buf).await?;
         buf.truncate(len);
@@ -43,7 +43,7 @@ pub(super) async fn handle_udp(
             host: Bytes::from_static(rhost.as_bytes()),
             port: rport,
             sid: client_id,
-            data: buf.freeze(),
+            data: Bytes::from(buf),
         };
         // This fails only if main has exited, which is a fatal error.
         handler_resources

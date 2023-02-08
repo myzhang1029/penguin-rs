@@ -3,7 +3,7 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use crate::{config, Dupe};
-use bytes::BytesMut;
+use bytes::Bytes;
 use penguin_mux::DatagramFrame;
 use std::net::SocketAddr;
 use thiserror::Error;
@@ -76,7 +76,7 @@ pub(super) async fn udp_forward_to(
     let (socket, target) = bind_and_send((rhost_str, rport), &data).await?;
     trace!("sent UDP packet to {target}");
     loop {
-        let mut buf = BytesMut::zeroed(65536);
+        let mut buf = vec![0; 65536];
         match tokio::time::timeout(config::UDP_PRUNE_TIMEOUT, socket.recv(&mut buf)).await {
             Ok(Ok(len)) => {
                 trace!("got UDP response from {target}");
@@ -85,7 +85,7 @@ pub(super) async fn udp_forward_to(
                     sid: client_id,
                     host: rhost.dupe(),
                     port: rport,
-                    data: buf.freeze(),
+                    data: Bytes::from(buf),
                 };
                 if datagram_tx.send(datagram_frame).await.is_err() {
                     // The main loop has exited, so we should exit too.

@@ -4,6 +4,7 @@
 use std::net::Ipv4Addr;
 
 use super::Error;
+use bytes::Bytes;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tracing::trace;
 
@@ -14,7 +15,7 @@ use tracing::trace;
 /// # Errors
 /// Underlying I/O error with a description of the context.
 #[inline]
-pub async fn read_request<R>(mut reader: R) -> Result<(u8, String, u16), Error>
+pub async fn read_request<R>(mut reader: R) -> Result<(u8, Bytes, u16), Error>
 where
     R: AsyncBufRead + Unpin,
 {
@@ -46,9 +47,9 @@ where
             .map_err(|e| Error::ProcessSocksRequest("read domain", e))?;
         // Remove the null byte
         domain.pop();
-        String::from_utf8(domain)?
+        Bytes::from(domain)
     } else {
-        Ipv4Addr::from(ip).to_string()
+        Ipv4Addr::from(ip).to_string().into()
     };
     Ok((command, rhost, rport))
 }

@@ -8,7 +8,7 @@ use super::tcp::{open_tcp_listener, request_tcp_channel};
 use super::HandlerResources;
 use crate::client::{ClientIdMapEntry, StreamCommand};
 use crate::Dupe;
-use bytes::{Buf, Bytes, BytesMut};
+use bytes::{Buf, Bytes};
 use penguin_mux::{DatagramFrame, IntKey};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
@@ -34,8 +34,6 @@ pub enum Error {
     AddressType(u8),
     #[error("Cannot {0} in SOCKS request: {1}")]
     ProcessSocksRequest(&'static str, std::io::Error),
-    #[error("Invalid domain name: {0}")]
-    DomainName(#[from] std::string::FromUtf8Error),
     #[error("Client does not support NOAUTH")]
     OtherAuth,
     #[error("Timed out waiting for a new channel: {0}")]
@@ -124,7 +122,10 @@ where
     RW: AsyncBufRead + AsyncWrite + Unpin,
 {
     let (command, rhost, rport) = v4::read_request(&mut stream).await?;
-    debug!("SOCKSv4 request for {rhost}:{rport}");
+    debug!(
+        "SOCKSv4 request for {}:{rport}",
+        String::from_utf8_lossy(&rhost)
+    );
     if command == 0x01 {
         // CONNECT
         // This fails only if main has exited, which is a fatal error.
@@ -133,7 +134,7 @@ where
             .reserve()
             .await
             .map_err(|_| super::Error::RequestStream)?;
-        handle_connect(stream, &rhost, rport, stream_command_tx_permit, false).await
+        handle_connect(stream, rhost, rport, stream_command_tx_permit, false).await
     } else {
         v4::write_response(&mut stream, 0x5b).await?;
         Err(Error::InvalidCommand(command))
@@ -161,7 +162,10 @@ where
     v5::write_auth_method(&mut stream, 0x00).await?;
     // Read the request
     let (command, rhost, rport) = v5::read_request(&mut stream).await?;
-    debug!("SOCKSv5 cmd({command}) for {rhost}:{rport}");
+    debug!(
+        "SOCKSv5 cmd({command}) for {}:{rport}",
+        String::from_utf8_lossy(&rhost)
+    );
     match command {
         0x01 => {
             // CONNECT
@@ -171,11 +175,11 @@ where
                 .reserve()
                 .await
                 .map_err(|_| super::Error::RequestStream)?;
-            handle_connect(stream, &rhost, rport, stream_command_tx_permit, true).await
+            handle_connect(stream, rhost, rport, stream_command_tx_permit, true).await
         }
         0x03 => {
             // UDP ASSOCIATE
-            handle_associate(stream, &rhost, rport, local_addr, handler_resources).await
+            handle_associate(stream, rhost, rport, local_addr, handler_resources).await
         }
         // We don't support BIND because I can't ask the remote host to bind
         _ => {
@@ -187,7 +191,7 @@ where
 
 async fn handle_connect<RW>(
     mut stream: RW,
-    rhost: &str,
+    rhost: Bytes,
     rport: u16,
     stream_command_tx_permit: mpsc::Permit<'_, StreamCommand>,
     version_is_5: bool,
@@ -196,7 +200,7 @@ where
     RW: AsyncBufRead + AsyncWrite + Unpin,
 {
     // Establish a connection to the remote host
-    let mut channel = request_tcp_channel(stream_command_tx_permit, rhost.into(), rport).await?;
+    let mut channel = request_tcp_channel(stream_command_tx_permit, rhost, rport).await?;
     // Send back a successful response
     if version_is_5 {
         v5::write_response_unspecified(&mut stream, 0x00).await?;
@@ -210,7 +214,7 @@ where
 
 async fn handle_associate<RW>(
     mut stream: RW,
-    rhost: &str,
+    rhost: Bytes,
     rport: u16,
     local_addr: &str,
     handler_resources: &HandlerResources,
@@ -232,12 +236,7 @@ where
             return Err(Error::ProcessSocksRequest("get udp socket local addr", e));
         }
     };
-    let relay_task = tokio::spawn(udp_relay(
-        rhost.to_string(),
-        rport,
-        handler_resources.dupe(),
-        socket,
-    ));
+    let relay_task = tokio::spawn(udp_relay(rhost, rport, handler_resources.dupe(), socket));
     // Send back a successful response
     v5::write_response(&mut stream, 0x00, sock_local_addr).await?;
     // My crude way to detect when the client closes the connection
@@ -249,7 +248,7 @@ where
 /// UDP task spawned by the TCP connection
 #[allow(clippy::similar_names)]
 async fn udp_relay(
-    _rhost: String,
+    _rhost: Bytes,
     _rport: u16,
     handler_resources: HandlerResources,
     socket: UdpSocket,
@@ -267,7 +266,7 @@ async fn udp_relay(
         );
         drop(udp_client_id_map);
         let datagram_frame = DatagramFrame {
-            host: dst.into(),
+            host: dst,
             port: dport,
             sid: client_id,
             data,
@@ -281,53 +280,50 @@ async fn udp_relay(
     }
 }
 
-/// Parse a UDP relay request
+/// Parse a UDP relay request.
+/// Returns (dst, dport, data, src, sport)
 async fn handle_udp_relay_header(
     socket: &UdpSocket,
-) -> Result<Option<(String, u16, Bytes, IpAddr, u16)>, Error> {
-    let mut buf = BytesMut::zeroed(65536);
+) -> Result<Option<(Bytes, u16, Bytes, IpAddr, u16)>, Error> {
+    let mut buf = vec![0; 65536];
     let (len, addr) = socket.recv_from(&mut buf).await?;
     buf.truncate(len);
-    // let _reserved = &buf[..2];
-    let frag = buf[2];
+    let mut buf = Bytes::from(buf);
+    let _reserved = buf.get_u16();
+    let frag = buf.get_u8();
     if frag != 0 {
         warn!("Fragmented UDP packets are not implemented");
         return Ok(None);
     }
-    let atyp = buf[3];
-    let (dst, port, processed) = match atyp {
+    let atyp = buf.get_u8();
+    let (dst, port) = match atyp {
         0x01 => {
             // IPv4
-            let array: [u8; 4] = buf[4..8]
-                .try_into()
-                .expect("slice with incorrect length (this is a bug)");
-            let dst = Ipv4Addr::from(array).to_string();
-            let port = (u16::from(buf[8]) << 8) | u16::from(buf[9]);
-            (dst, port, 10)
+            let addr = buf.get_u32();
+            let dst = Ipv4Addr::from(addr).to_string();
+            let port = buf.get_u16();
+            (dst.into(), port)
         }
         0x03 => {
             // Domain name
-            let len = usize::from(buf[4]);
-            let dst = String::from_utf8_lossy(&buf[5..5 + len]).to_string();
-            let port = (u16::from(buf[5 + len]) << 8) | u16::from(buf[6 + len]);
-            (dst, port, 7 + len)
+            let len = usize::from(buf.get_u8());
+            let dst = buf.split_to(len);
+            let port = buf.get_u16();
+            (dst, port)
         }
         0x04 => {
             // IPv6
-            let array: [u8; 16] = buf[4..20]
-                .try_into()
-                .expect("slice with incorrect length (this is a bug)");
-            let dst = Ipv6Addr::from(array).to_string();
-            let port = (u16::from(buf[20]) << 8) | u16::from(buf[21]);
-            (dst, port, 22)
+            let addr = buf.get_u128();
+            let dst = Ipv6Addr::from(addr).to_string();
+            let port = buf.get_u16();
+            (dst.into(), port)
         }
         _ => {
             warn!("Dropping datagram with invalid address type {atyp}");
             return Ok(None);
         }
     };
-    buf.advance(processed);
-    Ok(Some((dst, port, buf.freeze(), addr.ip(), addr.port())))
+    Ok(Some((dst, port, buf, addr.ip(), addr.port())))
 }
 
 /// Send a UDP relay response
