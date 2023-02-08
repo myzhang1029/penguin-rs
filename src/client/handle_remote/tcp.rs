@@ -2,11 +2,10 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::super::MaybeRetryableError;
-use super::{pipe_streams, Error};
+use super::Error;
 use crate::client::HandlerResources;
 use crate::client::{MuxStream, StreamCommand};
 use tokio::{
-    io::{BufReader, BufWriter},
     net::TcpListener,
     sync::{mpsc, oneshot},
 };
@@ -86,8 +85,7 @@ pub async fn handle_tcp_stdio(
     rport: u16,
     handler_resources: &HandlerResources,
 ) -> Result<(), Error> {
-    let mut stdin = tokio::io::stdin();
-    let mut stdout = tokio::io::stdout();
+    let mut stdio = super::Stdio::new();
     // We want `loop` to be able to continue after a connection failure
     loop {
         // This fails only if main has exited, which is a fatal error.
@@ -96,14 +94,11 @@ pub async fn handle_tcp_stdio(
             .reserve()
             .await
             .map_err(|_| Error::RequestStream)?;
-        let channel = super::complete_or_continue!(
+        let mut channel = super::complete_or_continue!(
             request_tcp_channel(stream_command_tx_permit, rhost.into(), rport).await
         );
-        let (channel_rx, channel_tx) = tokio::io::split(channel);
-        let channel_rx = BufReader::new(channel_rx);
-        let channel_tx = BufWriter::new(channel_tx);
         super::complete_or_continue_if_retryable!(
-            pipe_streams(&mut stdin, &mut stdout, channel_rx, channel_tx).await
+            tokio::io::copy_bidirectional(&mut stdio, &mut channel).await
         );
     }
 }

@@ -17,7 +17,7 @@ use crate::parse_remote::{Protocol, Remote};
 use socks::{handle_socks, handle_socks_stdio};
 use tcp::{handle_tcp, handle_tcp_stdio};
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::{debug, error};
 use udp::{handle_udp, handle_udp_stdio};
 
@@ -99,30 +99,51 @@ pub(super) async fn handle_remote(
     }
 }
 
-/// Read/write to and from (i.e. bidirectionally forward) a pair of streams
-#[tracing::instrument(skip_all, level = "debug")]
-pub async fn pipe_streams<R1, W1, R2, W2>(
-    mut reader1: R1,
-    mut writer1: W1,
-    mut reader2: R2,
-    mut writer2: W2,
-) -> std::io::Result<(u64, u64)>
-where
-    R1: AsyncRead + Unpin,
-    W1: AsyncWrite + Unpin,
-    R2: AsyncRead + Unpin,
-    W2: AsyncWrite + Unpin,
-{
-    let pipe1 = async {
-        let result = tokio::io::copy(&mut reader1, &mut writer2).await;
-        writer2.shutdown().await.ok();
-        result
-    };
-    let pipe2 = async {
-        let result = tokio::io::copy(&mut reader2, &mut writer1).await;
-        writer1.shutdown().await.ok();
-        result
-    };
+/// Merged `stdin` and `stdout` into a single stream
+pub struct Stdio {
+    stdin: tokio::io::Stdin,
+    stdout: tokio::io::Stdout,
+}
 
-    tokio::try_join!(pipe1, pipe2)
+impl Stdio {
+    pub fn new() -> Self {
+        Self {
+            stdin: tokio::io::stdin(),
+            stdout: tokio::io::stdout(),
+        }
+    }
+}
+
+impl AsyncRead for Stdio {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context,
+        buf: &mut tokio::io::ReadBuf,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.stdin).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for Stdio {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.stdout).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.stdout).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.stdout).poll_shutdown(cx)
+    }
 }
