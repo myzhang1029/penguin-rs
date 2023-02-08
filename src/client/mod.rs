@@ -200,9 +200,7 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
 /// fail to get a new channel for the remote.
 #[tracing::instrument(skip_all, level = "debug")]
 async fn on_connected(
-    ws_stream: tokio_tungstenite::WebSocketStream<
-        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-    >,
+    ws_stream: tokio_tungstenite::WebSocketStream<MaybeTlsStream<TcpStream>>,
     stream_command_rx: &mut mpsc::Receiver<StreamCommand>,
     datagram_rx: &mut mpsc::Receiver<DatagramFrame>,
     udp_client_id_map: Arc<RwLock<HashMap<u32, ClientIdMapEntry>>>,

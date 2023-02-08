@@ -54,8 +54,8 @@
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use std::{fmt::Debug, num::TryFromIntError};
 use thiserror::Error;
-use tracing::warn;
 use tokio_tungstenite::tungstenite::Message;
+use tracing::warn;
 
 /// Conversion errors
 #[derive(Debug, Error)]

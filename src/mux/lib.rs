@@ -29,7 +29,7 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
     sync::{mpsc, RwLock},
 };
-use tokio_tungstenite::{WebSocketStream, tungstenite::Message};
+use tokio_tungstenite::{tungstenite::Message, WebSocketStream};
 use tracing::{error, trace, warn};
 
 pub use frame::{DatagramFrame, Frame, StreamFlag, StreamFrame};

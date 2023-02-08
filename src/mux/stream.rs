@@ -211,7 +211,8 @@ where
 fn tungstenite_error_to_io_error(e: tokio_tungstenite::tungstenite::Error) -> std::io::Error {
     match e {
         tokio_tungstenite::tungstenite::Error::Io(e) => e,
-        tokio_tungstenite::tungstenite::Error::AlreadyClosed | tokio_tungstenite::tungstenite::Error::ConnectionClosed => {
+        tokio_tungstenite::tungstenite::Error::AlreadyClosed
+        | tokio_tungstenite::tungstenite::Error::ConnectionClosed => {
             std::io::ErrorKind::BrokenPipe.into()
         }
         e => std::io::Error::new(std::io::ErrorKind::Other, e),

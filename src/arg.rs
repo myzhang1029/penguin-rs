@@ -253,7 +253,7 @@ pub enum ServerUrlError {
     #[error("failed to parse server URL: {0}")]
     UrlParse(#[from] http::uri::InvalidUri),
     #[error("incorrect scheme in server URL: {0}")]
-    IncorrectScheme(String),
+    IncorrectScheme(Scheme),
     #[error("missing host in server URL")]
     MissingHost,
     #[error("cannot build server URL: {0}")]
@@ -291,7 +291,7 @@ impl FromStr for ServerUrl {
         let new_scheme = match old_scheme.as_ref() {
             "http" | "ws" => Ok("ws"),
             "https" | "wss" => Ok("wss"),
-            _ => Err(ServerUrlError::IncorrectScheme(old_scheme.to_string())),
+            _ => Err(ServerUrlError::IncorrectScheme(old_scheme)),
         }?;
         // Convert to a `Uri`.
         let url = Uri::builder()
@@ -323,7 +323,7 @@ pub enum BackendUrlError {
     #[error("missing authority in backend URL")]
     MissingAuthority,
     #[error("invalid backend scheme: {0}")]
-    InvalidScheme(String),
+    InvalidScheme(Scheme),
 }
 
 /// Backend URL
@@ -345,7 +345,7 @@ impl FromStr for BackendUrl {
         let url_parts = Uri::from_str(url)?.into_parts();
         let scheme = url_parts.scheme.unwrap_or(Scheme::HTTP);
         if scheme != Scheme::HTTP && scheme != Scheme::HTTPS {
-            return Err(BackendUrlError::InvalidScheme(scheme.to_string()));
+            return Err(BackendUrlError::InvalidScheme(scheme));
         }
         Ok(Self {
             scheme,

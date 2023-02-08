@@ -24,9 +24,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use tokio_tungstenite::tungstenite::protocol::Role;
 use tokio_tungstenite::WebSocketStream;
 use tracing::{debug, error, warn};
-use tokio_tungstenite::tungstenite::protocol::Role;
 
 static UPGRADE: HeaderValue = HeaderValue::from_static("upgrade");
 static WEBSOCKET: HeaderValue = HeaderValue::from_static("websocket");

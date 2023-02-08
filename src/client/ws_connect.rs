@@ -8,11 +8,11 @@ use crate::tls::make_tls_connector;
 use http::header::HeaderValue;
 use thiserror::Error;
 use tokio::net::TcpStream;
+use tokio_tungstenite::tungstenite::{client::IntoClientRequest, handshake::client::Request};
 use tokio_tungstenite::{
     connect_async_tls_with_config, Connector, MaybeTlsStream, WebSocketStream,
 };
 use tracing::{debug, warn};
-use tokio_tungstenite::tungstenite::{client::IntoClientRequest, handshake::client::Request};
 
 /// Error type for `WebSocket` connection.
 #[derive(Error, Debug)]

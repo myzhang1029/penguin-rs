@@ -8,9 +8,9 @@ use std::future::poll_fn;
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio_tungstenite::tungstenite::{Message, Result};
 use tokio_tungstenite::WebSocketStream;
 use tracing::trace;
-use tokio_tungstenite::tungstenite::{Result, Message};
 
 /// A wrapper around `Sink + Stream` that can be cloned and shared between tasks.
 pub struct LockedWebSocket<S>(Arc<Mutex<WebSocketStream<S>>>);
@@ -65,7 +65,9 @@ where
     #[inline]
     pub fn poll_flush_ignore_closed(&self, cx: &mut Context<'_>) -> Poll<Result<()>> {
         match ready!(self.poll_flush(cx)) {
-            Ok(()) | Err(tokio_tungstenite::tungstenite::Error::ConnectionClosed) => Poll::Ready(Ok(())),
+            Ok(()) | Err(tokio_tungstenite::tungstenite::Error::ConnectionClosed) => {
+                Poll::Ready(Ok(()))
+            }
             Err(tokio_tungstenite::tungstenite::Error::Io(ioerror))
                 if ioerror.kind() == std::io::ErrorKind::BrokenPipe =>
             {
