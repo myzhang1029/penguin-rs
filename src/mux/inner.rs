@@ -16,8 +16,8 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::MissedTickBehavior;
-use tracing::{debug, error, trace, warn};
 use tokio_tungstenite::tungstenite::Message;
+use tracing::{debug, error, trace, warn};
 
 #[derive(Debug)]
 pub struct MuxStreamData {
@@ -116,77 +116,16 @@ where
     )]
     pub async fn task(
         mut self,
-        mut datagram_tx: mpsc::Sender<DatagramFrame>,
-        mut stream_tx: mpsc::Sender<MuxStream<S>>,
-        mut dropped_ports_rx: mpsc::UnboundedReceiver<(u16, u16)>,
-        mut ack_rx: mpsc::UnboundedReceiver<(u16, u16, u64)>,
+        datagram_tx: mpsc::Sender<DatagramFrame>,
+        stream_tx: mpsc::Sender<MuxStream<S>>,
+        dropped_ports_rx: mpsc::UnboundedReceiver<(u16, u16)>,
+        ack_rx: mpsc::UnboundedReceiver<(u16, u16, u64)>,
     ) {
-        let us = self.dupe();
-        let keepalive_task_future = async move {
-            if let Some(keepalive_interval) = self.keepalive_interval {
-                let mut interval = tokio::time::interval(keepalive_interval);
-                // If we missed a tick, it is probably doing networking, so we don't need to
-                // send a ping
-                interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-                loop {
-                    interval.tick().await;
-                    trace!("sending ping");
-                    // Tungstenite should deliver `Ping` immediately
-                    us.ws
-                        .send_with(|| Message::Ping(vec![]))
-                        .await
-                        .map_err(Error::SendPing)?;
-                }
-            } else {
-                futures_util::future::pending::<()>().await;
-                Ok::<(), Error>(())
-            }
-        };
-        let us = self.dupe();
-        let close_port_future = async move {
-            while let Some((our_port, their_port)) = dropped_ports_rx.recv().await {
-                if our_port == 0 {
-                    debug!("mux dropped");
-                    break;
-                }
-                us.close_port(our_port, their_port, false).await;
-            }
-            // Only happens when the last sender (i.e. `dropped_ports_tx` in `MultiplexorInner`)
-            // is dropped.
-            Ok::<(), Error>(())
-        };
-        let us = self.dupe();
-        let send_ack_future = async move {
-            while let Some((our_port, their_port, psh_recvd_since)) = ack_rx.recv().await {
-                trace!("sending `Ack` for port {}", our_port);
-                us.ws
-                    .send_with(|| {
-                        StreamFrame::new_ack(our_port, their_port, psh_recvd_since).into()
-                    })
-                    .await
-                    .map_err(Error::SendStreamFrame)?;
-            }
-            // Only happens when the last sender (i.e. `ack_tx` in `MultiplexorInner`)
-            // is dropped.
-            Ok::<(), Error>(())
-        };
-        let us = self.dupe();
-        let process_message_future = async move {
-            while let Some(msg) = us.ws.next().await {
-                let msg = msg.map_err(Error::Next)?;
-                trace!("received message length = {}", msg.len());
-                // Messages cannot be processed concurrently
-                // because doing so will break stream ordering
-                us.process_message(msg, &mut datagram_tx, &mut stream_tx)
-                    .await?;
-            }
-            Ok::<(), Error>(())
-        };
         let result = tokio::try_join!(
-            keepalive_task_future,
-            close_port_future,
-            send_ack_future,
-            process_message_future
+            self.keepalive_task(),
+            self.process_messages_task(datagram_tx, stream_tx),
+            self.close_port_task(dropped_ports_rx),
+            self.send_ack_task(ack_rx),
         );
         self.shutdown().await;
         match result {
@@ -197,6 +136,83 @@ where
                 error!("Multiplexor task failed: {e}");
             }
         }
+    }
+
+    /// Keepalive subtask
+    async fn keepalive_task(&self) -> Result<()> {
+        if let Some(keepalive_interval) = self.keepalive_interval {
+            let mut interval = tokio::time::interval(keepalive_interval);
+            // If we missed a tick, it is probably doing networking, so we don't need to
+            // send a ping
+            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                trace!("sending ping");
+                // Tungstenite should deliver `Ping` immediately
+                self.ws
+                    .send_with(|| Message::Ping(vec![]))
+                    .await
+                    .map_err(Error::SendPing)?;
+            }
+        } else {
+            futures_util::future::pending::<()>().await;
+            Ok(())
+        }
+    }
+
+    /// Process closed ports subtask
+    async fn close_port_task(
+        &self,
+        mut dropped_ports_rx: mpsc::UnboundedReceiver<(u16, u16)>,
+    ) -> Result<()> {
+        while let Some((our_port, their_port)) = dropped_ports_rx.recv().await {
+            if our_port == 0 {
+                debug!("mux dropped");
+                break;
+            }
+            self.close_port(our_port, their_port, false).await;
+        }
+        // Only happens when the last sender (i.e. `dropped_ports_tx` in `MultiplexorInner`)
+        // is dropped or when the mux is dropped.
+        Ok(())
+    }
+    /// Send `Ack` subtask
+    async fn send_ack_task(
+        &self,
+        mut ack_rx: mpsc::UnboundedReceiver<(u16, u16, u64)>,
+    ) -> Result<()> {
+        while let Some((our_port, their_port, psh_recvd_since)) = ack_rx.recv().await {
+            trace!("sending `Ack` for port {}", our_port);
+            self.ws
+                .send_with(|| StreamFrame::new_ack(our_port, their_port, psh_recvd_since).into())
+                .await
+                .map_err(Error::SendStreamFrame)?;
+        }
+        // Only happens when the last sender (i.e. `ack_tx` in `MultiplexorInner`)
+        // is dropped.
+        Ok(())
+    }
+
+    /// Message processing subtask
+    async fn process_messages_task(
+        &self,
+        mut datagram_tx: mpsc::Sender<DatagramFrame>,
+        mut stream_tx: mpsc::Sender<MuxStream<S>>,
+    ) -> Result<()> {
+        while let Some(msg) = self.ws.next().await {
+            let msg = msg.map_err(Error::Next)?;
+            trace!("received message length = {}", msg.len());
+            // Messages cannot be processed concurrently
+            // because doing so will break stream ordering
+            if self
+                .process_message(msg, &mut datagram_tx, &mut stream_tx)
+                .await?
+            {
+                // `Close` message was received, so we can exit
+                break;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -257,7 +273,7 @@ where
                 Ok(true)
             }
             Message::Text(text) => {
-                error!("Received `Text` message: `{text}'");
+                debug!("received `Text` message: `{text}'");
                 Err(Error::TextMessage)
             }
             Message::Frame(_) => {
