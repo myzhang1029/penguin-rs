@@ -42,7 +42,7 @@ thiserror = "1"
 tokio = { version = ">=1.23.1", features = ["macros", "rt", "sync", "time"] }
 tokio-native-tls = { version = "0.3", optional = true }
 tokio-rustls = { version = "0.23", optional = true }
-tokio-tungstenite = "0.18"
+tokio-tungstenite = { version = "0.18", default-features = false }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", optional = true }
 webpki = { version = "0.22", optional = true }
@@ -79,7 +79,8 @@ penguin-binary = [
     "once_cell",
     "sha1",
     "tracing-subscriber",
-    "tokio/fs", "tokio/io-std", "tokio/net", "tokio/rt-multi-thread", "tokio/signal"
+    "tokio/fs", "tokio/io-std", "tokio/net", "tokio/rt-multi-thread", "tokio/signal",
+    "tokio-tungstenite/default",
 ]
 
 [profile.release]
