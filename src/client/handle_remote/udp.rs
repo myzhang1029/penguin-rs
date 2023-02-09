@@ -2,7 +2,7 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::super::MaybeRetryableError;
-use super::Error;
+use super::FatalError;
 use crate::client::{ClientIdMapEntry, HandlerResources};
 use crate::{config, Dupe};
 use bytes::Bytes;
@@ -21,9 +21,11 @@ pub(super) async fn handle_udp(
     rhost: &'static str,
     rport: u16,
     handler_resources: &HandlerResources,
-) -> Result<(), Error> {
+) -> Result<(), FatalError> {
     // Not being able to bind to the local port is a fatal error.
-    let socket = UdpSocket::bind((lhost, lport)).await?;
+    let socket = UdpSocket::bind((lhost, lport))
+        .await
+        .map_err(FatalError::ClientIo)?;
     let socket = Arc::new(socket);
     let local_addr = socket
         .local_addr()
@@ -32,7 +34,10 @@ pub(super) async fn handle_udp(
     loop {
         let mut buf = vec![0; config::MAX_UDP_PACKET_SIZE];
         // `recv_from` can fail if the socket is closed, which is a fatal error.
-        let (len, addr) = socket.recv_from(&mut buf).await?;
+        let (len, addr) = socket
+            .recv_from(&mut buf)
+            .await
+            .map_err(FatalError::ClientIo)?;
         buf.truncate(len);
         debug!("received {len} bytes from {addr}");
         let mut udp_client_id_map = handler_resources.udp_client_id_map.write().await;
@@ -50,7 +55,7 @@ pub(super) async fn handle_udp(
             .datagram_tx
             .send(frame)
             .await
-            .map_err(|_| Error::SendDatagram)?;
+            .map_err(|_| FatalError::SendDatagram)?;
     }
 }
 
@@ -61,7 +66,7 @@ pub(super) async fn handle_udp_stdio(
     rhost: &'static str,
     rport: u16,
     handler_resources: &HandlerResources,
-) -> Result<(), Error> {
+) -> Result<(), FatalError> {
     let mut stdin = BufReader::new(tokio::io::stdin());
     loop {
         let mut line = String::new();
@@ -77,6 +82,6 @@ pub(super) async fn handle_udp_stdio(
             .datagram_tx
             .send(frame)
             .await
-            .map_err(|_| Error::SendDatagram)?;
+            .map_err(|_| FatalError::SendDatagram)?;
     }
 }

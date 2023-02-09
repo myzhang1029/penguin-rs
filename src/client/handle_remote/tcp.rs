@@ -2,7 +2,7 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::super::MaybeRetryableError;
-use super::Error;
+use super::FatalError;
 use crate::client::HandlerResources;
 use crate::client::{MuxStream, StreamCommand};
 use bytes::Bytes;
@@ -52,9 +52,11 @@ pub(super) async fn handle_tcp(
     rhost: &'static str,
     rport: u16,
     handler_resources: &HandlerResources,
-) -> Result<(), Error> {
+) -> Result<(), FatalError> {
     // Not being able to open a TCP listener is a fatal error.
-    let listener = open_tcp_listener(lhost, lport).await?;
+    let listener = open_tcp_listener(lhost, lport)
+        .await
+        .map_err(FatalError::ClientIo)?;
     let rhost = rhost.as_bytes();
     loop {
         // This fails only if main has exited, which is a fatal error.
@@ -62,16 +64,18 @@ pub(super) async fn handle_tcp(
             .stream_command_tx
             .reserve()
             .await
-            .map_err(|_| Error::RequestStream)?;
+            .map_err(|_| FatalError::RequestStream)?;
         // Only `accept` when we have a permit to send a request.
         // This way, the backpressure is propagated to the TCP listener.
         // Not being able to accept a TCP connection is a fatal error.
-        let (mut tcp_stream, _) = listener.accept().await?;
+        let (mut tcp_stream, _) = listener.accept().await.map_err(FatalError::ClientIo)?;
         // A new channel is created for each incoming TCP connection.
         // It's already TCP, anyways.
-        let mut channel = super::complete_or_continue!(
-            request_tcp_channel(stream_command_tx_permit, Bytes::from_static(rhost), rport).await
-        );
+        // `expect`: the main loop should either hold the sender or send a channel
+        let mut channel =
+            request_tcp_channel(stream_command_tx_permit, Bytes::from_static(rhost), rport)
+                .await
+                .expect("Main loop dropped sender before sending a channel (this is a bug)");
         tokio::spawn(async move {
             if let Err(error) = tokio::io::copy_bidirectional(&mut channel, &mut tcp_stream).await {
                 warn!("TCP forwarder failed: {error}");
@@ -86,7 +90,7 @@ pub async fn handle_tcp_stdio(
     rhost: &'static str,
     rport: u16,
     handler_resources: &HandlerResources,
-) -> Result<(), Error> {
+) -> Result<(), FatalError> {
     let mut stdio = super::Stdio::new();
     let rhost = rhost.as_bytes();
     // We want `loop` to be able to continue after a connection failure
@@ -96,10 +100,11 @@ pub async fn handle_tcp_stdio(
             .stream_command_tx
             .reserve()
             .await
-            .map_err(|_| Error::RequestStream)?;
-        let mut channel = super::complete_or_continue!(
-            request_tcp_channel(stream_command_tx_permit, Bytes::from_static(rhost), rport).await
-        );
+            .map_err(|_| FatalError::RequestStream)?;
+        let mut channel =
+            request_tcp_channel(stream_command_tx_permit, Bytes::from_static(rhost), rport)
+                .await
+                .map_err(|_| FatalError::MainLoopExitWithoutSendingStream)?;
         super::complete_or_continue_if_retryable!(
             tokio::io::copy_bidirectional(&mut stdio, &mut channel).await
         );

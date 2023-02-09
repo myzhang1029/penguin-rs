@@ -19,7 +19,7 @@ macro_rules! impl_dupe_as_clone {
     };
 }
 
-impl_dupe_as_clone!{
+impl_dupe_as_clone! {
     bytes::Bytes
 }
 

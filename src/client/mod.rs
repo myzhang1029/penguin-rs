@@ -28,18 +28,20 @@ use tracing::{error, info, trace, warn};
 /// Errors
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("Failed to parse remote: {0}")]
-    ParseRemote(#[from] crate::parse_remote::Error),
-    #[error("Failed to connect WebSocket: {0}")]
-    Connect(#[from] ws_connect::Error),
     #[error("Maximum retry count reached")]
     MaxRetryCountReached,
+    #[error("Failed to parse remote: {0}")]
+    ParseRemote(#[from] crate::parse_remote::Error),
+    #[error("Remote handler exited: {0}")]
+    RemoteHandlerExited(#[from] handle_remote::FatalError),
+    #[error("Failed to connect WebSocket: {0}")]
+    Connect(#[from] ws_connect::Error),
     #[error(transparent)]
     Mux(#[from] penguin_mux::Error),
-    #[error("Remote handler exited: {0}")]
-    RemoteHandlerExited(#[from] handle_remote::Error),
     #[error("Stream request timed out")]
     StreamRequestTimeout,
+    #[error("Remote disconnected normally")]
+    RemoteDisconnected,
 }
 
 type MuxStream = penguin_mux::MuxStream<MaybeTlsStream<TcpStream>>;
@@ -115,6 +117,8 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
     // Channel for listeners to request TCP channels the main loop
     let (stream_cmd_tx, mut stream_cmd_rx) =
         mpsc::channel::<StreamCommand>(config::STREAM_REQUEST_COMMAND_SIZE);
+    // Place to park one failed stream request so that it can be retried
+    let mut failed_stream_request: Option<StreamCommand> = None;
     // Channel for listeners to send UDP datagrams to the main loop
     let (datagram_send_tx, mut datagram_send_rx) =
         mpsc::channel::<DatagramFrame>(config::INCOMING_DATAGRAM_BUFFER_SIZE);
@@ -139,19 +143,23 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
                 tokio::select! {
                     biased;
                     Some(result) = jobs.join_next() => {
-                        // Quit immediately if any listener fails
+                        // Quit immediately if any handler fails
                         // so maybe `systemd` can restart it
                         result.expect("JoinSet returned an error")?;
                     }
-                    _ = on_connected(
+                    error = on_connected(
                         ws_stream,
                         &mut stream_cmd_rx,
+                        &mut failed_stream_request,
                         &mut datagram_send_rx,
                         udp_client_id_map.dupe(),
                         args.keepalive,
                         time::Duration::from_secs(args.channel_timeout),
                     ) => {
                         warn!("Disconnected from server");
+                        if !error.retryable() {
+                            return Err(error);
+                        }
                         // Since we once connected, reset the retry count
                         current_retry_count = 0;
                         current_retry_interval = 200;
@@ -183,20 +191,19 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
 
 /// Called when the main socket is connected. Accepts connection requests from
 /// local listeners, establishes them, and sends them back to the listeners.
-/// If this function returns `Ok`, the client will retry;
-/// if it returns `Err`, the client will exit.
-///
-/// We want a copy of `command_tx` because we want to put the sender back if we
-/// fail to get a new channel for the remote.
+/// Datagrams are simply dropped if we fail to send them.
+/// This function returns when the connection is lost, and the caller should
+/// retry based on the error.
 #[tracing::instrument(skip_all, level = "debug")]
 async fn on_connected(
     ws_stream: tokio_tungstenite::WebSocketStream<MaybeTlsStream<TcpStream>>,
     stream_command_rx: &mut mpsc::Receiver<StreamCommand>,
+    failed_stream_request: &mut Option<StreamCommand>,
     datagram_rx: &mut mpsc::Receiver<DatagramFrame>,
     udp_client_id_map: Arc<RwLock<HashMap<u32, ClientIdMapEntry>>>,
     keepalive: u64,
     channel_timeout: Duration,
-) {
+) -> Error {
     let keepalive_duration = if keepalive == 0 {
         None
     } else {
@@ -204,12 +211,20 @@ async fn on_connected(
     };
     let mut mux = Multiplexor::new(ws_stream, Role::Client, keepalive_duration);
     info!("Connected to server");
+    // If we have a failed stream request, try it first
+    if let Some(sender) = failed_stream_request.take() {
+        if let Err(e) =
+            get_send_stream_chan(&mut mux, sender, failed_stream_request, channel_timeout).await
+        {
+            return e;
+        }
+    }
+    // Main loop
     loop {
         tokio::select! {
             Some(sender) = stream_command_rx.recv() => {
-                if let Err(e) = get_send_stream_chan(&mut mux, sender, channel_timeout).await {
-                    error!("{e}");
-                    return;
+                if let Err(e) = get_send_stream_chan(&mut mux, sender, failed_stream_request, channel_timeout).await {
+                    return e;
                 }
             }
             Some(datagram) = datagram_rx.recv() => {
@@ -249,7 +264,7 @@ async fn on_connected(
             }
             else => {
                 // The multiplexor has closed for some reason
-                break;
+                return Error::RemoteDisconnected;
             }
         }
     }
@@ -257,33 +272,44 @@ async fn on_connected(
 
 /// Get a new channel from the multiplexor and send it to the handler.
 /// If we fail, the sender is dropped and we return an error.
-/// Datagrams are simply dropped if we fail to get a new channel.
 #[tracing::instrument(skip_all, level = "trace")]
 async fn get_send_stream_chan(
     mux: &mut Multiplexor<MaybeTlsStream<TcpStream>>,
     stream_command: StreamCommand,
+    failed_stream_request: &mut Option<StreamCommand>,
     channel_timeout: Duration,
 ) -> Result<(), Error> {
     trace!("requesting a new TCP channel");
-    let stream = tokio::time::timeout(
+    match tokio::time::timeout(
         channel_timeout,
         mux.client_new_stream_channel(&stream_command.host, stream_command.port),
     )
     .await
-    .map_err(|_| Error::StreamRequestTimeout)??;
-    trace!("got a new channel");
-    // `Err(_)` means "the corresponding receiver has already been deallocated"
-    // which means we don't care about the channel anymore.
-    stream_command.tx.send(stream).ok();
-    trace!("sent stream to handler (or handler died)");
-    Ok(())
+    {
+        Ok(Ok(stream)) => {
+            trace!("got a new channel");
+            // `Err(_)` means "the corresponding receiver has already been deallocated"
+            // which means we don't care about the channel anymore.
+            stream_command.tx.send(stream).ok();
+            trace!("sent stream to handler (or handler died)");
+            Ok(())
+        }
+        Ok(Err(e)) => {
+            failed_stream_request.replace(stream_command);
+            Err(e.into())
+        }
+        Err(_) => {
+            failed_stream_request.replace(stream_command);
+            Err(Error::StreamRequestTimeout)
+        }
+    }
 }
 
 /// Prune the client ID map of entries that have not been used for a while.
 #[tracing::instrument(skip_all, level = "trace")]
 async fn prune_client_id_map_task(udp_client_id_map: Arc<RwLock<HashMap<u32, ClientIdMapEntry>>>) {
     loop {
-        tokio::time::sleep(2 * config::UDP_PRUNE_TIMEOUT).await;
+        tokio::time::sleep(config::UDP_PRUNE_TIMEOUT).await;
         let mut udp_client_id_map = udp_client_id_map.write().await;
         let now = time::Instant::now();
         udp_client_id_map.retain(|_, entry| entry.expires > now);

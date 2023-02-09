@@ -15,7 +15,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufRead, BufStream};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::UdpSocket;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tracing::{debug, info, warn};
 
@@ -36,11 +36,9 @@ pub enum Error {
     ProcessSocksRequest(&'static str, std::io::Error),
     #[error("Client does not support NOAUTH")]
     OtherAuth,
-    #[error("Timed out waiting for a new channel: {0}")]
-    Timeout(#[from] oneshot::error::RecvError),
     /// Fatal error that we should propagate to main.
     #[error(transparent)]
-    Fatal(#[from] super::Error),
+    Fatal(#[from] super::FatalError),
 }
 
 #[tracing::instrument(skip(handler_resources), level = "debug")]
@@ -49,9 +47,11 @@ pub(super) async fn handle_socks(
     lhost: &'static str,
     lport: u16,
     handler_resources: &HandlerResources,
-) -> Result<(), super::Error> {
+) -> Result<(), super::FatalError> {
     // Failing to open the listener is a fatal error and should be propagated.
-    let listener = open_tcp_listener(lhost, lport).await?;
+    let listener = open_tcp_listener(lhost, lport)
+        .await
+        .map_err(super::FatalError::ClientIo)?;
     let mut socks_jobs = JoinSet::new();
     loop {
         tokio::select! {
@@ -66,7 +66,7 @@ pub(super) async fn handle_socks(
             }
             result = listener.accept() => {
                 // A failed accept() is a fatal error and should be propagated.
-                let (stream, _) = result?;
+                let (stream, _) = result.map_err(super::FatalError::ClientIo)?;
                 let handler_resources = handler_resources.dupe();
                 socks_jobs.spawn(async move {
                     handle_socks_connection(stream, lhost, &handler_resources).await
@@ -78,7 +78,7 @@ pub(super) async fn handle_socks(
 
 pub(super) async fn handle_socks_stdio(
     handler_resources: &HandlerResources,
-) -> Result<(), super::Error> {
+) -> Result<(), super::FatalError> {
     if let Err(e) =
         handle_socks_connection(super::Stdio::new(), "localhost", handler_resources).await
     {
@@ -133,7 +133,7 @@ where
             .stream_command_tx
             .reserve()
             .await
-            .map_err(|_| super::Error::RequestStream)?;
+            .map_err(|_| super::FatalError::RequestStream)?;
         handle_connect(stream, rhost, rport, stream_command_tx_permit, false).await
     } else {
         v4::write_response(&mut stream, 0x5b).await?;
@@ -174,7 +174,7 @@ where
                 .stream_command_tx
                 .reserve()
                 .await
-                .map_err(|_| super::Error::RequestStream)?;
+                .map_err(|_| super::FatalError::RequestStream)?;
             handle_connect(stream, rhost, rport, stream_command_tx_permit, true).await
         }
         0x03 => {
@@ -200,7 +200,9 @@ where
     RW: AsyncBufRead + AsyncWrite + Unpin,
 {
     // Establish a connection to the remote host
-    let mut channel = request_tcp_channel(stream_command_tx_permit, rhost, rport).await?;
+    let mut channel = request_tcp_channel(stream_command_tx_permit, rhost, rport)
+        .await
+        .map_err(|_| super::FatalError::MainLoopExitWithoutSendingStream)?;
     // Send back a successful response
     if version_is_5 {
         v5::write_response_unspecified(&mut stream, 0x00).await?;
@@ -276,7 +278,7 @@ async fn udp_relay(
             .datagram_tx
             .send(datagram_frame)
             .await
-            .map_err(|_| super::Error::SendDatagram)?;
+            .map_err(|_| super::FatalError::SendDatagram)?;
     }
 }
 

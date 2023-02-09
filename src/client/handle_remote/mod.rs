@@ -21,19 +21,6 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::{debug, error};
 use udp::{handle_udp, handle_udp_stdio};
 
-/// Do something or continue
-macro_rules! complete_or_continue {
-    ($e:expr) => {
-        match $e {
-            Ok(v) => v,
-            Err(err) => {
-                warn!("Remote error: {err}");
-                continue;
-            }
-        }
-    };
-}
-
 /// Do something or continue if the error is retryable
 macro_rules! complete_or_continue_if_retryable {
     ($e:expr) => {
@@ -45,23 +32,35 @@ macro_rules! complete_or_continue_if_retryable {
                     continue;
                 }
                 error!("Giving up");
-                return Err(err.into());
+                return Err(FatalError::ClientIo(err));
             }
         }
     };
 }
 
-pub(super) use {complete_or_continue, complete_or_continue_if_retryable};
+pub(super) use complete_or_continue_if_retryable;
 
-/// Errors
+/// Handler errors
+/// These are all fatal errors that will cause the client to exit.
 #[derive(Debug, Error)]
-pub enum Error {
+pub enum FatalError {
+    /// Happens when IO errors occur on client sockets, which are unlikely
+    /// to be recoverable.
+    // Not marked as #[from] so that we don't casually cast all IO errors
     #[error(transparent)]
-    Io(#[from] std::io::Error),
+    ClientIo(std::io::Error),
+    /// Happens when the main loop exits and is thus unable to receive
+    /// datagrams on the channel.
     #[error("Cannot request stream from the main loop")]
     RequestStream,
+    /// Happens when the main loop exits and is thus unable to receive
+    /// datagrams on the channel.
     #[error("Cannot send datagram to the main loop")]
     SendDatagram,
+    /// Happens when the main loop receives an unretryable error
+    /// while waiting for a straem to be established.
+    #[error("Main loop exited without sending stream")]
+    MainLoopExitWithoutSendingStream,
 }
 
 /// Construct a TCP remote based on the description. These are simple because
@@ -73,7 +72,7 @@ pub enum Error {
 pub(super) async fn handle_remote(
     remote: &'static Remote,
     handler_resources: HandlerResources,
-) -> Result<(), Error> {
+) -> Result<(), FatalError> {
     debug!("opening remote {remote}");
     match (&remote.local_addr, &remote.remote_addr, remote.protocol) {
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Inet((rhost, rport)), Protocol::Tcp) => {
