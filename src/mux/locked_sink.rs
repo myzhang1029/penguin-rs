@@ -104,14 +104,6 @@ where
     }
 }
 
-impl<S> Clone for LockedWebSocket<S> {
-    // `Clone` is manually implemented because we don't need `S: Clone`.
-    #[inline]
-    fn clone(&self) -> Self {
-        Self(Arc::clone(&self.0))
-    }
-}
-
 impl<S> crate::dupe::Dupe for LockedWebSocket<S> {
     #[inline]
     fn dupe(&self) -> Self {

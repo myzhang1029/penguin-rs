@@ -1,20 +1,42 @@
 //! Inspired by facebook/gazebo's `Dupe`.
 
 /// Marker trait for types that can be cheaply cloned.
-pub trait Dupe: Clone {
+pub trait Dupe {
     /// A cheap clone of the object.
     #[must_use]
-    #[inline]
+    fn dupe(&self) -> Self;
+}
+
+macro_rules! impl_dupe_as_clone {
+    ($($t:ty),*) => {
+        $(
+            impl Dupe for $t {
+                fn dupe(&self) -> Self {
+                    self.clone()
+                }
+            }
+        )*
+    };
+}
+
+impl_dupe_as_clone!{
+    bytes::Bytes
+}
+
+impl<T> Dupe for std::sync::Arc<T> {
+    fn dupe(&self) -> Self {
+        std::sync::Arc::clone(self)
+    }
+}
+
+impl<T> Dupe for tokio::sync::mpsc::Sender<T> {
     fn dupe(&self) -> Self {
         self.clone()
     }
 }
 
-impl<T> Dupe for &T {}
-impl<T> Dupe for std::sync::Arc<T> {}
-impl<T> Dupe for std::rc::Rc<T> {}
-impl<T> Dupe for tokio::sync::mpsc::Sender<T> {}
-impl<T> Dupe for tokio::sync::mpsc::UnboundedSender<T> {}
-impl Dupe for std::task::Waker {}
-impl Dupe for bytes::Bytes {}
-impl<T: Dupe> Dupe for Option<T> {}
+impl<T> Dupe for tokio::sync::mpsc::UnboundedSender<T> {
+    fn dupe(&self) -> Self {
+        self.clone()
+    }
+}

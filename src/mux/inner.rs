@@ -66,21 +66,6 @@ impl<S> std::fmt::Debug for MultiplexorInner<S> {
     }
 }
 
-impl<S> Clone for MultiplexorInner<S> {
-    // `Clone` is manually implemented because we don't need `S: Clone`.
-    #[inline]
-    fn clone(&self) -> Self {
-        Self {
-            role: self.role,
-            ws: self.ws.clone(),
-            keepalive_interval: self.keepalive_interval,
-            streams: self.streams.clone(),
-            dropped_ports_tx: self.dropped_ports_tx.clone(),
-            ack_tx: self.ack_tx.clone(),
-        }
-    }
-}
-
 impl<S> Dupe for MultiplexorInner<S> {
     // Explicitly providing a `dupe` implementation to prove that everything
     // can be cheaply cloned.
