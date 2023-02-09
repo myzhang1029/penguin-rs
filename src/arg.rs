@@ -86,15 +86,25 @@ pub struct ClientArgs {
     ///
     ///     5000:socks
     ///
+    ///     tproxy/udp
+    ///
+    ///     5000:tproxy
+    ///
     ///     stdio:example.com:22
     ///
     ///     1.1.1.1:53/udp
     ///
-    ///   When the penguin server has --socks5 enabled, remotes can
-    ///   specify "socks" in place of remote-host and remote-port.
+    ///   Remotes can specify "socks" in place of remote-host and remote-port.
     ///   The default local host and port for a "socks" remote is
-    ///   127.0.0.1:1080. Connections to this remote will terminate
-    ///   at the server's internal SOCKS5 proxy.
+    ///   127.0.0.1:1080. SOCKS4/5 connections to this remote will be tunneled
+    ///   to the server. "socks" remotes cannot be UDP.
+    ///
+    ///   Remotes can specify "tproxy" in place of remote-host and remote-port.
+    ///   The default local host and port for a "tproxy" remote is
+    ///   127.0.0.1:1234. This only works on Linux. The local listening socket
+    ///   will have the IP_TRANSPARENT option set, allowing it to accept
+    ///   connections to any IP address, which will then be tunneled to the
+    ///   server. "tproxy" cannot be used with "stdio".
     ///
     ///   When stdio is used as local-host, the tunnel will connect standard
     ///   input/output of this program with the remote. This is useful when
