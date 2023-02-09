@@ -1,7 +1,7 @@
 //! `WebSocket` connection.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use crate::arg::ServerUrl;
+use crate::arg::ClientArgs;
 use crate::config;
 use crate::proto_version::PROTOCOL_VERSION;
 use crate::tls::make_tls_connector;
@@ -26,27 +26,20 @@ pub enum Error {
 }
 
 /// Perform a `WebSocket` handshake.
-#[allow(clippy::too_many_arguments)]
-#[tracing::instrument(level = "debug", skip(extra_headers))]
+#[tracing::instrument(level = "debug", fields(server = %args.server.0))]
 pub async fn handshake(
-    url: &ServerUrl,
-    ws_psk: Option<&HeaderValue>,
-    override_hostname: Option<&HeaderValue>,
-    extra_headers: &[crate::arg::Header],
-    tls_ca: Option<&str>,
-    tls_key: Option<&str>,
-    tls_cert: Option<&str>,
-    tls_insecure: bool,
+    args: &ClientArgs,
 ) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Error> {
     // We already sanitized https URLs to wss
-    let is_tls = url
+    let is_tls = args
+        .server
         .scheme()
         .expect("URL scheme should be present (this is a bug)")
         .as_str()
         == "wss";
 
     // Use a request to allow additional headers
-    let mut req: Request = url.0.clone().into_client_request()?;
+    let mut req: Request = args.server.0.clone().into_client_request()?;
     let req_headers = req.headers_mut();
     // Add protocol version
     req_headers.insert(
@@ -54,20 +47,26 @@ pub async fn handshake(
         HeaderValue::from_static(PROTOCOL_VERSION),
     );
     // Add PSK
-    if let Some(ws_psk) = ws_psk {
+    if let Some(ref ws_psk) = args.ws_psk {
         req_headers.insert("x-penguin-psk", ws_psk.clone());
     }
     // Add potentially custom hostname
-    if let Some(hostname) = override_hostname {
+    if let Some(ref hostname) = args.hostname {
         req_headers.insert("host", hostname.clone());
     }
     // Now add custom headers
-    for header in extra_headers {
+    for header in &args.header {
         req_headers.insert(&header.name, header.value.clone());
     }
 
     let connector = if is_tls {
-        make_tls_connector(tls_cert, tls_key, tls_ca, tls_insecure).await?
+        make_tls_connector(
+            args.tls_cert.as_deref(),
+            args.tls_key.as_deref(),
+            args.tls_ca.as_deref(),
+            args.tls_skip_verify,
+        )
+        .await?
     } else {
         // No TLS
         warn!("Using insecure WebSocket connection");

@@ -134,18 +134,7 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
     }
     // Retry loop
     loop {
-        match ws_connect::handshake(
-            &args.server,
-            args.ws_psk.as_ref(),
-            args.hostname.as_ref(),
-            &args.header,
-            args.tls_ca.as_deref(),
-            args.tls_key.as_deref(),
-            args.tls_cert.as_deref(),
-            args.tls_skip_verify,
-        )
-        .await
-        {
+        match ws_connect::handshake(&args).await {
             Ok(ws_stream) => {
                 tokio::select! {
                     biased;
