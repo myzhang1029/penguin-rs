@@ -7,7 +7,7 @@ mod v5;
 use super::tcp::{open_tcp_listener, request_tcp_channel};
 use super::HandlerResources;
 use crate::client::{ClientIdMapEntry, StreamCommand};
-use crate::Dupe;
+use crate::{config, Dupe};
 use bytes::{Buf, Bytes};
 use penguin_mux::{DatagramFrame, IntKey};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -285,7 +285,7 @@ async fn udp_relay(
 async fn handle_udp_relay_header(
     socket: &UdpSocket,
 ) -> Result<Option<(Bytes, u16, Bytes, IpAddr, u16)>, Error> {
-    let mut buf = vec![0; 65536];
+    let mut buf = vec![0; config::MAX_UDP_PACKET_SIZE];
     let (len, addr) = socket.recv_from(&mut buf).await?;
     buf.truncate(len);
     let mut buf = Bytes::from(buf);

@@ -4,7 +4,7 @@
 use super::super::MaybeRetryableError;
 use super::Error;
 use crate::client::{ClientIdMapEntry, HandlerResources};
-use crate::Dupe;
+use crate::{config, Dupe};
 use bytes::Bytes;
 use penguin_mux::{DatagramFrame, IntKey};
 use std::sync::Arc;
@@ -30,7 +30,7 @@ pub(super) async fn handle_udp(
         .map_or(format!("{lhost}:{lport}"), |addr| addr.to_string());
     info!("Bound on {local_addr}");
     loop {
-        let mut buf = vec![0; 65536];
+        let mut buf = vec![0; config::MAX_UDP_PACKET_SIZE];
         // `recv_from` can fail if the socket is closed, which is a fatal error.
         let (len, addr) = socket.recv_from(&mut buf).await?;
         buf.truncate(len);

@@ -76,7 +76,7 @@ pub(super) async fn udp_forward_to(
     let (socket, target) = bind_and_send((rhost_str, rport), &data).await?;
     trace!("sent UDP packet to {target}");
     loop {
-        let mut buf = vec![0; 65536];
+        let mut buf = vec![0; config::MAX_UDP_PACKET_SIZE];
         match tokio::time::timeout(config::UDP_PRUNE_TIMEOUT, socket.recv(&mut buf)).await {
             Ok(Ok(len)) => {
                 trace!("got UDP response from {target}");

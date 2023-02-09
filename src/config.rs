@@ -18,3 +18,5 @@ pub const STREAM_REQUEST_COMMAND_SIZE: usize = 1 << 6;
 /// Both: Number of datagrams to buffer in the channels for the main loop
 /// to read from.
 pub const INCOMING_DATAGRAM_BUFFER_SIZE: usize = 1 << 6;
+/// Both: Maximum size of a UDP packet.
+pub const MAX_UDP_PACKET_SIZE: usize = 1 << 16;
