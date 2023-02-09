@@ -110,3 +110,24 @@ pub async fn handle_tcp_stdio(
         );
     }
 }
+
+#[cfg(test)]
+mod test {
+    use tokio::io::AsyncWriteExt;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_open_tcp_listener() {
+        let listener = open_tcp_listener("127.0.0.1", 0).await.unwrap();
+        let local_addr = listener.local_addr().unwrap();
+        assert_eq!(local_addr.ip(), std::net::Ipv4Addr::LOCALHOST);
+        let accept_task = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            stream.shutdown().await.unwrap();
+        });
+        let mut stream = tokio::net::TcpStream::connect(local_addr).await.unwrap();
+        stream.shutdown().await.unwrap();
+        accept_task.await.unwrap();
+    }
+}

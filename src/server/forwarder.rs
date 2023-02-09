@@ -125,3 +125,101 @@ pub(super) async fn tcp_forwarder_on_channel(
     trace!("TCP forwarding finished");
     Ok(())
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use tokio::net::UdpSocket;
+
+    #[tokio::test]
+    async fn test_bind_and_send_v4() {
+        let target_sock = UdpSocket::bind(("127.0.0.1", 0)).await.unwrap();
+        let target_addr = target_sock.local_addr().unwrap();
+        let (socket, target) = bind_and_send(("127.0.0.1", target_addr.port()), b"hello")
+            .await
+            .unwrap();
+        assert_eq!(target, target_addr);
+        let mut buf = vec![0; 5];
+        let (len, addr) = target_sock.recv_from(&mut buf).await.unwrap();
+        assert_eq!(len, 5);
+        assert_eq!(addr, socket.local_addr().unwrap());
+        assert_eq!(buf, b"hello");
+        target_sock.send_to(b"world", addr).await.unwrap();
+        socket.recv(&mut buf).await.unwrap();
+        assert_eq!(buf, b"world");
+    }
+
+    #[tokio::test]
+    async fn test_bind_and_send_v6() {
+        let target_sock = UdpSocket::bind(("::1", 0)).await.unwrap();
+        let target_addr = target_sock.local_addr().unwrap();
+        let (socket, target) = bind_and_send(("::1", target_addr.port()), b"hello")
+            .await
+            .unwrap();
+        assert_eq!(target, target_addr);
+        let mut buf = vec![0; 5];
+        let (len, addr) = target_sock.recv_from(&mut buf).await.unwrap();
+        assert_eq!(len, 5);
+        assert_eq!(addr, socket.local_addr().unwrap());
+        assert_eq!(buf, b"hello");
+        target_sock.send_to(b"world", addr).await.unwrap();
+        socket.recv(&mut buf).await.unwrap();
+        assert_eq!(buf, b"world");
+    }
+
+    #[tokio::test]
+    async fn test_udp_forward_to_v4() {
+        let target_sock = UdpSocket::bind(("127.0.0.1", 0)).await.unwrap();
+        let target_addr = target_sock.local_addr().unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        let datagram_frame = DatagramFrame {
+            sid: 0,
+            host: Bytes::from_static(b"127.0.0.1"),
+            port: target_addr.port(),
+            data: Bytes::from_static(b"hello"),
+        };
+        let forwarder = tokio::spawn(udp_forward_to(datagram_frame, tx));
+        let mut buf = vec![0; 5];
+        let (len, addr) = target_sock.recv_from(&mut buf).await.unwrap();
+        assert_eq!(len, 5);
+        assert_eq!(buf, b"hello");
+        target_sock.send_to(b"test 1", addr).await.unwrap();
+        target_sock.send_to(b"test 2", addr).await.unwrap();
+        target_sock.send_to(b"test 3", addr).await.unwrap();
+        forwarder.await.unwrap().unwrap();
+        let datagram_frame = rx.recv().await.unwrap();
+        assert_eq!(datagram_frame.data.as_ref(), b"test 1");
+        let datagram_frame = rx.recv().await.unwrap();
+        assert_eq!(datagram_frame.data.as_ref(), b"test 2");
+        let datagram_frame = rx.recv().await.unwrap();
+        assert_eq!(datagram_frame.data.as_ref(), b"test 3");
+    }
+
+    #[tokio::test]
+    async fn test_udp_forward_to_v6() {
+        let target_sock = UdpSocket::bind(("::1", 0)).await.unwrap();
+        let target_addr = target_sock.local_addr().unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        let datagram_frame = DatagramFrame {
+            sid: 0,
+            host: Bytes::from_static(b"::1"),
+            port: target_addr.port(),
+            data: Bytes::from_static(b"hello"),
+        };
+        let forwarder = tokio::spawn(udp_forward_to(datagram_frame, tx));
+        let mut buf = vec![0; 5];
+        let (len, addr) = target_sock.recv_from(&mut buf).await.unwrap();
+        assert_eq!(len, 5);
+        assert_eq!(buf, b"hello");
+        target_sock.send_to(b"test 1", addr).await.unwrap();
+        target_sock.send_to(b"test 2", addr).await.unwrap();
+        target_sock.send_to(b"test 3", addr).await.unwrap();
+        forwarder.await.unwrap().unwrap();
+        let datagram_frame = rx.recv().await.unwrap();
+        assert_eq!(datagram_frame.data.as_ref(), b"test 1");
+        let datagram_frame = rx.recv().await.unwrap();
+        assert_eq!(datagram_frame.data.as_ref(), b"test 2");
+        let datagram_frame = rx.recv().await.unwrap();
+        assert_eq!(datagram_frame.data.as_ref(), b"test 3");
+    }
+}
