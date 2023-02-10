@@ -6,10 +6,10 @@ mod v5;
 
 use super::tcp::{open_tcp_listener, request_tcp_channel};
 use super::HandlerResources;
-use crate::client::{ClientIdMapEntry, StreamCommand};
+use crate::client::StreamCommand;
 use crate::{config, Dupe};
 use bytes::{Buf, Bytes};
-use penguin_mux::{DatagramFrame, IntKey};
+use penguin_mux::DatagramFrame;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use tokio::io::{AsyncBufRead, BufStream};
@@ -260,13 +260,9 @@ async fn udp_relay(
         let Some((dst, dport, data, src, sport)) = handle_udp_relay_header(&socket).await? else {
             continue
         };
-        let mut udp_client_id_map = handler_resources.udp_client_id_map.write().await;
-        let client_id = u32::next_available_key(&*udp_client_id_map);
-        udp_client_id_map.insert(
-            client_id,
-            ClientIdMapEntry::new((src, sport).into(), socket.dupe(), true),
-        );
-        drop(udp_client_id_map);
+        let client_id = handler_resources
+            .add_udp_client((src, sport).into(), socket.dupe(), true)
+            .await;
         let datagram_frame = DatagramFrame {
             host: dst,
             port: dport,

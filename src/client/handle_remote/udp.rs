@@ -3,10 +3,10 @@
 
 use super::super::MaybeRetryableError;
 use super::FatalError;
-use crate::client::{ClientIdMapEntry, HandlerResources};
+use crate::client::HandlerResources;
 use crate::{config, Dupe};
 use bytes::Bytes;
-use penguin_mux::{DatagramFrame, IntKey};
+use penguin_mux::DatagramFrame;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::UdpSocket;
@@ -40,10 +40,9 @@ pub(super) async fn handle_udp(
             .map_err(FatalError::ClientIo)?;
         buf.truncate(len);
         debug!("received {len} bytes from {addr}");
-        let mut udp_client_id_map = handler_resources.udp_client_id_map.write().await;
-        let client_id = u32::next_available_key(&*udp_client_id_map);
-        udp_client_id_map.insert(client_id, ClientIdMapEntry::new(addr, socket.dupe(), false));
-        drop(udp_client_id_map);
+        let client_id = handler_resources
+            .add_udp_client(addr, socket.dupe(), false)
+            .await;
         let frame = DatagramFrame {
             host: Bytes::from_static(rhost.as_bytes()),
             port: rport,
