@@ -27,6 +27,9 @@ pub struct MuxStreamData {
     /// There are two cases for `false`:
     /// 1. `Fin` has been sent.
     /// 2. The stream has been removed from `inner.streams`.
+    // In general, our `Atomic*` types don't need more than `Relaxed` ordering
+    // because we are not protecting memory accesses, but rather counting the
+    // frames we have sent and received.
     can_write: Arc<AtomicBool>,
     /// Number of `Psh` frames we are allowed to send before waiting for a `Ack` frame.
     psh_send_remaining: Arc<AtomicU64>,
@@ -334,9 +337,13 @@ where
                 let peer_processed = data.get_u64();
                 let streams = self.streams.read().await;
                 if let Some(stream_data) = streams.get(&our_port) {
+                    // Atomic ordering: as long as the value is incremented atomically,
+                    // whether a writer sees the new value or the old value is not
+                    // important. If it sees the old value and decides to return
+                    // `Poll::Pending`, it will be woken up by the `Waker` anyway.
                     stream_data
                         .psh_send_remaining
-                        .fetch_add(peer_processed, Ordering::SeqCst);
+                        .fetch_add(peer_processed, Ordering::Relaxed);
                     stream_data.writer_waker.wake();
                 } else {
                     // the port does not exist
@@ -436,6 +443,13 @@ where
         if let Some(stream_data) = self.streams.write().await.remove(&our_port) {
             // Make sure the user receives `EOF`.
             stream_data.sender.send(Bytes::new()).await.ok();
+            // Atomic ordering:
+            // Load part:
+            // If the user calls `poll_shutdown`, but we see `true` here,
+            // the other end will receive a bogus `Rst` frame, which is fine.
+            // Store part:
+            // It does not matter whether the user calls `poll_shutdown` or not,
+            // the stream is shut down and the final value of `can_write` is `false`.
             let old = stream_data.can_write.swap(false, Ordering::Relaxed);
             if old && !inhibit_rst {
                 // If the user did not call `poll_shutdown`, we need to send a `Rst` frame
@@ -462,6 +476,8 @@ where
                 // Make sure the user receives `EOF`.
                 stream_data.sender.send(Bytes::new()).await.ok();
                 // Prevent the user from writing
+                // Atomic ordering: It does not matter whether the user calls `poll_shutdown` or not,
+                // the stream is shut down and the final value of `can_write` is `false`.
                 stream_data.can_write.store(false, Ordering::Relaxed);
                 // If there is a writer waiting for `Ack`, wake it up because it will never receive one.
                 // Waking it here and the user should receive a `BrokenPipe` error.

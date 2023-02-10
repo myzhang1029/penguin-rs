@@ -23,6 +23,8 @@ pub const RWND_THRESHOLD: u64 = 1 << 8;
 /// Number of `StreamFrame`s to buffer in `MuxStream`'s channels before blocking
 #[cfg(test)]
 pub const STREAM_FRAME_BUFFER_SIZE: usize = 1 << 2;
-/// Number of `Psh` frames between `Ack`s
+/// Number of `Psh` frames between `Ack`s. In tests, we want to be able to
+/// test the `Ack` mechanism, so we set this to be the same as the buffer size.
+/// The downside is that tests will be slower.
 #[cfg(test)]
-pub const RWND_THRESHOLD: u64 = 3;
+pub const RWND_THRESHOLD: u64 = RWND;

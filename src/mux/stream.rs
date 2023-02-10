@@ -96,14 +96,22 @@ impl<S> AsyncRead for MuxStream<S> {
                 return Poll::Ready(Ok(()));
             }
             self.buf = next.unwrap();
-            let new = self.psh_recvd_since.fetch_add(1, Ordering::SeqCst) + 1;
-            // To reduce blocking, let's send `Ack` when we have
-            // one window left.
+            // Atomic ordering: as long as we atomically increment the counter,
+            // the counter is correct. If another reader reads the new value here,
+            // before we reset the counter, both of us will send an `Ack` frame.
+            // However, one of us will send an `Ack` frame with a value of 0,
+            // which is harmless.
+            let new = self.psh_recvd_since.fetch_add(1, Ordering::Relaxed) + 1;
             if new >= config::RWND_THRESHOLD {
                 // Reset the counter
-                self.psh_recvd_since.store(0, Ordering::SeqCst);
+                // Atomic ordering: as long as we use the atomically-fetched value
+                // to send an `Ack` frame, the net amount
+                // `Psh` frames received - `Ack`ed amount is correct.
+                let amount_to_ack = self.psh_recvd_since.swap(0, Ordering::Relaxed);
                 // Send an `Ack` frame
-                self.ack_tx.send((self.our_port, self.their_port, new)).ok();
+                self.ack_tx
+                    .send((self.our_port, self.their_port, amount_to_ack))
+                    .ok();
                 // If the previous line fails, the task has exited.
                 // In this case, we don't care about the `Ack` frame and the
                 // user will discover the error when they try to write or read
@@ -137,6 +145,11 @@ where
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<std::io::Result<usize>> {
+        // Atomic ordering: if the operations around this line are reordered,
+        // the sent frame will be `Rst`ed by the remote peer, which is harmless.
+        // Both `close_port` and `shutdown` in `inner.rs` set this flag with
+        // `Relaxed` ordering because they are not releasing any access, but
+        // instead acting based on the WebSocket or the stream's states.
         if !self.can_write.load(Ordering::Relaxed) {
             // The stream has been closed. Return an error
             debug!("stream has been closed, returning `BrokenPipe`");
@@ -145,7 +158,9 @@ where
         // `ready`: nothing happens if return here
         ready!(self.ws.poll_send_with(cx, |cx| {
             loop {
-                let original = self.psh_send_remaining.load(Ordering::SeqCst);
+                // Atomic ordering: we don't really have a critical section here,
+                // so `Relaxed` should be enough.
+                let original = self.psh_send_remaining.load(Ordering::Acquire);
                 trace!("congestion window: {}", original);
                 if original == 0 {
                     // We have reached the congestion window limit. Wait for an `Ack`
@@ -154,15 +169,16 @@ where
                     return Poll::Pending;
                 }
                 let new = original - 1;
+                // Atomic ordering: see the comment above
                 if self
                     .psh_send_remaining
-                    .compare_exchange(original, new, Ordering::SeqCst, Ordering::Relaxed)
+                    .compare_exchange_weak(original, new, Ordering::AcqRel, Ordering::Relaxed)
                     .is_ok()
                 {
                     // We have successfully decremented the congestion window
                     break;
                 }
-                debug!("congestion window race condition, retrying");
+                trace!("congestion window race condition, retrying");
             }
             Poll::Ready(
                 StreamFrame::new_psh(self.our_port, self.their_port, Bytes::copy_from_slice(buf))
@@ -191,6 +207,8 @@ where
         // 1. `MuxStream` was dropped before `poll_shutdown` is completed and the mux task should
         //    have already sent a `Rst` frame.
         // 2. The entire mux task has been dropped, so we will only get `BrokenPipe` error.
+        // Atomic ordering: see `inner.rs` -> `shutdown` and `close_port`.
+        // As a summary, duplicate `Fin`/`Rst` frames are harmless.
         if self.can_write.load(Ordering::Relaxed) {
             // Can write means that things above have not happened, so we should send a `Fin` frame.
             // `ready`: nothing happens if return here
@@ -198,6 +216,7 @@ where
                 Poll::Ready(StreamFrame::new_fin(self.our_port, self.their_port).into())
             }))
             .map_err(tungstenite_error_to_io_error)?;
+            // Atomic ordering: see `inner.rs` -> `shutdown` and `close_port`.
             self.can_write.store(false, Ordering::Relaxed);
         }
         // `ready`: if poll resumes, `self.fin_sent` indicates where to continue
