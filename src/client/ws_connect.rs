@@ -26,7 +26,7 @@ pub enum Error {
 }
 
 /// Perform a `WebSocket` handshake.
-#[tracing::instrument(level = "debug", fields(server = %args.server.0))]
+#[tracing::instrument(skip_all, fields(server = %args.server.0), level = "debug")]
 pub async fn handshake(
     args: &ClientArgs,
 ) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Error> {

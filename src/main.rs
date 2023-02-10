@@ -22,12 +22,21 @@ use tracing_subscriber::{filter, fmt, prelude::*, reload};
 pub use penguin_mux::dupe::Dupe;
 
 /// Errors
-#[derive(Debug, Error)]
+#[derive(Error)]
 enum Error {
     #[error(transparent)]
     Client(#[from] client::Error),
     #[error(transparent)]
     Server(#[from] server::Error),
+}
+
+impl std::fmt::Debug for Error {
+    // Simply delegate to `Display` so when `main` exits, there
+    // is a nice error message.
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
 }
 
 #[cfg(not(feature = "tokio-console"))]
@@ -84,7 +93,7 @@ async fn main() -> Result<(), Error> {
     console_subscriber::init();
     arg::PenguinCli::parse_global();
     let cli_args = arg::PenguinCli::get_global();
-    trace!("cli_args = {cli_args:?}");
+    trace!("cli_args = {cli_args:#?}");
     #[cfg(not(feature = "tokio-console"))]
     {
         match cli_args.verbose {

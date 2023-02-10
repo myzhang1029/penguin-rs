@@ -65,6 +65,8 @@ nativetls = ["native-tls", "tokio-native-tls", "hyper-tls", "tokio-tungstenite/n
 # Allow some tests that require real internet connection
 tests-real-internet4 = []
 tests-real-internet6 = []
+# Set the default localhost or unspecified address to IPv6
+default-is-ipv6 = []
 # Enabling this causes `penguin` to listen for `tokio-console` connections
 tokio-console = ["console-subscriber"]
 # `parking_lot`'s deadlock detection in a separate thread

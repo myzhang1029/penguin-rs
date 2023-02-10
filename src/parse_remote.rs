@@ -4,7 +4,28 @@
 use std::{fmt::Display, str::FromStr};
 use thiserror::Error;
 
-#[derive(Debug, Clone, Hash, Ord, PartialOrd, Eq, PartialEq)]
+#[cfg(not(feature = "default-is-ipv6"))]
+/// Default host for local and unspecified addresses.
+macro_rules! default_host {
+    (local) => {
+        String::from("127.0.0.1")
+    };
+    (unspec) => {
+        String::from("0.0.0.0")
+    };
+}
+#[cfg(feature = "default-is-ipv6")]
+/// Default host for local and unspecified addresses.
+macro_rules! default_host {
+    (local) => {
+        String::from("::1")
+    };
+    (unspec) => {
+        String::from("::")
+    };
+}
+
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct Remote {
     pub local_addr: LocalSpec,
     pub remote_addr: RemoteSpec,
@@ -12,21 +33,21 @@ pub struct Remote {
 }
 
 /// The local side can be either IP+port or "stdio".
-#[derive(Debug, Clone, Hash, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub enum LocalSpec {
     Inet((String, u16)),
     Stdio,
 }
 
 /// The remote side can be either IP+port or "socks".
-#[derive(Debug, Clone, Hash, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub enum RemoteSpec {
     Inet((String, u16)),
     Socks,
 }
 
 /// Protocol can be either "tcp" or "udp".
-#[derive(Debug, Copy, Clone, Hash, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
 pub enum Protocol {
     Tcp,
     Udp,
@@ -121,13 +142,13 @@ impl FromStr for Remote {
         let result = match tokens[..] {
             // One element: either "socks" or a port number.
             ["socks"] => Ok(Self {
-                local_addr: LocalSpec::Inet(("127.0.0.1".to_string(), 1080)),
+                local_addr: LocalSpec::Inet((default_host!(local), 1080)),
                 remote_addr: RemoteSpec::Socks,
                 protocol: proto,
             }),
             [port] => Ok(Self {
-                local_addr: LocalSpec::Inet(("0.0.0.0".to_string(), port.parse()?)),
-                remote_addr: RemoteSpec::Inet(("127.0.0.1".to_string(), port.parse()?)),
+                local_addr: LocalSpec::Inet((default_host!(unspec), port.parse()?)),
+                remote_addr: RemoteSpec::Inet((default_host!(local), port.parse()?)),
                 protocol: proto,
             }),
             // Two elements: either "socks" and local port number, or remote host and port number.
@@ -137,17 +158,17 @@ impl FromStr for Remote {
                 protocol: proto,
             }),
             [port, "socks"] => Ok(Self {
-                local_addr: LocalSpec::Inet(("127.0.0.1".to_string(), port.parse()?)),
+                local_addr: LocalSpec::Inet((default_host!(local), port.parse()?)),
                 remote_addr: RemoteSpec::Socks,
                 protocol: proto,
             }),
             ["stdio", port] => Ok(Self {
                 local_addr: LocalSpec::Stdio,
-                remote_addr: RemoteSpec::Inet(("127.0.0.1".to_string(), port.parse()?)),
+                remote_addr: RemoteSpec::Inet((default_host!(local), port.parse()?)),
                 protocol: proto,
             }),
             [host, port] => Ok(Self {
-                local_addr: LocalSpec::Inet(("0.0.0.0".to_string(), port.parse()?)),
+                local_addr: LocalSpec::Inet((default_host!(unspec), port.parse()?)),
                 remote_addr: RemoteSpec::Inet((remove_brackets(host).to_string(), port.parse()?)),
                 protocol: proto,
             }),
@@ -172,7 +193,7 @@ impl FromStr for Remote {
                 protocol: proto,
             }),
             [local_port, remote_host, remote_port] => Ok(Self {
-                local_addr: LocalSpec::Inet(("0.0.0.0".to_string(), local_port.parse()?)),
+                local_addr: LocalSpec::Inet((default_host!(unspec), local_port.parse()?)),
                 remote_addr: RemoteSpec::Inet((
                     remove_brackets(remote_host).to_string(),
                     remote_port.parse()?,
@@ -218,23 +239,59 @@ pub fn remove_brackets(s: &str) -> &str {
 #[cfg(test)]
 mod test {
     use super::*;
+    #[cfg(not(feature = "default-is-ipv6"))]
+    use std::net::Ipv4Addr;
+    #[cfg(feature = "default-is-ipv6")]
+    use std::net::Ipv6Addr;
 
-    /// Simply jpillora's test cases and a few additions.
+    #[test]
+    fn test_default_host() {
+        #[cfg(feature = "default-is-ipv6")]
+        assert_eq!(
+            Ipv6Addr::from_str(&default_host!(unspec)).unwrap(),
+            Ipv6Addr::UNSPECIFIED
+        );
+        #[cfg(not(feature = "default-is-ipv6"))]
+        assert_eq!(
+            Ipv4Addr::from_str(&default_host!(unspec)).unwrap(),
+            Ipv4Addr::UNSPECIFIED
+        );
+        #[cfg(feature = "default-is-ipv6")]
+        assert_eq!(
+            Ipv6Addr::from_str(&default_host!(local)).unwrap(),
+            Ipv6Addr::LOCALHOST
+        );
+        #[cfg(not(feature = "default-is-ipv6"))]
+        assert_eq!(
+            Ipv4Addr::from_str(&default_host!(local)).unwrap(),
+            Ipv4Addr::LOCALHOST
+        );
+    }
+
     #[test]
     fn test_parse_remote() {
         let tests: &[(&str, Remote)] = &[
+            // jpillora's tests and an exhausive list of cases
             (
                 "3000",
                 Remote {
-                    local_addr: LocalSpec::Inet((String::from("0.0.0.0"), 3000)),
-                    remote_addr: RemoteSpec::Inet((String::from("127.0.0.1"), 3000)),
+                    local_addr: LocalSpec::Inet((default_host!(unspec), 3000)),
+                    remote_addr: RemoteSpec::Inet((default_host!(local), 3000)),
                     protocol: Protocol::Tcp,
+                },
+            ),
+            (
+                "4000/udp",
+                Remote {
+                    local_addr: LocalSpec::Inet((default_host!(unspec), 4000)),
+                    remote_addr: RemoteSpec::Inet((default_host!(local), 4000)),
+                    protocol: Protocol::Udp,
                 },
             ),
             (
                 "google.com:80",
                 Remote {
-                    local_addr: LocalSpec::Inet((String::from("0.0.0.0"), 80)),
+                    local_addr: LocalSpec::Inet((default_host!(unspec), 80)),
                     remote_addr: RemoteSpec::Inet((String::from("google.com"), 80)),
                     protocol: Protocol::Tcp,
                 },
@@ -242,15 +299,23 @@ mod test {
             (
                 "示例網站.com:80",
                 Remote {
-                    local_addr: LocalSpec::Inet((String::from("0.0.0.0"), 80)),
+                    local_addr: LocalSpec::Inet((default_host!(unspec), 80)),
                     remote_addr: RemoteSpec::Inet((String::from("示例網站.com"), 80)),
+                    protocol: Protocol::Tcp,
+                },
+            ),
+            (
+                "8080:example.com:80",
+                Remote {
+                    local_addr: LocalSpec::Inet((default_host!(unspec), 8080)),
+                    remote_addr: RemoteSpec::Inet((String::from("example.com"), 80)),
                     protocol: Protocol::Tcp,
                 },
             ),
             (
                 "socks",
                 Remote {
-                    local_addr: LocalSpec::Inet((String::from("127.0.0.1"), 1080)),
+                    local_addr: LocalSpec::Inet((default_host!(local), 1080)),
                     remote_addr: RemoteSpec::Socks,
                     protocol: Protocol::Tcp,
                 },
@@ -264,9 +329,17 @@ mod test {
                 },
             ),
             (
+                "9050:socks",
+                Remote {
+                    local_addr: LocalSpec::Inet((default_host!(local), 9050)),
+                    remote_addr: RemoteSpec::Socks,
+                    protocol: Protocol::Tcp,
+                },
+            ),
+            (
                 "1.1.1.1:53/udp",
                 Remote {
-                    local_addr: LocalSpec::Inet((String::from("0.0.0.0"), 53)),
+                    local_addr: LocalSpec::Inet((default_host!(unspec), 53)),
                     remote_addr: RemoteSpec::Inet((String::from("1.1.1.1"), 53)),
                     protocol: Protocol::Udp,
                 },
@@ -304,10 +377,18 @@ mod test {
                 },
             ),
             (
+                "stdio:443",
+                Remote {
+                    local_addr: LocalSpec::Stdio,
+                    remote_addr: RemoteSpec::Inet((default_host!(local), 443)),
+                    protocol: Protocol::Tcp,
+                },
+            ),
+            (
                 "stdio:5353/udp",
                 Remote {
                     local_addr: LocalSpec::Stdio,
-                    remote_addr: RemoteSpec::Inet((String::from("127.0.0.1"), 5353)),
+                    remote_addr: RemoteSpec::Inet((default_host!(local), 5353)),
                     protocol: Protocol::Udp,
                 },
             ),
@@ -316,5 +397,7 @@ mod test {
             let actual = s.parse::<Remote>().unwrap();
             assert_eq!(actual, *expected);
         }
+        "just_a_hostname".parse::<Remote>().unwrap_err();
+        "socks/udp".parse::<Remote>().unwrap_err();
     }
 }

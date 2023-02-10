@@ -90,11 +90,10 @@ pub struct ClientArgs {
     ///
     ///     1.1.1.1:53/udp
     ///
-    ///   When the penguin server has --socks5 enabled, remotes can
-    ///   specify "socks" in place of remote-host and remote-port.
-    ///   The default local host and port for a "socks" remote is
-    ///   127.0.0.1:1080. Connections to this remote will terminate
-    ///   at the server's internal SOCKS5 proxy.
+    ///   The word "socks" may be in the place of remote-host and remote-port
+    ///   to create a SOCKS4/SOCKS5 proxy server. The default local host and
+    ///   port for a "socks" remote is 127.0.0.1:1080. "socks" remotes cannot
+    ///   be UDP.
     ///
     ///   When stdio is used as local-host, the tunnel will connect standard
     ///   input/output of this program with the remote. This is useful when
