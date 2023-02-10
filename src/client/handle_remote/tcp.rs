@@ -71,11 +71,11 @@ pub(super) async fn handle_tcp(
         let (mut tcp_stream, _) = listener.accept().await.map_err(FatalError::ClientIo)?;
         // A new channel is created for each incoming TCP connection.
         // It's already TCP, anyways.
-        // `expect`: the main loop should either hold the sender or send a channel
         let mut channel =
             request_tcp_channel(stream_command_tx_permit, Bytes::from_static(rhost), rport)
                 .await
-                .expect("Main loop dropped sender before sending a channel (this is a bug)");
+                .map_err(|_| FatalError::MainLoopExitWithoutSendingStream)?;
+        // Transient errors in the forwarder don't matter.
         tokio::spawn(async move {
             if let Err(error) = tokio::io::copy_bidirectional(&mut channel, &mut tcp_stream).await {
                 warn!("TCP forwarder failed: {error}");

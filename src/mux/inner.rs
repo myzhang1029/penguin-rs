@@ -17,7 +17,7 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::MissedTickBehavior;
 use tokio_tungstenite::tungstenite::Message;
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, trace, warn};
 
 #[derive(Debug)]
 pub struct MuxStreamData {
@@ -105,7 +105,7 @@ where
         stream_tx: mpsc::Sender<MuxStream<S>>,
         dropped_ports_rx: mpsc::UnboundedReceiver<(u16, u16)>,
         ack_rx: mpsc::UnboundedReceiver<(u16, u16, u64)>,
-    ) {
+    ) -> Result<()> {
         let result = tokio::try_join!(
             self.keepalive_task(),
             self.process_messages_task(datagram_tx, stream_tx),
@@ -113,14 +113,7 @@ where
             self.send_ack_task(ack_rx),
         );
         self.shutdown().await;
-        match result {
-            Ok(_) => {
-                debug!("Multiplexor task exited");
-            }
-            Err(e) => {
-                error!("Multiplexor task failed: {e}");
-            }
-        }
+        result.map(|_| ())
     }
 
     /// Keepalive subtask

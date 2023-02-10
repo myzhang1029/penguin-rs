@@ -60,6 +60,7 @@ pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
                 tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined1())
                     .map_err(Error::Signal)?;
             let tls_config = tls_config.dupe();
+            // This `Future` does not fail, so we can ignore the `Result`.
             tokio::spawn(async move {
                 while sigusr1.recv().await == Some(()) {
                     info!("Reloading TLS certificate");

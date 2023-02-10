@@ -46,6 +46,11 @@ where
         Poll::Ready(result)
     }
 
+    /// Lock and send the resulting `Message` from a computation.
+    ///
+    /// # Cancel safety
+    /// This function is cancel safe. If the task is cancelled, it is
+    /// guaranteed that the message will not be sent.
     #[inline]
     pub async fn send_with(&self, msg_fn: impl Fn() -> Message) -> Result<()> {
         poll_fn(|cx| self.poll_send_with(cx, |_cx| Poll::Ready(msg_fn()))).await

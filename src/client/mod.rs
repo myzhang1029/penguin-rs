@@ -125,6 +125,7 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
     // Map of client IDs to (source, UdpSocket, bool)
     let udp_client_id_map: HashMap<u32, ClientIdMapEntry> = HashMap::new();
     let udp_client_id_map = Arc::new(RwLock::new(udp_client_id_map));
+    // This function does not fail, so it can be spawned without checking the result
     tokio::spawn(prune_client_id_map_task(udp_client_id_map.dupe()));
     let mut jobs = JoinSet::new();
     // Spawn listeners. See `handle_remote.rs` for the implementation considerations.
@@ -145,8 +146,11 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
                     Some(result) = jobs.join_next() => {
                         // Quit immediately if any handler fails
                         // so maybe `systemd` can restart it
-                        result.expect("JoinSet returned an error")?;
+                        result.expect("JoinSet panicked (this is a bug)")?;
                     }
+                    // This future is not cancel-safe, but if the previous
+                    // future is returns, it is a fatal error and we don't
+                    // care about this future anymore.
                     error = on_connected(
                         ws_stream,
                         &mut stream_cmd_rx,
@@ -209,7 +213,13 @@ async fn on_connected(
     } else {
         Some(time::Duration::from_secs(keepalive))
     };
-    let mut mux = Multiplexor::new(ws_stream, Role::Client, keepalive_duration);
+    let mut mux_task_joinset = JoinSet::new();
+    let mut mux = Multiplexor::new(
+        ws_stream,
+        Role::Client,
+        keepalive_duration,
+        Some(&mut mux_task_joinset),
+    );
     info!("Connected to server");
     // If we have a failed stream request, try it first
     if let Some(sender) = failed_stream_request.take() {
@@ -222,6 +232,11 @@ async fn on_connected(
     // Main loop
     loop {
         tokio::select! {
+            Some(mux_task_joinset_result) = mux_task_joinset.join_next() => {
+                if let Err(e) = mux_task_joinset_result.expect("JoinSet panicked (this is a bug)") {
+                    return Error::Mux(e);
+                }
+            }
             Some(sender) = stream_command_rx.recv() => {
                 if let Err(e) = get_send_stream_chan(&mut mux, sender, failed_stream_request, channel_timeout).await {
                     return e;

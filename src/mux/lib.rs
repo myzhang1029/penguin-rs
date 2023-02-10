@@ -28,6 +28,7 @@ use thiserror::Error;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     sync::{mpsc, RwLock},
+    task::JoinSet,
 };
 use tokio_tungstenite::{tungstenite::Message, WebSocketStream};
 use tracing::{error, trace, warn};
@@ -103,11 +104,25 @@ where
     S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
     /// Create a new `Multiplexor`
+    ///
+    /// # Arguments
+    ///
+    /// - `ws`: The `WebSocket` connection to multiplex over.
+    ///
+    /// - `role`: The role of this side of the connection.
+    ///   (does not have to match the `WebSocket` role)
+    ///
+    /// - `keepalive_interval`: The interval at which to send `Ping` frames.
+    ///
+    /// - `task_joinset`: A `JoinSet` to spawn the multiplexor task into so
+    ///   that the caller can notice if the task exits. If it is `None`, the
+    ///   task will be spawned by `tokio::spawn` and errors will be logged.
     #[tracing::instrument(skip_all, level = "debug")]
     pub fn new(
         ws: WebSocketStream<S>,
         role: Role,
         keepalive_interval: Option<std::time::Duration>,
+        task_joinset: Option<&mut JoinSet<Result<()>>>,
     ) -> Self {
         let (datagram_tx, datagram_rx) = mpsc::channel(config::DATAGRAM_BUFFER_SIZE);
         let (stream_tx, stream_rx) = mpsc::channel(config::STREAM_BUFFER_SIZE);
@@ -122,11 +137,18 @@ where
             dropped_ports_tx,
             ack_tx,
         };
-        tokio::spawn(
-            inner
-                .dupe()
-                .task(datagram_tx, stream_tx, dropped_ports_rx, ack_rx),
-        );
+        let task_future = inner
+            .dupe()
+            .task(datagram_tx, stream_tx, dropped_ports_rx, ack_rx);
+        if let Some(task_joinset) = task_joinset {
+            task_joinset.spawn(task_future);
+        } else {
+            tokio::spawn(async move {
+                if let Err(e) = task_future.await {
+                    error!("Multiplexor task exited with error: {}", e);
+                }
+            });
+        }
         trace!("Multiplexor task spawned");
 
         Self {
@@ -137,6 +159,12 @@ where
     }
 
     /// Request a channel for `host` and `port`
+    ///
+    /// # Cancel safety
+    /// This function is not cancel safe. If the task is cancelled while waiting
+    /// for the channel to be established, that channel may be established but
+    /// inaccessible through normal means. Subsequent calls to this function
+    /// will result in a new channel being established.
     #[tracing::instrument(skip(self), level = "debug")]
     pub async fn client_new_stream_channel(&self, host: &[u8], port: u16) -> Result<MuxStream<S>> {
         assert_eq!(self.inner.role, Role::Client);
@@ -171,6 +199,11 @@ where
     ///
     /// # Errors
     /// Returns `Error::Closed` if the connection is closed
+    ///
+    /// # Cancel Safety
+    /// This function is cancel safe. If the task is cancelled while waiting
+    /// for a new connection, it is guaranteed that no connected stream will
+    /// be lost.
     #[tracing::instrument(skip(self), level = "debug")]
     pub async fn server_new_stream_channel(&self) -> Result<MuxStream<S>> {
         assert_eq!(self.inner.role, Role::Server);
@@ -186,6 +219,10 @@ where
     ///
     /// # Errors
     /// Returns `Error::Closed` if the connection is closed
+    ///
+    /// # Cancel Safety
+    /// This function is cancel safe. If the task is cancelled while waiting
+    /// for a datagram, it is guaranteed that no datagram will be lost.
     #[tracing::instrument(skip(self), level = "debug")]
     #[inline]
     pub async fn get_datagram(&self) -> Result<DatagramFrame> {
@@ -204,6 +241,10 @@ where
     /// longer than 255 octets.
     /// - Returns `Error::SendDatagram` if the datagram could not be sent
     /// due to a `tungstenite::Error`.
+    ///
+    /// # Cancel Safety
+    /// This function is cancel safe. If the task is cancelled, it is
+    /// guaranteed that the datagram has not been sent.
     #[tracing::instrument(skip(self), level = "debug")]
     #[inline]
     pub async fn send_datagram(&self, frame: DatagramFrame) -> Result<()> {

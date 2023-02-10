@@ -13,8 +13,8 @@ async fn connect_succeeds() {
     let client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
     let server = WebSocketStream::from_raw_socket(server, Role::Server, None).await;
 
-    let client_mux = Multiplexor::new(client, Role::Client, None);
-    let server_mux = Multiplexor::new(server, Role::Server, None);
+    let client_mux = Multiplexor::new(client, Role::Client, None, None);
+    let server_mux = Multiplexor::new(server, Role::Server, None, None);
 
     let server_task = tokio::spawn(async move {
         let stream = server_mux.server_new_stream_channel().await.unwrap();
@@ -36,8 +36,8 @@ async fn datagram_channel_passes_data() {
     let client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
     let server = WebSocketStream::from_raw_socket(server, Role::Server, None).await;
 
-    let client_mux = Multiplexor::new(client, Role::Client, None);
-    let server_mux = Multiplexor::new(server, Role::Server, None);
+    let client_mux = Multiplexor::new(client, Role::Client, None, None);
+    let server_mux = Multiplexor::new(server, Role::Server, None, None);
 
     let server_task = tokio::spawn(async move {
         for _ in 0..64 {
@@ -73,8 +73,8 @@ async fn connected_stream_passes_data() {
     let client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
     let server = WebSocketStream::from_raw_socket(server, Role::Server, None).await;
 
-    let client_mux = Multiplexor::new(client, Role::Client, None);
-    let server_mux = Multiplexor::new(server, Role::Server, None);
+    let client_mux = Multiplexor::new(client, Role::Client, None, None);
+    let server_mux = Multiplexor::new(server, Role::Server, None, None);
 
     let input_bytes: Vec<u8> = (0..(1024 * 1024)).map(|_| rand::random::<u8>()).collect();
     let len = input_bytes.len();
@@ -117,8 +117,8 @@ async fn test_early_eof_detected() {
     let client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
     let server = WebSocketStream::from_raw_socket(server, Role::Server, None).await;
 
-    let client_mux = Multiplexor::new(client, Role::Client, None);
-    let server_mux = Multiplexor::new(server, Role::Server, None);
+    let client_mux = Multiplexor::new(client, Role::Client, None, None);
+    let server_mux = Multiplexor::new(server, Role::Server, None, None);
 
     let input_bytes: Vec<u8> = (0..1024).map(|_| rand::random::<u8>()).collect();
     let len = input_bytes.len();
@@ -154,8 +154,8 @@ async fn test_several_channels() {
     let client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
     let server = WebSocketStream::from_raw_socket(server, Role::Server, None).await;
 
-    let client_mux = Multiplexor::new(client, Role::Client, None);
-    let server_mux = Multiplexor::new(server, Role::Server, None);
+    let client_mux = Multiplexor::new(client, Role::Client, None, None);
+    let server_mux = Multiplexor::new(server, Role::Server, None, None);
 
     let server_task = tokio::spawn(async move {
         let mut conn1 = server_mux.server_new_stream_channel().await.unwrap();
