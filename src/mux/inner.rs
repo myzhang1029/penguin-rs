@@ -445,6 +445,9 @@ where
                     .ok();
                 self.ws.flush_ignore_closed().await.ok();
             }
+            // If there is a writer waiting for `Ack`, wake it up because it will never receive one.
+            // Waking it here and the user should receive a `BrokenPipe` error.
+            stream_data.writer_waker.wake();
         }
         debug!("freed port {}", our_port);
     }
@@ -460,8 +463,9 @@ where
                 stream_data.sender.send(Bytes::new()).await.ok();
                 // Prevent the user from writing
                 stream_data.can_write.store(false, Ordering::Relaxed);
-                // Should we wake pending writers?
-                // stream_data.writer_waker.wake();
+                // If there is a writer waiting for `Ack`, wake it up because it will never receive one.
+                // Waking it here and the user should receive a `BrokenPipe` error.
+                stream_data.writer_waker.wake();
             }
         }
         // This also effectively `Rst`s all streams on the other side
