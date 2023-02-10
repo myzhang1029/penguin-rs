@@ -21,25 +21,6 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::{debug, error};
 use udp::{handle_udp, handle_udp_stdio};
 
-/// Do something or continue if the error is retryable
-macro_rules! complete_or_continue_if_retryable {
-    ($e:expr) => {
-        match $e {
-            Ok(v) => v,
-            Err(err) => {
-                if err.retryable() {
-                    warn!("Remote error: {err}");
-                    continue;
-                }
-                error!("Giving up");
-                return Err(FatalError::ClientIo(err));
-            }
-        }
-    };
-}
-
-pub(super) use complete_or_continue_if_retryable;
-
 /// Handler errors
 /// These are all fatal errors that will cause the client to exit.
 #[derive(Debug, Error)]

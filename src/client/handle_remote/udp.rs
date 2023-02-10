@@ -1,7 +1,6 @@
 //! Run a remote UDP connection.
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use super::super::MaybeRetryableError;
 use super::FatalError;
 use crate::client::HandlerResources;
 use crate::{config, Dupe};
@@ -10,7 +9,7 @@ use penguin_mux::DatagramFrame;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::UdpSocket;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info};
 
 /// Handle a UDP Inet->Inet remote.
 #[inline]
@@ -69,7 +68,11 @@ pub(super) async fn handle_udp_stdio(
     let mut stdin = BufReader::new(tokio::io::stdin());
     loop {
         let mut line = String::new();
-        super::complete_or_continue_if_retryable!(stdin.read_line(&mut line).await);
+        // We should stop if we fail to read from stdin.
+        stdin
+            .read_line(&mut line)
+            .await
+            .map_err(FatalError::ClientIo)?;
         let frame = DatagramFrame {
             host: Bytes::from_static(rhost.as_bytes()),
             port: rport,

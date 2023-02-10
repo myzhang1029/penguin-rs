@@ -36,8 +36,7 @@ static WEBSOCKET_VERSION: HeaderValue = HeaderValue::from_static("13");
 macro_rules! header_matches {
     ($given:expr, $wanted:expr) => {
         $given
-            .map(|v| v.as_bytes())
-            .map(|v| v.eq_ignore_ascii_case($wanted.as_bytes()))
+            .map(|v| v.as_bytes().eq_ignore_ascii_case($wanted.as_bytes()))
             .unwrap_or_else(|| {
                 warn!("Header {:?} does not match {:?}", $given, $wanted);
                 false

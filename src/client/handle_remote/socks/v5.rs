@@ -8,12 +8,6 @@ use bytes::Bytes;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tracing::trace;
 
-macro_rules! v5_reply {
-    ($rep:expr) => {
-        &[0x05, $rep, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
-    };
-}
-
 /// Read SOCKS authentication methods from the given reader.
 ///
 /// # Errors
@@ -138,7 +132,7 @@ where
         _ => {
             // Unsupported address type
             stream
-                .write_all(v5_reply!(0x08))
+                .write_all(&[0x05, 0x08, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
                 .await
                 .map_err(|e| Error::ProcessSocksRequest("write unsupported address type", e))?;
             stream

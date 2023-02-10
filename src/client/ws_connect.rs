@@ -18,7 +18,7 @@ use tracing::{debug, warn};
 #[derive(Error, Debug)]
 pub enum Error {
     /// Invalid URL or cannot connect
-    #[error("Tungstenite error: {0}")]
+    #[error(transparent)]
     Tungstenite(#[from] tokio_tungstenite::tungstenite::Error),
     /// TLS error
     #[error(transparent)]
