@@ -165,14 +165,9 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
     if args.proxy.is_some() {
         warn!("Proxy not implemented yet");
     }
-    let mut current_retry_count: u32 = 0;
-    // Initial retry interval is 200ms
-    let mut current_retry_interval: u64 = 200;
     // Channel for listeners to request TCP channels the main loop
     let (stream_command_tx, mut stream_command_rx) =
         mpsc::channel::<StreamCommand>(config::STREAM_REQUEST_COMMAND_SIZE);
-    // Place to park one failed stream request so that it can be retried
-    let mut failed_stream_request: Option<StreamCommand> = None;
     // Channel for listeners to send UDP datagrams to the main loop
     let (datagram_tx, mut datagram_rx) =
         mpsc::channel::<DatagramFrame>(config::INCOMING_DATAGRAM_BUFFER_SIZE);
@@ -189,23 +184,36 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
     for remote in &args.remote {
         jobs.spawn(handle_remote(remote, handler_resources.dupe()));
     }
-    // This function does not fail, so it can be spawned without checking the result
-    tokio::spawn(prune_client_id_map_task(handler_resources));
-    // Retry loop
-    loop {
-        match ws_connect::handshake(args).await {
-            Ok(ws_stream) => {
-                tokio::select! {
-                    biased;
-                    Some(result) = jobs.join_next() => {
-                        // Quit immediately if any handler fails
-                        // so maybe `systemd` can restart it
-                        result.expect("JoinSet panicked (this is a bug)")?;
+    let check_listeners_future = async move {
+        while let Some(result) = jobs.join_next().await {
+            // Quit immediately if any handler fails
+            // so maybe `systemd` can restart it
+            result.expect("JoinSet panicked (this is a bug)")?;
+        }
+        // Quit if there is no more listeners, which means we don't need
+        // to exist anymore
+        Ok::<(), Error>(())
+    };
+    let main_future = async move {
+        let mut current_retry_count: u32 = 0;
+        // Initial retry interval is 200ms
+        let mut current_retry_interval: u64 = 200;
+        // Place to park one failed stream request so that it can be retried
+        let mut failed_stream_request: Option<StreamCommand> = None;
+        // Retry loop
+        loop {
+            match ws_connect::handshake(args).await {
+                Err(e) => {
+                    if !e.retryable() {
+                        return Err(e.into());
                     }
+                    // else, retry
+                }
+                Ok(ws_stream) => {
                     // This future is not cancel-safe, but if the previous
                     // future is returns, it is a fatal error and we don't
                     // care about this future anymore.
-                    error = on_connected(
+                    let error = on_connected(
                         ws_stream,
                         &mut stream_command_rx,
                         &mut failed_stream_request,
@@ -213,37 +221,37 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
                         udp_client_id_map.dupe(),
                         args.keepalive,
                         time::Duration::from_secs(args.channel_timeout),
-                    ) => {
-                        warn!("Disconnected from server");
-                        if !error.retryable() {
-                            return Err(error);
-                        }
-                        // Since we once connected, reset the retry count
-                        current_retry_count = 0;
-                        current_retry_interval = 200;
-                        // Now retry
+                    )
+                    .await;
+                    warn!("Disconnected from server");
+                    if !error.retryable() {
+                        return Err(error);
                     }
-                };
-            }
-            Err(e) => {
-                if !e.retryable() {
-                    return Err(e.into());
+                    // Since we once connected, reset the retry count
+                    current_retry_count = 0;
+                    current_retry_interval = 200;
+                    // Now retry
                 }
-                // If we get here, retry.
             }
-        };
-
-        // If we get here, retry.
-        warn!("Reconnecting in {current_retry_interval} ms");
-        current_retry_count += 1;
-        if args.max_retry_count != 0 && current_retry_count > args.max_retry_count {
-            warn!("Max retry count reached, giving up");
-            return Err(Error::MaxRetryCountReached);
+            // If we get here, retry.
+            warn!("Reconnecting in {current_retry_interval} ms");
+            current_retry_count += 1;
+            if args.max_retry_count != 0 && current_retry_count > args.max_retry_count {
+                warn!("Max retry count reached, giving up");
+                return Err(Error::MaxRetryCountReached);
+            }
+            time::sleep(time::Duration::from_millis(current_retry_interval)).await;
+            if current_retry_interval < args.max_retry_interval {
+                current_retry_interval *= 2;
+            }
         }
-        time::sleep(time::Duration::from_millis(current_retry_interval)).await;
-        if current_retry_interval < args.max_retry_interval {
-            current_retry_interval *= 2;
-        }
+    };
+    tokio::select! {
+        biased;
+        result = check_listeners_future => result,
+        // This future never returns
+        _ = prune_client_id_map_task(handler_resources) => unreachable!("prune_client_id_map_task should never return"),
+        result = main_future => result,
     }
 }
 
@@ -340,7 +348,7 @@ async fn on_connected(
 }
 
 /// Get a new channel from the multiplexor and send it to the handler.
-/// If we fail, the sender is dropped and we return an error.
+/// If we fail, put the request back in the failed_stream_request slot.
 #[tracing::instrument(skip_all, level = "trace")]
 async fn get_send_stream_chan(
     mux: &mut Multiplexor<MaybeTlsStream<TcpStream>>,
@@ -377,8 +385,10 @@ async fn get_send_stream_chan(
 /// Prune the client ID map of entries that have not been used for a while.
 #[tracing::instrument(skip_all, level = "trace")]
 async fn prune_client_id_map_task(handler_resources: HandlerResources) {
+    let mut interval = time::interval(config::UDP_PRUNE_TIMEOUT);
+    interval.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
     loop {
-        tokio::time::sleep(config::UDP_PRUNE_TIMEOUT).await;
+        interval.tick().await;
         handler_resources.prune_udp_clients().await;
     }
 }

@@ -134,7 +134,7 @@ where
             }
         } else {
             futures_util::future::pending::<()>().await;
-            Ok(())
+            unreachable!("`futures_util::future::pending` never resolves")
         }
     }
 

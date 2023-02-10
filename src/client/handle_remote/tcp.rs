@@ -12,23 +12,6 @@ use tokio::{
 };
 use tracing::{error, info, warn};
 
-/// Do something or continue if the error is retryable
-macro_rules! complete_or_continue_if_retryable {
-    ($e:expr) => {
-        match $e {
-            Ok(v) => v,
-            Err(err) => {
-                if err.retryable() {
-                    warn!("Remote error: {err}");
-                    continue;
-                }
-                error!("Giving up");
-                return Err(FatalError::ClientIo(err));
-            }
-        }
-    };
-}
-
 /// Request a channel from the mux
 /// Returns an error if the main loop timed out waiting for a response.
 #[inline]
@@ -122,9 +105,19 @@ pub async fn handle_tcp_stdio(
             request_tcp_channel(stream_command_tx_permit, Bytes::from_static(rhost), rport)
                 .await
                 .map_err(|_| FatalError::MainLoopExitWithoutSendingStream)?;
-        complete_or_continue_if_retryable!(
-            tokio::io::copy_bidirectional(&mut stdio, &mut channel).await
-        );
+        match tokio::io::copy_bidirectional(&mut stdio, &mut channel).await {
+            Ok(_) => {
+                info!("TCP stdio connection closed");
+                break Ok(());
+            }
+            Err(error) if error.retryable() => {
+                warn!("TCP stdio connection failed: {error}");
+            }
+            Err(error) => {
+                error!("TCP stdio connection failed: {error}");
+                break Err(FatalError::ClientIo(error));
+            }
+        }
     }
 }
 

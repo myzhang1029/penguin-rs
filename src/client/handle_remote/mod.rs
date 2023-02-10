@@ -80,6 +80,7 @@ pub(super) async fn handle_remote(
 }
 
 /// Merged `stdin` and `stdout` into a single stream
+#[derive(Debug)]
 pub struct Stdio {
     stdin: tokio::io::Stdin,
     stdout: tokio::io::Stdout,
