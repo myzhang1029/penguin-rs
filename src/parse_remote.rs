@@ -117,11 +117,23 @@ fn tokenize_remote(s: &str) -> Result<Vec<&str>, Error> {
 impl Display for Remote {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.local_addr {
-            LocalSpec::Inet((host, port)) => write!(f, "{host}:{port}")?,
+            LocalSpec::Inet((host, port)) => {
+                if host.contains(':') {
+                    write!(f, "[{host}]:{port}")?;
+                } else {
+                    write!(f, "{host}:{port}")?;
+                }
+            }
             LocalSpec::Stdio => write!(f, "stdio")?,
         }
         match &self.remote_addr {
-            RemoteSpec::Inet((host, port)) => write!(f, ":{host}:{port}")?,
+            RemoteSpec::Inet((host, port)) => {
+                if host.contains(':') {
+                    write!(f, ":[{host}]:{port}")?;
+                } else {
+                    write!(f, ":{host}:{port}")?;
+                }
+            }
             RemoteSpec::Socks => write!(f, ":socks")?,
         }
         write!(f, "/{}", self.protocol)?;
@@ -361,6 +373,17 @@ mod test {
                 },
             ),
             (
+                "localhost:5354:[2001:4860:4860:0:0:0:0:8888]:53/udp",
+                Remote {
+                    local_addr: LocalSpec::Inet((String::from("localhost"), 5354)),
+                    remote_addr: RemoteSpec::Inet((
+                        String::from("2001:4860:4860:0:0:0:0:8888"),
+                        53,
+                    )),
+                    protocol: Protocol::Udp,
+                },
+            ),
+            (
                 "stdio:google.com:80",
                 Remote {
                     local_addr: LocalSpec::Stdio,
@@ -394,8 +417,12 @@ mod test {
             ),
         ];
         for (s, expected) in tests {
+            // Test that the common format is parsed correctly
             let actual = s.parse::<Remote>().unwrap();
             assert_eq!(actual, *expected);
+            // Test that the canonical format is made and parsed correctly
+            let reparsed = actual.to_string().parse::<Remote>().unwrap();
+            assert_eq!(reparsed, *expected);
         }
         "just_a_hostname".parse::<Remote>().unwrap_err();
         "socks/udp".parse::<Remote>().unwrap_err();
