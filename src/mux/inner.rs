@@ -7,16 +7,15 @@ use super::frame::{DatagramFrame, Frame, StreamFlag, StreamFrame};
 use super::locked_sink::LockedWebSocket;
 use super::stream::MuxStream;
 use super::{Error, IntKey, Result, Role};
+use crate::ws::{Message, WebSocketStream};
 use bytes::{Buf, Bytes};
 use futures_util::task::AtomicWaker;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::MissedTickBehavior;
-use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, trace, warn};
 
 #[derive(Debug)]
@@ -85,10 +84,7 @@ impl<S> Dupe for MultiplexorInner<S> {
     }
 }
 
-impl<S> MultiplexorInner<S>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
+impl<S: WebSocketStream> MultiplexorInner<S> {
     /// Processing task
     /// Does the following:
     /// - Receives messages from `WebSocket` and processes them
@@ -197,10 +193,7 @@ where
     }
 }
 
-impl<S> MultiplexorInner<S>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
+impl<S: WebSocketStream> MultiplexorInner<S> {
     /// Process an incoming message
     /// Returns `Ok(true)` if a `Close` message was received.
     #[tracing::instrument(skip(msg, datagram_tx, stream_tx), level = "debug")]

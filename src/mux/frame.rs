@@ -51,10 +51,10 @@
 //! send them back to the client with the same Source ID.
 #![allow(clippy::similar_names)]
 
+use crate::ws::Message;
 use bytes::{Buf, BufMut, Bytes};
 use std::{fmt::Debug, num::TryFromIntError};
 use thiserror::Error;
-use tokio_tungstenite::tungstenite::Message;
 use tracing::warn;
 
 /// Conversion errors

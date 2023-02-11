@@ -15,7 +15,9 @@ mod locked_sink;
 mod stream;
 #[cfg(test)]
 mod test;
+pub mod ws;
 
+use crate::ws::{Message, WebSocketStream};
 use bytes::Bytes;
 use dupe::Dupe;
 use inner::MultiplexorInner;
@@ -26,16 +28,14 @@ use std::hash::Hash;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::{
-    io::{AsyncRead, AsyncWrite},
     sync::{mpsc, RwLock},
     task::JoinSet,
 };
-use tokio_tungstenite::{tungstenite::Message, WebSocketStream};
 use tracing::{error, trace, warn};
 
+pub use crate::ws::Role;
 pub use frame::{DatagramFrame, Frame, StreamFlag, StreamFrame};
 pub use stream::MuxStream;
-pub use tokio_tungstenite::tungstenite::protocol::Role;
 
 /// Multiplexor error
 #[derive(Debug, Error)]
@@ -48,22 +48,22 @@ pub enum Error {
     #[error("Mux is already closed")]
     Closed,
 
-    // These are tungstenite errors separated by their origin
-    /// Tungstenite error when polling the next message
+    // These are WebSocket errors separated by their origin
+    /// WebSocket error when polling the next message
     #[error("Failed to receive message: {0}")]
-    Next(tokio_tungstenite::tungstenite::Error),
-    /// Tungstenite error when flushing messages
+    Next(crate::ws::Error),
+    /// WebSocket error when flushing messages
     #[error("Failed to flush messages: {0}")]
-    Flush(tokio_tungstenite::tungstenite::Error),
-    /// Tungstenite error when sending a datagram
+    Flush(crate::ws::Error),
+    /// WebSocket error when sending a datagram
     #[error("Failed to send datagram: {0}")]
-    SendDatagram(tokio_tungstenite::tungstenite::Error),
-    /// Tungstenite error when sending a stream frame
+    SendDatagram(crate::ws::Error),
+    /// WebSocket error when sending a stream frame
     #[error("Failed to send stream frame: {0}")]
-    SendStreamFrame(tokio_tungstenite::tungstenite::Error),
-    /// Tungstenite error when sending a ping
+    SendStreamFrame(crate::ws::Error),
+    /// WebSocket error when sending a ping
     #[error("Failed to send ping: {0}")]
-    SendPing(tokio_tungstenite::tungstenite::Error),
+    SendPing(crate::ws::Error),
 
     // These are the ones that shouldn't normally happen
     /// Datagram target host longer than 255 octets
@@ -99,10 +99,7 @@ pub struct Multiplexor<S> {
     stream_rx: RwLock<mpsc::Receiver<MuxStream<S>>>,
 }
 
-impl<S> Multiplexor<S>
-where
-    S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
-{
+impl<S: WebSocketStream> Multiplexor<S> {
     /// Create a new `Multiplexor`
     ///
     /// # Arguments
@@ -119,7 +116,7 @@ where
     ///   task will be spawned by `tokio::spawn` and errors will be logged.
     #[tracing::instrument(skip_all, level = "debug")]
     pub fn new(
-        ws: WebSocketStream<S>,
+        ws: S,
         role: Role,
         keepalive_interval: Option<std::time::Duration>,
         task_joinset: Option<&mut JoinSet<Result<()>>>,
@@ -240,7 +237,7 @@ where
     /// - Returns `Error::DatagramHostTooLong` if the destination host is
     /// longer than 255 octets.
     /// - Returns `Error::SendDatagram` if the datagram could not be sent
-    /// due to a `tungstenite::Error`.
+    /// due to a `crate::ws::Error`.
     ///
     /// # Cancel Safety
     /// This function is cancel safe. If the task is cancelled, it is

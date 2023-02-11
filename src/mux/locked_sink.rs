@@ -2,31 +2,26 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 #![deny(missing_docs)]
 
+use crate::ws::{Message, Result, WebSocketError, WebSocketStream};
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
 use std::future::poll_fn;
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
-use tokio::io::{AsyncRead, AsyncWrite};
-use tokio_tungstenite::tungstenite::{Message, Result};
-use tokio_tungstenite::WebSocketStream;
 use tracing::trace;
 
 /// A wrapper around `Sink + Stream` that can be cloned and shared between tasks.
-pub struct LockedWebSocket<S>(Arc<Mutex<WebSocketStream<S>>>);
+pub struct LockedWebSocket<S>(Arc<Mutex<S>>);
 
 impl<S> LockedWebSocket<S> {
     /// Create a new `LockedWebSocket` from a `WebSocketStream`
     #[inline]
-    pub fn new(websocket: WebSocketStream<S>) -> Self {
+    pub fn new(websocket: S) -> Self {
         Self(Arc::new(Mutex::new(websocket)))
     }
 }
 
-impl<S> LockedWebSocket<S>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
+impl<S: WebSocketStream> LockedWebSocket<S> {
     /// Lock and send the resulting `Message` from a computation.
     /// The computation is only executed if the sink is ready.
     /// The computation may return `Poll::Pending` to indicate that it is not
@@ -70,14 +65,8 @@ where
     #[inline]
     pub fn poll_flush_ignore_closed(&self, cx: &mut Context<'_>) -> Poll<Result<()>> {
         match ready!(self.poll_flush(cx)) {
-            Ok(()) | Err(tokio_tungstenite::tungstenite::Error::ConnectionClosed) => {
-                Poll::Ready(Ok(()))
-            }
-            Err(tokio_tungstenite::tungstenite::Error::Io(ioerror))
-                if ioerror.kind() == std::io::ErrorKind::BrokenPipe =>
-            {
-                Poll::Ready(Ok(()))
-            }
+            Ok(()) => Poll::Ready(Ok(())),
+            Err(e) if e.because_closed() => Poll::Ready(Ok(())),
             Err(e) => Poll::Ready(Err(e)),
         }
     }
@@ -119,6 +108,6 @@ impl<S> crate::dupe::Dupe for LockedWebSocket<S> {
 impl<S: std::fmt::Debug> std::fmt::Debug for LockedWebSocket<S> {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        <Mutex<WebSocketStream<S>> as std::fmt::Debug>::fmt(self.0.as_ref(), f)
+        <Mutex<S> as std::fmt::Debug>::fmt(&*self.0, f)
     }
 }

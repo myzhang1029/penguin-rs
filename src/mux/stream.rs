@@ -4,6 +4,7 @@
 use super::frame::StreamFrame;
 use super::locked_sink::LockedWebSocket;
 use crate::config;
+use crate::ws::WebSocketError;
 use bytes::Bytes;
 use futures_util::task::AtomicWaker;
 use std::io;
@@ -136,7 +137,7 @@ impl<S> AsyncRead for MuxStream<S> {
 
 impl<S> AsyncWrite for MuxStream<S>
 where
-    S: AsyncRead + AsyncWrite + Unpin + 'static,
+    S: crate::ws::WebSocketStream,
 {
     #[tracing::instrument(skip(cx, buf), level = "trace")]
     #[inline]
@@ -185,7 +186,7 @@ where
                     .into(),
             )
         }))
-        .map_err(tungstenite_error_to_io_error)?;
+        .map_err(WebSocketError::into_io_error)?;
         trace!("sent a frame");
         Poll::Ready(Ok(buf.len()))
     }
@@ -193,7 +194,7 @@ where
     #[tracing::instrument(skip(cx), level = "trace")]
     #[inline]
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        ready!(self.ws.poll_flush(cx)).map_err(tungstenite_error_to_io_error)?;
+        ready!(self.ws.poll_flush(cx)).map_err(WebSocketError::into_io_error)?;
         Poll::Ready(Ok(()))
     }
 
@@ -215,7 +216,7 @@ where
             ready!(self.ws.poll_send_with(cx, |_cx| {
                 Poll::Ready(StreamFrame::new_fin(self.our_port, self.their_port).into())
             }))
-            .map_err(tungstenite_error_to_io_error)?;
+            .map_err(WebSocketError::into_io_error)?;
             // Atomic ordering: see `inner.rs` -> `shutdown` and `close_port`.
             self.can_write.store(false, Ordering::Relaxed);
         }
@@ -224,16 +225,5 @@ where
         // This line is allowed to fail, because the sink might have been closed altogether
         ready!(self.ws.poll_flush(cx)).ok();
         Poll::Ready(Ok(()))
-    }
-}
-
-fn tungstenite_error_to_io_error(e: tokio_tungstenite::tungstenite::Error) -> std::io::Error {
-    match e {
-        tokio_tungstenite::tungstenite::Error::Io(e) => e,
-        tokio_tungstenite::tungstenite::Error::AlreadyClosed
-        | tokio_tungstenite::tungstenite::Error::ConnectionClosed => {
-            std::io::ErrorKind::BrokenPipe.into()
-        }
-        e => std::io::Error::new(std::io::ErrorKind::Other, e),
     }
 }

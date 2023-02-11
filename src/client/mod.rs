@@ -22,7 +22,7 @@ use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::{mpsc, oneshot, RwLock};
 use tokio::task::JoinSet;
 use tokio::time;
-use tokio_tungstenite::MaybeTlsStream;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use tracing::{error, info, trace, warn};
 
 /// Errors
@@ -44,7 +44,7 @@ pub enum Error {
     RemoteDisconnected,
 }
 
-type MuxStream = penguin_mux::MuxStream<MaybeTlsStream<TcpStream>>;
+type MuxStream = penguin_mux::MuxStream<WebSocketStream<MaybeTlsStream<TcpStream>>>;
 
 // Send the information about how to send the stream to the listener
 /// Type that local listeners send to the main loop to request a connection
@@ -351,7 +351,7 @@ async fn on_connected(
 /// If we fail, put the request back in the failed_stream_request slot.
 #[tracing::instrument(skip_all, level = "trace")]
 async fn get_send_stream_chan(
-    mux: &mut Multiplexor<MaybeTlsStream<TcpStream>>,
+    mux: &mut Multiplexor<WebSocketStream<MaybeTlsStream<TcpStream>>>,
     stream_command: StreamCommand,
     failed_stream_request: &mut Option<StreamCommand>,
     channel_timeout: Duration,
