@@ -6,14 +6,13 @@ use bytes::Bytes;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, info};
 
-#[tokio::test]
-async fn connect_succeeds() {
+async fn test_connect_succeeds_inner() {
     let (client, server) = crate::ws::mock::get_pair().await;
 
     let client_mux = Multiplexor::new(client, Role::Client, None, None);
     let server_mux = Multiplexor::new(server, Role::Server, None, None);
 
-    let server_task = tokio::spawn(async move {
+    let server_task = loom::spawn(async move {
         let stream = server_mux.server_new_stream_channel().await.unwrap();
         info!(
             "sport = {}, dport = {}, dest = {:?}:{}",
@@ -24,17 +23,23 @@ async fn connect_succeeds() {
     let stream = client_mux.client_new_stream_channel(&[], 0).await.unwrap();
     info!("sport = {}, dport = {}", stream.our_port, stream.their_port);
     debug!("Waiting for server task to finish");
-    server_task.await.unwrap();
+    server_task.join().await.unwrap();
 }
 
-#[tokio::test]
-async fn datagram_channel_passes_data() {
+#[test]
+fn test_connect_succeeds() {
+    crate::loom::exec_test!(async {
+        test_connect_succeeds_inner().await;
+    })
+}
+
+async fn datagram_channel_passes_data_inner() {
     let (client, server) = crate::ws::mock::get_pair().await;
 
     let client_mux = Multiplexor::new(client, Role::Client, None, None);
     let server_mux = Multiplexor::new(server, Role::Server, None, None);
 
-    let server_task = tokio::spawn(async move {
+    let server_task = loom::spawn(async move {
         for _ in 0..64 {
             let dgram = server_mux.get_datagram().await.unwrap();
             server_mux.send_datagram(dgram).await.unwrap();
@@ -59,11 +64,17 @@ async fn datagram_channel_passes_data() {
         assert_eq!(recvd.data, payload);
     }
     debug!("Waiting for server task to finish");
-    server_task.await.unwrap();
+    server_task.join().await.unwrap();
 }
 
-#[tokio::test]
-async fn connected_stream_passes_data() {
+#[test]
+fn datagram_channel_passes_data() {
+    crate::loom::exec_test!(async {
+        datagram_channel_passes_data_inner().await;
+    })
+}
+
+async fn connected_stream_passes_data_inner() {
     let (client, server) = crate::ws::mock::get_pair().await;
 
     let client_mux = Multiplexor::new(client, Role::Client, None, None);
@@ -73,7 +84,7 @@ async fn connected_stream_passes_data() {
     let len = input_bytes.len();
     let input_bytes_clone = input_bytes.clone();
 
-    let server_task = tokio::spawn(async move {
+    let server_task = loom::spawn(async move {
         let mut conn = server_mux.server_new_stream_channel().await.unwrap();
         let mut i = 0;
         while i < input_bytes_clone.len() {
@@ -101,11 +112,17 @@ async fn connected_stream_passes_data() {
 
     assert_eq!(input_bytes, output_bytes);
     debug!("Waiting for server task to finish");
-    server_task.await.unwrap();
+    server_task.join().await.unwrap();
 }
 
-#[tokio::test]
-async fn test_early_eof_detected() {
+#[test]
+fn connected_stream_passes_data() {
+    crate::loom::exec_test!(async {
+        connected_stream_passes_data_inner().await;
+    })
+}
+
+async fn test_early_eof_detected_inner() {
     let (client, server) = crate::ws::mock::get_pair().await;
 
     let client_mux = Multiplexor::new(client, Role::Client, None, None);
@@ -115,7 +132,7 @@ async fn test_early_eof_detected() {
     let len = input_bytes.len();
     let input_bytes_clone = input_bytes.clone();
 
-    let server_task = tokio::spawn(async move {
+    let server_task = loom::spawn(async move {
         let mut conn = server_mux.server_new_stream_channel().await.unwrap();
         conn.write_all(&input_bytes_clone).await.unwrap();
         info!("Done send");
@@ -136,17 +153,23 @@ async fn test_early_eof_detected() {
 
     assert_eq!(input_bytes, output_bytes);
     debug!("Waiting for server task to finish");
-    server_task.await.unwrap();
+    server_task.join().await.unwrap();
 }
 
-#[tokio::test]
-async fn test_several_channels() {
+#[test]
+fn test_early_eof_detected() {
+    crate::loom::exec_test!(async {
+        test_early_eof_detected_inner().await;
+    })
+}
+
+async fn test_several_channels_inner() {
     let (client, server) = crate::ws::mock::get_pair().await;
 
     let client_mux = Multiplexor::new(client, Role::Client, None, None);
     let server_mux = Multiplexor::new(server, Role::Server, None, None);
 
-    let server_task = tokio::spawn(async move {
+    let server_task = loom::spawn(async move {
         let mut conn1 = server_mux.server_new_stream_channel().await.unwrap();
         info!("server conn1 = {:?}", conn1);
         let mut conn2 = server_mux.server_new_stream_channel().await.unwrap();
@@ -181,5 +204,12 @@ async fn test_several_channels() {
     info!("client conn3 wrote");
 
     debug!("Waiting for server task to finish");
-    server_task.await.unwrap();
+    server_task.join().await.unwrap();
+}
+
+#[test]
+fn test_several_channels() {
+    crate::loom::exec_test!(async {
+        test_several_channels_inner().await;
+    })
 }

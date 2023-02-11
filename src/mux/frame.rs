@@ -1,5 +1,6 @@
 //! Frames.
 //! Each frame strictly fits in a `Message`.
+//! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 //!
 //! Architecture:
 //! The system is similar to a traditional SOCKS5 proxy, but the protocol

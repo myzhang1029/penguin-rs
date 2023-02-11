@@ -4,13 +4,11 @@
 use super::frame::StreamFrame;
 use super::locked_sink::LockedWebSocket;
 use crate::config;
+use crate::loom::{Arc, AtomicBool, AtomicU64, AtomicWaker, Ordering};
 use crate::ws::WebSocketError;
 use bytes::Bytes;
-use futures_util::task::AtomicWaker;
 use std::io;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;

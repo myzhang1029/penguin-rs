@@ -312,7 +312,7 @@ async fn on_connected(
             Ok(dgram_frame) = mux.get_datagram() => {
                 let client_id = dgram_frame.sid;
                 let data = dgram_frame.data;
-                if client_id == 0 {
+                if client_id == u32::SPECIAL {
                     // Used for stdio
                     if let Err(e) = tokio::io::stdout().write_all(&data).await {
                         error!("Failed to write to stdout: {e}");

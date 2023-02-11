@@ -27,13 +27,10 @@ pub async fn handle_websocket(ws_stream: WebSocket) {
         tokio::select! {
             // Check if any of the jobs have finished
             Some(result) = jobs.join_next() => {
-                match result {
-                    Ok(Ok(())) => {}
-                    Ok(Err(err)) => {
-                        warn!("Forwarder finished with error: {err}");
-                    }
+                match result.expect("Panic in a forwarder (this is a bug)") {
+                    Ok(()) => {}
                     Err(err) => {
-                        assert!(!err.is_panic(), "Panic in a forwarder: {err}");
+                        warn!("Forwarder finished with error: {err}");
                     }
                 }
             }

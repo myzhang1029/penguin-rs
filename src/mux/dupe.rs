@@ -23,9 +23,9 @@ impl_dupe_as_clone! {
     bytes::Bytes
 }
 
-impl<T> Dupe for std::sync::Arc<T> {
+impl<T> Dupe for crate::loom::Arc<T> {
     fn dupe(&self) -> Self {
-        std::sync::Arc::clone(self)
+        crate::loom::Arc::clone(self)
     }
 }
 

@@ -57,12 +57,12 @@ pub(crate) mod mock {
     #![allow(unused_imports)]
     #![allow(dead_code)]
     use super::*;
+    use parking_lot::Mutex;
     use std::collections::VecDeque;
     use std::pin::Pin;
+    use std::sync::Arc;
     use std::task::{Context, Poll};
     use tokio::io::DuplexStream;
-    use parking_lot::Mutex;
-    use std::sync::Arc;
 
     /// A mock WebSocket stream.
     #[derive(Debug)]
@@ -125,8 +125,28 @@ pub(crate) mod mock {
             false
         }
     }
-    // If we are not using `loom`, we create a pair of mock WebSocket streams
+
+    // If we are using `loom`, we create a pair of mock WebSocket streams.
+    #[cfg(loom)]
+    pub(crate) async fn get_pair() -> (MockWebSocket, MockWebSocket) {
+        let client_recv_queue = Arc::new(Mutex::new(VecDeque::new()));
+        let server_recv_queue = Arc::new(Mutex::new(VecDeque::new()));
+        let client = MockWebSocket {
+            other_end_recv_queue: server_recv_queue.clone(),
+            recv_queue: client_recv_queue.clone(),
+            role: Role::Client,
+        };
+        let server = MockWebSocket {
+            other_end_recv_queue: client_recv_queue.clone(),
+            recv_queue: server_recv_queue.clone(),
+            role: Role::Server,
+        };
+        (client, server)
+    }
+
+    // If we are not using `loom`, we create a pair of real WebSocket streams
     // from a `tokio` `DuplexStream`.
+    #[cfg(not(loom))]
     pub(crate) async fn get_pair() -> (
         tokio_tungstenite::WebSocketStream<DuplexStream>,
         tokio_tungstenite::WebSocketStream<DuplexStream>,

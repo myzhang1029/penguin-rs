@@ -7,12 +7,10 @@ use super::frame::{DatagramFrame, Frame, StreamFlag, StreamFrame};
 use super::locked_sink::LockedWebSocket;
 use super::stream::MuxStream;
 use super::{Error, IntKey, Result, Role};
+use crate::loom::{Arc, AtomicBool, AtomicU64, AtomicWaker, Ordering};
 use crate::ws::{Message, WebSocketStream};
 use bytes::{Buf, Bytes};
-use futures_util::task::AtomicWaker;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::MissedTickBehavior;
@@ -292,6 +290,7 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
                 if self.role == Role::Client {
                     return Err(Error::ClientReceivedSyn);
                 }
+                assert_eq!(our_port, u16::SPECIAL);
                 // Decode Syn handshake
                 let peer_rwnd = data.get_u64();
                 let dest_port = data.get_u16();

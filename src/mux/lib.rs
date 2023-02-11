@@ -12,11 +12,13 @@ pub mod dupe;
 mod frame;
 mod inner;
 mod locked_sink;
+mod loom;
 mod stream;
 #[cfg(test)]
 mod test;
 pub mod ws;
 
+use crate::loom::Arc;
 use crate::ws::{Message, WebSocketStream};
 use bytes::Bytes;
 use dupe::Dupe;
@@ -25,7 +27,6 @@ use rand::distributions::uniform::SampleUniform;
 use rand::Rng;
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::sync::Arc;
 use thiserror::Error;
 use tokio::{
     sync::{mpsc, RwLock},
@@ -140,7 +141,7 @@ impl<S: WebSocketStream> Multiplexor<S> {
         if let Some(task_joinset) = task_joinset {
             task_joinset.spawn(task_future);
         } else {
-            tokio::spawn(async move {
+            loom::spawn(async move {
                 if let Err(e) = task_future.await {
                     error!("Multiplexor task exited with error: {}", e);
                 }
@@ -266,6 +267,8 @@ impl<S> Drop for Multiplexor<S> {
 
 /// Randomly generate a new number
 pub trait IntKey: Eq + Hash + Copy + SampleUniform + PartialOrd {
+    /// The key for special use
+    const SPECIAL: Self;
     /// The minimum value of the key
     const MIN: Self;
     /// The maximum value of the key
@@ -288,7 +291,7 @@ macro_rules! impl_int_key {
     ($($t:ty),*) => {
         $(
             impl IntKey for $t {
-                // 0 is for special use
+                const SPECIAL : Self = 0;
                 const MIN : Self = 1;
                 const MAX : Self = Self::MAX;
             }

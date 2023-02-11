@@ -2,11 +2,10 @@
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 #![deny(missing_docs)]
 
+use crate::loom::{Arc, Mutex};
 use crate::ws::{Message, Result, WebSocketError, WebSocketStream};
 use futures_util::{SinkExt, StreamExt};
-use parking_lot::Mutex;
 use std::future::poll_fn;
-use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 use tracing::trace;
 
