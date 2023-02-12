@@ -57,12 +57,12 @@ pub(crate) mod mock {
     #![allow(unused_imports)]
     #![allow(dead_code)]
     use super::*;
+    use parking_lot::Mutex;
     use std::collections::VecDeque;
     use std::pin::Pin;
+    use std::sync::Arc;
     use std::task::{Context, Poll};
     use tokio::io::DuplexStream;
-    use parking_lot::Mutex;
-    use std::sync::Arc;
 
     /// A mock WebSocket stream.
     #[derive(Debug)]

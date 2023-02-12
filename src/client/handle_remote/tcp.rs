@@ -36,9 +36,10 @@ pub(super) async fn request_tcp_channel(
 #[tracing::instrument(level = "trace")]
 pub(super) async fn open_tcp_listener(lhost: &str, lport: u16) -> std::io::Result<TcpListener> {
     let listener = TcpListener::bind((lhost, lport)).await?;
+    // `expect`: at this point `listener` should be bound. Otherwise, it's a bug.
     let local_addr = listener
         .local_addr()
-        .map_or(format!("{lhost}:{lport}"), |addr| addr.to_string());
+        .expect("Failed to get local address of TCP listener (this is a bug)");
     info!("Listening on {local_addr}");
     Ok(listener)
 }
@@ -86,7 +87,7 @@ pub(super) async fn handle_tcp(
 
 /// Handle a TCP Stdio->Inet remote.
 #[tracing::instrument(skip(handler_resources))]
-pub async fn handle_tcp_stdio(
+pub(super) async fn handle_tcp_stdio(
     rhost: &'static str,
     rport: u16,
     handler_resources: &HandlerResources,
@@ -123,9 +124,8 @@ pub async fn handle_tcp_stdio(
 
 #[cfg(test)]
 mod test {
-    use tokio::io::AsyncWriteExt;
-
     use super::*;
+    use tokio::io::AsyncWriteExt;
 
     #[tokio::test]
     async fn test_open_tcp_listener() {

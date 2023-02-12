@@ -26,9 +26,10 @@ pub(super) async fn handle_udp(
         .await
         .map_err(FatalError::ClientIo)?;
     let socket = Arc::new(socket);
+    // `expect`: at this point `listener` should be bound. Otherwise, it's a bug.
     let local_addr = socket
         .local_addr()
-        .map_or(format!("{lhost}:{lport}"), |addr| addr.to_string());
+        .expect("Failed to get local address of UDP socket (this is a bug)");
     info!("Bound on {local_addr}");
     loop {
         let mut buf = vec![0; config::MAX_UDP_PACKET_SIZE];
@@ -85,5 +86,46 @@ pub(super) async fn handle_udp_stdio(
             .send(frame)
             .await
             .map_err(|_| FatalError::SendDatagram)?;
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::client::ClientIdMaps;
+    use tokio::sync::RwLock;
+
+    #[tokio::test]
+    async fn test_handle_udp() {
+        let (datagram_tx, mut datagram_rx) = tokio::sync::mpsc::channel(1);
+        let (stream_command_tx, _) = tokio::sync::mpsc::channel(1);
+        let udp_client_map = Arc::new(RwLock::new(ClientIdMaps::new()));
+        let handler_resources = HandlerResources {
+            datagram_tx,
+            stream_command_tx,
+            udp_client_map: udp_client_map.dupe(),
+        };
+        static LHOST: &'static str = "127.0.0.1";
+        static RHOST: &'static str = "127.0.0.1";
+        let forwarding_task =
+            tokio::spawn(
+                async move { handle_udp(LHOST, 14196, RHOST, 255, &handler_resources).await },
+            );
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let local_addr = socket.local_addr().unwrap();
+        socket.connect("127.0.0.1:14196").await.unwrap();
+        socket.send(b"hello").await.unwrap();
+        let frame = datagram_rx.recv().await.unwrap();
+        assert_eq!(frame.host, Bytes::from_static(RHOST.as_bytes()));
+        assert_eq!(frame.port, 255);
+        assert_eq!(frame.data, Bytes::from("hello"));
+        let client_id = *udp_client_map
+            .read()
+            .await
+            .client_addr_map
+            .get(&(local_addr, ([127, 0, 0, 1], 14196).into()))
+            .unwrap();
+        assert_eq!(frame.sid, client_id);
+        forwarding_task.abort();
     }
 }

@@ -42,7 +42,11 @@ async fn bind_and_send(target: (&str, u16), data: &[u8]) -> Result<(UdpSocket, S
                 continue;
             }
         };
-        debug!("bound to {}", socket.local_addr()?);
+        // `expect`: at this point `listener` should be bound. Otherwise, it's a bug.
+        let local_addr = socket
+            .local_addr()
+            .expect("Failed to get local address of UDP socket (this is a bug)");
+        debug!("bound to {local_addr}");
         if let Err(e) = socket.connect(target).await {
             last_err = Some(e);
             continue;
