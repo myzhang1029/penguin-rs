@@ -1,6 +1,7 @@
 //! Server-side forwarding implementation.
 //! Pipes TCP streams or forwards UDP Datagrams to and from another host.
-//! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
+//
+// SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use crate::{config, Dupe};
 use bytes::Bytes;

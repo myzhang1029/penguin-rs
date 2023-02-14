@@ -1,5 +1,6 @@
 //! SOCKS4/a server helpers.
-//! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
+//
+// SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use std::net::Ipv4Addr;
 

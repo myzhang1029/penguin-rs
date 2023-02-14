@@ -1,10 +1,11 @@
 //! Abstraction over Tungstenite's WebSocket implementation.
-//! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
+//
+// SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use futures_util::{Sink, Stream};
 pub use tokio_tungstenite::tungstenite::{protocol::Role, Error, Message, Result};
 
-/// A generic `WebSocket` stream
+/// A generic WebSocket stream
 pub trait WebSocketStream:
     Stream<Item = std::result::Result<Message, Error>>
     + Sink<Message, Error = Error>

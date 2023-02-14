@@ -1,25 +1,26 @@
 //! Run a remote connection.
-//! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 //!
 //! These are persistent tasks that run for the lifetime of the client.
 //! They should try to handle connections as long as the client is alive,
 //! and if they fail, the entire client will fail.
 //! Whenever a new connection is made, it tries to create a new channel
 //! from the main loop and then spawns a new task to handle the connection.
+//
+// SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 pub(super) mod socks;
 mod tcp;
 mod udp;
 
+use self::socks::{handle_socks, handle_socks_stdio};
+use self::tcp::{handle_tcp, handle_tcp_stdio};
+use self::udp::{handle_udp, handle_udp_stdio};
 use crate::client::HandlerResources;
 use crate::parse_remote::{LocalSpec, RemoteSpec};
 use crate::parse_remote::{Protocol, Remote};
-use socks::{handle_socks, handle_socks_stdio};
-use tcp::{handle_tcp, handle_tcp_stdio};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::{debug, error};
-use udp::{handle_udp, handle_udp_stdio};
 
 /// Handler errors
 /// These are all fatal errors that will cause the client to exit.

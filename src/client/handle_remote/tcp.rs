@@ -1,5 +1,6 @@
 //! Run a remote TCP connection.
-//! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
+//
+// SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::super::MaybeRetryableError;
 use super::FatalError;

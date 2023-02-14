@@ -1,5 +1,6 @@
 //! `AsyncRead + AsyncWrite` object returned by `*_new_stream_channel`.
-//! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
+//
+// SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::frame::StreamFrame;
 use super::locked_sink::LockedWebSocket;
@@ -63,8 +64,10 @@ impl<S> std::fmt::Debug for MuxStream<S> {
 }
 
 impl<S> Drop for MuxStream<S> {
-    /// Dropping the port should act like `close()` has been called.
-    /// Since `drop` is not async, this is handled by the mux task.
+    // Dropping the port should act like `close()` has been called.
+    // Since `drop` is not async, this is handled by the mux task.
+    /// Close the stream by instructing the mux task to send a `Rst` frame if
+    /// the stream is still open. The associated port will be freed for reuse.
     fn drop(&mut self) {
         // Notify the task that this port is no longer in use
         self.dropped_ports_tx
@@ -139,6 +142,10 @@ impl<S> AsyncWrite for MuxStream<S>
 where
     S: crate::ws::WebSocketStream,
 {
+    /// Write data to the stream. Each invocation of this method will send a
+    /// separate frame in a new [`Message`](crate::ws::Message), so it may be
+    /// beneficial to wrap it in a [`BufWriter`](tokio::io::BufWriter) where
+    /// appropriate.
     #[tracing::instrument(skip(cx, buf), level = "trace")]
     #[inline]
     fn poll_write(
@@ -199,7 +206,8 @@ where
     }
 
     /// Close the write end of the stream (`shutdown(SHUT_WR)`).
-    /// This function will send a `Fin` frame to the remote peer.
+    /// This function will send a [`Fin`](crate::frame::StreamFlag::Fin) frame
+    /// to the remote peer.
     #[tracing::instrument(skip(cx), level = "trace")]
     #[inline]
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {

@@ -1,5 +1,6 @@
 //! A wrapper around `Sink + Stream` that can be cloned and shared between tasks.
-//! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
+//
+// SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 #![deny(missing_docs)]
 
 use crate::ws::{Message, Result, WebSocketError, WebSocketStream};
@@ -47,7 +48,10 @@ impl<S: WebSocketStream> LockedWebSocket<S> {
     /// This function is cancel safe. If the task is cancelled, it is
     /// guaranteed that the message will not be sent.
     #[inline]
-    pub async fn send_with(&self, msg_fn: impl Fn() -> Message) -> Result<()> {
+    pub async fn send_with<F>(&self, msg_fn: F) -> Result<()>
+    where
+        F: Fn() -> Message + Send + Sync,
+    {
         poll_fn(|cx| self.poll_send_with(cx, |_cx| Poll::Ready(msg_fn()))).await
     }
 

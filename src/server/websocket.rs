@@ -1,5 +1,6 @@
 //! Penguin server `WebSocket` listener.
-//! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
+//
+// SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::forwarder::tcp_forwarder_on_channel;
 use super::forwarder::udp_forward_to;

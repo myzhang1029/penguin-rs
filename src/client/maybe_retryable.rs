@@ -1,5 +1,6 @@
 //! Identify whether an error is fatal or retryable.
-//! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
+//
+// SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 pub(super) trait MaybeRetryableError: std::error::Error {
     /// Returns true if we should retry the connection.

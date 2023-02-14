@@ -1,4 +1,6 @@
 //! Default configuration parameters for the server and client.
+//
+// SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use tokio::time;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;

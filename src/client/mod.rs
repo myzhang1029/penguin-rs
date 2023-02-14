@@ -1,16 +1,17 @@
 //! Penguin client.
-//! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
+//
+// SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 mod handle_remote;
 mod maybe_retryable;
 pub mod ws_connect;
 
+use self::handle_remote::handle_remote;
+use self::maybe_retryable::MaybeRetryableError;
 use crate::arg::ClientArgs;
 use crate::config;
 use crate::Dupe;
 use bytes::Bytes;
-use handle_remote::handle_remote;
-use maybe_retryable::MaybeRetryableError;
 use penguin_mux::{DatagramFrame, IntKey, Multiplexor, Role};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -69,8 +70,6 @@ struct HandlerResources {
 }
 
 impl Dupe for HandlerResources {
-    // Explicitly providing a `dupe` implementation to prove that everything
-    // can be cheaply cloned.
     fn dupe(&self) -> Self {
         Self {
             stream_command_tx: self.stream_command_tx.dupe(),

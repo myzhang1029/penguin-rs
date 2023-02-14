@@ -1,4 +1,6 @@
 //! Default configuration parameters of the multiplexor.
+//
+// SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 /// Number of datagram frames to buffer in the channels on the receiving end.
 /// If the buffer is not read fast enough, excess datagrams will be dropped.

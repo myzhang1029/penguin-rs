@@ -1,4 +1,8 @@
+//! Marker trait for types that can be cheaply cloned.
+//!
 //! Inspired by facebook/gazebo's `Dupe`.
+//
+// SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 /// Marker trait for types that can be cheaply cloned.
 pub trait Dupe {
@@ -25,7 +29,7 @@ impl_dupe_as_clone! {
 
 impl<T> Dupe for std::sync::Arc<T> {
     fn dupe(&self) -> Self {
-        std::sync::Arc::clone(self)
+        Self::clone(self)
     }
 }
 

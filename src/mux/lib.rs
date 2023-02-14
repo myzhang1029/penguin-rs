@@ -1,9 +1,10 @@
-//! Client- and server-side connection multiplexing and processing
+//! Multiplexing streamed data and datagrams over a single WebSocket
+//! connection.
 //!
-//! This is not a general-purpose `WebSocket` multiplexing library.
+//! This is not a general-purpose WebSocket multiplexing library.
 //! It is tailored to the needs of `penguin`.
-//!
-//! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
+//
+// SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 #![deny(missing_docs, missing_debug_implementations)]
 #![allow(clippy::module_name_repetitions)]
 
@@ -17,10 +18,10 @@ mod stream;
 mod test;
 pub mod ws;
 
+use crate::dupe::Dupe;
+use crate::inner::MultiplexorInner;
 use crate::ws::{Message, WebSocketStream};
 use bytes::Bytes;
-use dupe::Dupe;
-use inner::MultiplexorInner;
 use rand::distributions::uniform::SampleUniform;
 use rand::Rng;
 use std::collections::HashMap;
@@ -33,85 +34,85 @@ use tokio::{
 };
 use tracing::{error, trace, warn};
 
+pub use crate::frame::{DatagramFrame, Frame, StreamFlag, StreamFrame};
+pub use crate::stream::MuxStream;
 pub use crate::ws::Role;
-pub use frame::{DatagramFrame, Frame, StreamFlag, StreamFrame};
-pub use stream::MuxStream;
 
 /// Multiplexor error
 #[derive(Debug, Error)]
 pub enum Error {
     /// Requester exited before receiving the stream
-    /// (i.e. the `Receiver` was dropped before the task could send the stream)
+    /// (i.e. the `Receiver` was dropped before the task could send the stream).
     #[error("Requester exited before receiving the stream")]
     SendStreamToClient,
-    /// When
+    /// The multiplexor is closed.
     #[error("Mux is already closed")]
     Closed,
 
     // These are WebSocket errors separated by their origin
-    /// WebSocket error when polling the next message
+    /// WebSocket error when polling the next message.
     #[error("Failed to receive message: {0}")]
     Next(crate::ws::Error),
-    /// WebSocket error when flushing messages
+    /// WebSocket error when flushing messages.
     #[error("Failed to flush messages: {0}")]
     Flush(crate::ws::Error),
-    /// WebSocket error when sending a datagram
+    /// WebSocket error when sending a datagram.
     #[error("Failed to send datagram: {0}")]
     SendDatagram(crate::ws::Error),
-    /// WebSocket error when sending a stream frame
+    /// WebSocket error when sending a stream frame.
     #[error("Failed to send stream frame: {0}")]
     SendStreamFrame(crate::ws::Error),
-    /// WebSocket error when sending a ping
+    /// WebSocket error when sending a ping.
     #[error("Failed to send ping: {0}")]
     SendPing(crate::ws::Error),
 
     // These are the ones that shouldn't normally happen
-    /// Datagram target host longer than 255 octets
+    /// Datagram target host longer than 255 octets.
     #[error("Datagram target host longer than 255 octets")]
     DatagramHostTooLong(#[from] <Vec<u8> as TryFrom<DatagramFrame>>::Error),
-    /// Received an invalid frame
+    /// Received an invalid frame.
     #[error("Invalid frame: {0}")]
     InvalidFrame(#[from] frame::Error),
-    /// The peer sent a `Text` message
+    /// The peer sent a `Text` message.
     /// "The client and server MUST NOT use other WebSocket data frame types"
     #[error("Received `Text` message")]
     TextMessage,
-    /// A `SynAck` frame was received by the server:
+    /// A `SynAck` frame was received by the server.
     /// "clients MUST NOT send `SynAck` frames"
     #[error("Server received `SynAck` frame")]
     ServerReceivedSynAck,
-    /// A `Syn` frame was received by the client
+    /// A `Syn` frame was received by the client.
     /// "Servers MUST NOT send `Syn` frames"
     #[error("Client received `Syn` frame")]
     ClientReceivedSyn,
 }
 
-/// A variant of `std::result::Result` with `Error` as the error type
+/// A variant of [`std::result::Result`] with [`enum@Error`] as the error type.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// A multiplexor over a `WebSocket` connection
+/// A multiplexor over a `WebSocket` connection.
 #[derive(Debug)]
 pub struct Multiplexor<S> {
     inner: MultiplexorInner<S>,
-    /// Channel of received datagram frames for processing
+    /// Channel of received datagram frames for processing.
     datagram_rx: RwLock<mpsc::Receiver<DatagramFrame>>,
-    /// Channel of established streams for processing
+    /// Channel of established streams for processing.
     stream_rx: RwLock<mpsc::Receiver<MuxStream<S>>>,
 }
 
 impl<S: WebSocketStream> Multiplexor<S> {
-    /// Create a new `Multiplexor`
+    /// Create a new `Multiplexor`.
     ///
     /// # Arguments
     ///
-    /// - `ws`: The `WebSocket` connection to multiplex over.
+    /// * `ws`: The `WebSocket` connection to multiplex over.
     ///
-    /// - `role`: The role of this side of the connection.
+    /// * `role`: The role of this side of the connection.
     ///   (does not have to match the `WebSocket` role)
     ///
-    /// - `keepalive_interval`: The interval at which to send `Ping` frames.
+    /// * `keepalive_interval`: The interval at which to send `Ping` frames.
     ///
-    /// - `task_joinset`: A `JoinSet` to spawn the multiplexor task into so
+    /// * `task_joinset`: A `JoinSet` to spawn the multiplexor task into so
     ///   that the caller can notice if the task exits. If it is `None`, the
     ///   task will be spawned by `tokio::spawn` and errors will be logged.
     #[tracing::instrument(skip_all, level = "debug")]
@@ -155,7 +156,14 @@ impl<S: WebSocketStream> Multiplexor<S> {
         }
     }
 
-    /// Request a channel for `host` and `port`
+    /// Request a channel for `host` and `port`.
+    ///
+    /// # Arguments
+    /// * `host`: The host to forward to. While the current implementation
+    ///   supports a domain of arbitrary length, Section 3.2.2 of
+    ///   [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986#section-3.2.2)
+    ///   specifies that the host component of a URI is limited to 255 octets.
+    /// * `port`: The port to forward to.
     ///
     /// # Cancel safety
     /// This function is not cancel safe. If the task is cancelled while waiting
@@ -192,10 +200,10 @@ impl<S: WebSocketStream> Multiplexor<S> {
         Ok(stream)
     }
 
-    /// Get the next available stream channel
+    /// Get the next available stream channel.
     ///
     /// # Errors
-    /// Returns `Error::Closed` if the connection is closed
+    /// Returns [`Error::Closed`] if the connection is closed.
     ///
     /// # Cancel Safety
     /// This function is cancel safe. If the task is cancelled while waiting
@@ -212,10 +220,10 @@ impl<S: WebSocketStream> Multiplexor<S> {
             .ok_or(Error::Closed)
     }
 
-    /// Get the next available datagram
+    /// Get the next available datagram.
     ///
     /// # Errors
-    /// Returns `Error::Closed` if the connection is closed
+    /// Returns [`Error::Closed`] if the connection is closed.
     ///
     /// # Cancel Safety
     /// This function is cancel safe. If the task is cancelled while waiting
@@ -234,9 +242,9 @@ impl<S: WebSocketStream> Multiplexor<S> {
     /// Send a datagram
     ///
     /// # Errors
-    /// - Returns `Error::DatagramHostTooLong` if the destination host is
+    /// * Returns `Error::DatagramHostTooLong` if the destination host is
     /// longer than 255 octets.
-    /// - Returns `Error::SendDatagram` if the datagram could not be sent
+    /// * Returns `Error::SendDatagram` if the datagram could not be sent
     /// due to a `crate::ws::Error`.
     ///
     /// # Cancel Safety

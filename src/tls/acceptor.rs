@@ -1,5 +1,6 @@
-//! Based on `hyper-rustls` example
-//!
+//! Based on `hyper-rustls` example.
+//
+// SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::{TlsIdentity, TlsIdentityInner};
 use futures_util::Future;

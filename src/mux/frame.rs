@@ -3,10 +3,10 @@
 //!
 //! Architecture:
 //! The system is similar to a traditional SOCKS5 proxy, but the protocol
-//! allows for UDP to be transmitted over the same `WebSocket` connection.
-//! It is essentially a SOCKS5 forwarder over a `WebSocket`.
+//! allows for UDP to be transmitted over the same WebSocket connection.
+//! It is essentially a SOCKS5 forwarder over a WebSocket link.
 //!
-//! All `Message`s carry a frame:
+//! All `Message`s carry a complete frame:
 //! - 1 byte: type (1 for TCP, 3 for UDP)
 //! - variable: dependent on the type (see `StreamFrame` and `DatagramFrame`).
 //!
@@ -49,6 +49,8 @@
 //! Source ID, and the frame also carries its intended target.
 //! When the server receives datagrams from that target, it will
 //! send them back to the client with the same Source ID.
+//
+// SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 #![allow(clippy::similar_names)]
 
 use crate::ws::Message;
@@ -57,7 +59,7 @@ use std::{fmt::Debug, num::TryFromIntError};
 use thiserror::Error;
 use tracing::warn;
 
-/// Conversion errors
+/// Errors that can occur when parsing a frame.
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Invalid frame type: {0}")]
@@ -67,24 +69,25 @@ pub enum Error {
 }
 
 /// Stream frame types
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum StreamFlag {
-    /// New connection
+    /// Initiating connection by the client.
     Syn = 0,
-    /// Confirm connection
+    /// Confirming connection by the server.
     SynAck = 1,
-    /// Confirm data
+    /// Confirming data reception.
     Ack = 2,
-    /// When `dport` is not open
+    /// Aborting connection when `dport` does not exist.
     Rst = 3,
-    /// Close connection
+    /// Closing connection.
     Fin = 4,
-    /// Data
+    /// Sending data.
     Psh = 5,
 }
 
-/// Stream frame
+/// Stream frame.
+///
 /// See PROTOCOL.md for details.
 #[derive(Clone, PartialEq, Eq)]
 #[repr(C)]
@@ -111,7 +114,13 @@ impl Debug for StreamFrame {
 }
 
 impl StreamFrame {
-    /// Create a new `Syn` frame.
+    /// Create a new [`StreamFlag::Syn`] frame.
+    ///
+    /// # Arguments
+    /// * `dest_host`: The destination host to forward to.
+    /// * `dest_port`: The destination port to forward to.
+    /// * `sport`: The source port of this stream.
+    /// * `rwnd`: Number of frames buffered in the client receive buffer.
     #[must_use]
     #[inline]
     pub fn new_syn(dest_host: &[u8], dest_port: u16, sport: u16, rwnd: u64) -> Self {
@@ -128,7 +137,13 @@ impl StreamFrame {
             data: Bytes::from(syn_payload),
         }
     }
-    /// Create a new `SynAck` frame.
+    /// Create a new [`StreamFlag::SynAck`] frame.
+    ///
+    /// # Arguments
+    /// * `sport`: The source port of this stream.
+    /// * `dport`: The destination port of this stream (i.e. the source port
+    ///   of the `Syn` frame).
+    /// * `rwnd`: Number of frames buffered in the server receive buffer.
     #[must_use]
     #[inline]
     pub fn new_synack(sport: u16, dport: u16, rwnd: u64) -> Self {
@@ -139,7 +154,13 @@ impl StreamFrame {
             data: Bytes::copy_from_slice(&rwnd.to_be_bytes()),
         }
     }
-    /// Create a new `Ack` frame.
+    /// Create a new [`StreamFlag::Ack`] frame.
+    ///
+    /// # Arguments
+    /// * `sport`: The source port of this stream.
+    /// * `dport`: The destination port of this stream.
+    /// * `psh_recvd_since`: The number of `Psh` frames received since the
+    ///   previous `Ack` frame.
     #[must_use]
     #[inline]
     pub fn new_ack(sport: u16, dport: u16, psh_recvd_since: u64) -> Self {
@@ -150,7 +171,11 @@ impl StreamFrame {
             data: Bytes::copy_from_slice(&psh_recvd_since.to_be_bytes()),
         }
     }
-    /// Create a new `Rst` frame.
+    /// Create a new [`StreamFlag::Rst`] frame.
+    ///
+    /// # Arguments
+    /// * `sport`: The destination port of the offending frame.
+    /// * `dport`: The source port of the offending frame.
     #[must_use]
     #[inline]
     pub const fn new_rst(sport: u16, dport: u16) -> Self {
@@ -161,7 +186,11 @@ impl StreamFrame {
             data: Bytes::new(),
         }
     }
-    /// Create a new `Fin` frame.
+    /// Create a new [`StreamFlag::Fin`] frame.
+    ///
+    /// # Arguments
+    /// * `sport`: The source port of this stream.
+    /// * `dport`: The destination port of this stream.
     #[must_use]
     #[inline]
     pub const fn new_fin(sport: u16, dport: u16) -> Self {
@@ -172,7 +201,12 @@ impl StreamFrame {
             data: Bytes::new(),
         }
     }
-    /// Create a new `Psh` frame.
+    /// Create a new [`StreamFlag::Psh`] frame.
+    ///
+    /// # Arguments
+    /// * `sport`: The source port of this stream.
+    /// * `dport`: The destination port of this stream.
+    /// * `data`: The data to send.
     #[must_use]
     #[inline]
     pub const fn new_psh(sport: u16, dport: u16, data: Bytes) -> Self {
@@ -186,6 +220,7 @@ impl StreamFrame {
 }
 
 /// Datagram frame.
+///
 /// See PROTOCOL.md for details.
 #[derive(Clone, PartialEq, Eq)]
 #[repr(C)]
@@ -215,19 +250,20 @@ impl Debug for DatagramFrame {
     }
 }
 
-/// Frame
+/// Frame.
+///
 /// See PROTOCOL.md for details.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[repr(C)]
 pub enum Frame {
-    /// Stream frame, encoded with Type=0x01
+    /// Stream frame, encoded with `Type=0x01`
     Stream(StreamFrame),
-    /// Datagram frame, encoded with Type=0x03
+    /// Datagram frame, encoded with `Type=0x03`
     Datagram(DatagramFrame),
 }
 
 impl From<StreamFrame> for Vec<u8> {
-    /// Convert a `StreamFrame` to bytes.
+    /// Convert a [`StreamFrame`] to bytes.
     #[tracing::instrument(level = "trace")]
     #[inline]
     fn from(frame: StreamFrame) -> Self {
@@ -250,8 +286,8 @@ impl From<StreamFrame> for Vec<u8> {
 impl TryFrom<DatagramFrame> for Vec<u8> {
     type Error = TryFromIntError;
 
-    /// Convert a `DatagramFrame` to bytes. Gives an error when
-    /// `DatagramFrame::host` is longer than 255 octets.
+    /// Convert a [`DatagramFrame`] to bytes. Gives an error when
+    /// [`DatagramFrame::host`] is longer than 255 octets.
     #[inline]
     fn try_from(frame: DatagramFrame) -> Result<Self, Self::Error> {
         let size = 1

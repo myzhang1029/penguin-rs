@@ -1,5 +1,6 @@
 //! Client side of the multiplexor
-//! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
+//
+// SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::config;
 use super::dupe::Dupe;
@@ -69,8 +70,6 @@ impl<S> std::fmt::Debug for MultiplexorInner<S> {
 }
 
 impl<S> Dupe for MultiplexorInner<S> {
-    // Explicitly providing a `dupe` implementation to prove that everything
-    // can be cheaply cloned.
     #[inline]
     fn dupe(&self) -> Self {
         Self {

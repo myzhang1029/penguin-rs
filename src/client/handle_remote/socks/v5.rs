@@ -1,5 +1,6 @@
 //! SOCKS5 server helpers (RFC 1928).
-//! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
+//
+// SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use std::net::SocketAddr;
 

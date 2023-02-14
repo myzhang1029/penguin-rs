@@ -1,17 +1,18 @@
 //! Penguin server.
-//! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
+//
+// SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 mod forwarder;
 mod service;
 mod websocket;
 
+use self::service::{MakeStateService, State};
 use crate::arg::ServerArgs;
 use crate::tls::{make_tls_identity, reload_tls_identity, TlsAcceptor};
 use crate::Dupe;
 use hyper::server::conn::AddrIncoming;
 use hyper::upgrade::Upgraded;
 use hyper::Server;
-use service::{MakeStateService, State};
 use thiserror::Error;
 use tokio_tungstenite::WebSocketStream;
 use tracing::{error, info, trace};

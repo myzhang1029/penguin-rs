@@ -1,5 +1,6 @@
 //! SOCKS server.
-//! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
+//
+// SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 mod v4;
 mod v5;
