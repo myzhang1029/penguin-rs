@@ -125,7 +125,8 @@ pub(super) async fn tcp_forwarder_on_channel(
     let rport = channel.dest_port;
     trace!("attempting TCP connect to {rhost} port={rport}");
     let mut rstream = TcpStream::connect((rhost, rport)).await?;
-    debug!("TCP forwarding to {:?}", rstream.peer_addr());
+    // Here `rstream` should be connected. Pass the error (unlikely) otherwise
+    debug!("TCP forwarding to {}", rstream.peer_addr()?);
     tokio::io::copy_bidirectional(&mut channel, &mut rstream).await?;
     trace!("TCP forwarding finished");
     Ok(())

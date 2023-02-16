@@ -93,10 +93,7 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
     // It doesn't make sense to return a `Result` here because we can't propagate
     // the error to the user from a spawned task.
     // Instead, the user will notice when `rx` channels return `None`.
-    #[tracing::instrument(
-        skip(datagram_tx, stream_tx, dropped_ports_rx, ack_rx),
-        level = "trace"
-    )]
+    #[tracing::instrument(skip_all, level = "trace")]
     pub async fn task(
         mut self,
         datagram_tx: mpsc::Sender<DatagramFrame>,
@@ -195,7 +192,7 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
 impl<S: WebSocketStream> MultiplexorInner<S> {
     /// Process an incoming message
     /// Returns `Ok(true)` if a `Close` message was received.
-    #[tracing::instrument(skip(msg, datagram_tx, stream_tx), level = "debug")]
+    #[tracing::instrument(skip_all, level = "debug")]
     #[inline]
     async fn process_message(
         &self,
@@ -216,7 +213,7 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
                         if let Err(e) = datagram_tx.try_send(datagram_frame) {
                             match e {
                                 TrySendError::Full(_) => {
-                                    warn!("dropped datagram frame: {:?}", e);
+                                    warn!("dropped datagram frame: {e}");
                                 }
                                 TrySendError::Closed(_) => {
                                     return Err(Error::Closed);
@@ -266,7 +263,7 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
     ///   - Send the data to the sender.
     ///   - If the receiver is closed or the port does not exist, send back a
     ///     `Rst` frame.
-    #[tracing::instrument(skip(stream_frame, stream_tx), level = "trace")]
+    #[tracing::instrument(skip_all, level = "trace")]
     #[inline]
     async fn process_stream_frame(
         &self,
@@ -428,7 +425,7 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
 
     /// Close a port. That is, send `Rst` if `Fin` is not sent,
     /// and remove it from the map.
-    #[tracing::instrument(level = "trace")]
+    #[tracing::instrument(skip_all, level = "debug")]
     #[inline]
     pub async fn close_port(&self, our_port: u16, their_port: u16, inhibit_rst: bool) {
         // Free the port for reuse
@@ -455,11 +452,11 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
             // Waking it here and the user should receive a `BrokenPipe` error.
             stream_data.writer_waker.wake();
         }
-        debug!("freed port {}", our_port);
+        debug!("freed connection {our_port} -> {their_port}");
     }
 
     /// Should really only be called when the mux is dropped
-    #[tracing::instrument(level = "trace")]
+    #[tracing::instrument(skip_all, level = "trace")]
     async fn shutdown(&mut self) {
         debug!("closing all connections");
         {

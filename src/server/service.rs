@@ -167,7 +167,7 @@ impl State<'static> {
             return self.backend_or_404_handler(req).await;
         }
         let Some(sec_websocket_key) = sec_websocket_key else {
-        warn!("Invalid WebSocket request: no sec-websocket-key header");
+        warn!("Invalid WebSocket request: no `sec-websocket-key` header");
         return self.backend_or_404_handler(req).await;
     };
         if !header_matches!(connection, UPGRADE)

@@ -239,8 +239,17 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
         let mut current_retry_interval: u64 = 200;
         // Place to park one failed stream request so that it can be retried
         let mut failed_stream_request: Option<StreamCommand> = None;
+        // Keep alive interval
+        let keepalive = if args.keepalive == 0 {
+            None
+        } else {
+            Some(Duration::from_secs(args.keepalive))
+        };
+        // Timeout for channel requests
+        let channel_timeout = Duration::from_secs(args.channel_timeout);
         // Retry loop
         loop {
+            // TODO: Timeout for `ws_connect::handshake`.
             match ws_connect::handshake(args).await {
                 Err(e) => {
                     if !e.retryable() {
@@ -258,11 +267,11 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
                         &mut failed_stream_request,
                         &mut datagram_rx,
                         udp_client_map.dupe(),
-                        args.keepalive,
-                        time::Duration::from_secs(args.channel_timeout),
+                        keepalive,
+                        channel_timeout,
                     )
                     .await;
-                    warn!("Disconnected from server");
+                    warn!("Disconnected from server: {error}");
                     if !error.retryable() {
                         return Err(error);
                     }
@@ -279,7 +288,7 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
                 warn!("Max retry count reached, giving up");
                 return Err(Error::MaxRetryCountReached);
             }
-            time::sleep(time::Duration::from_millis(current_retry_interval)).await;
+            time::sleep(Duration::from_millis(current_retry_interval)).await;
             if current_retry_interval < args.max_retry_interval {
                 current_retry_interval *= 2;
             }
@@ -288,7 +297,7 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
     tokio::select! {
         biased;
         result = check_listeners_future => result,
-        // This future never returns
+        // This future never resolves
         _ = prune_client_id_map_task(handler_resources) => unreachable!("prune_client_id_map_task should never return"),
         result = main_future => result,
     }
@@ -306,19 +315,14 @@ async fn on_connected(
     failed_stream_request: &mut Option<StreamCommand>,
     datagram_rx: &mut mpsc::Receiver<DatagramFrame>,
     udp_client_map: Arc<RwLock<ClientIdMaps>>,
-    keepalive: u64,
+    keepalive: Option<Duration>,
     channel_timeout: Duration,
 ) -> Error {
-    let keepalive_duration = if keepalive == 0 {
-        None
-    } else {
-        Some(time::Duration::from_secs(keepalive))
-    };
     let mut mux_task_joinset = JoinSet::new();
     let mut mux = Multiplexor::new(
         ws_stream,
         Role::Client,
-        keepalive_duration,
+        keepalive,
         Some(&mut mux_task_joinset),
     );
     info!("Connected to server");

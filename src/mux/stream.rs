@@ -172,7 +172,7 @@ where
                 trace!("congestion window: {}", original);
                 if original == 0 {
                     // We have reached the congestion window limit. Wait for an `Ack`
-                    debug!("congestion window limit reached, waiting for an `Ack`");
+                    debug!("waiting for `Ack`");
                     self.writer_waker.register(cx.waker());
                     return Poll::Pending;
                 }

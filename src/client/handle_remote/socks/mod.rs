@@ -18,7 +18,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 
 // Errors that can occur while handling a SOCKS request.
 #[derive(Debug, thiserror::Error)]
@@ -42,8 +42,6 @@ pub enum Error {
     Fatal(#[from] super::FatalError),
 }
 
-#[tracing::instrument(skip(handler_resources), level = "debug")]
-#[inline]
 pub(super) async fn handle_socks(
     lhost: &'static str,
     lport: u16,
@@ -77,6 +75,7 @@ pub(super) async fn handle_socks(
     }
 }
 
+#[inline]
 pub(super) async fn handle_socks_stdio(
     handler_resources: &HandlerResources,
 ) -> Result<(), super::FatalError> {
@@ -95,6 +94,7 @@ pub(super) async fn handle_socks_stdio(
 /// Based on socksv5's example.
 /// We need to be able to request additional channels, so we need `command_tx`
 #[tracing::instrument(skip_all, level = "trace")]
+#[inline]
 pub(super) async fn handle_socks_connection<RW>(
     stream: RW,
     local_addr: &str,
@@ -115,6 +115,7 @@ where
     }
 }
 
+#[inline]
 async fn handle_socks4_connection<RW>(
     mut stream: RW,
     handler_resources: &HandlerResources,
@@ -123,10 +124,7 @@ where
     RW: AsyncBufRead + AsyncWrite + Unpin,
 {
     let (command, rhost, rport) = v4::read_request(&mut stream).await?;
-    debug!(
-        "SOCKSv4 request for {}:{rport}",
-        String::from_utf8_lossy(&rhost)
-    );
+    trace!("SOCKSv4 request rhost={rhost:?} rport={rport}");
     if command == 0x01 {
         // CONNECT
         // This fails only if main has exited, which is a fatal error.
@@ -142,13 +140,14 @@ where
     }
 }
 
+#[inline]
 async fn handle_socks5_connection<RW>(
     mut stream: RW,
     local_addr: &str,
     handler_resources: &HandlerResources,
 ) -> Result<(), Error>
 where
-    RW: AsyncBufRead + AsyncWrite + Unpin,
+    RW: AsyncRead + AsyncWrite + Unpin,
 {
     // Complete the handshake
     let methods = v5::read_auth_methods(&mut stream).await?;
@@ -163,10 +162,7 @@ where
     v5::write_auth_method(&mut stream, 0x00).await?;
     // Read the request
     let (command, rhost, rport) = v5::read_request(&mut stream).await?;
-    debug!(
-        "SOCKSv5 cmd({command}) for {}:{rport}",
-        String::from_utf8_lossy(&rhost)
-    );
+    trace!("SOCKSv5 cmd={command} rhost={rhost:?} rport={rport}");
     match command {
         0x01 => {
             // CONNECT
@@ -190,6 +186,15 @@ where
     }
 }
 
+#[inline]
+#[tracing::instrument(
+    skip_all,
+    fields(
+        host = %String::from_utf8_lossy(&rhost),
+        port = rport,
+        v = if version_is_5 { 5 } else { 4 },
+    ),
+)]
 async fn handle_connect<RW>(
     mut stream: RW,
     rhost: Bytes,
@@ -198,8 +203,9 @@ async fn handle_connect<RW>(
     version_is_5: bool,
 ) -> Result<(), Error>
 where
-    RW: AsyncBufRead + AsyncWrite + Unpin,
+    RW: AsyncRead + AsyncWrite + Unpin,
 {
+    debug!("SOCKS connect");
     // Establish a connection to the remote host
     let mut channel = request_tcp_channel(stream_command_tx_permit, rhost, rport)
         .await
@@ -215,6 +221,14 @@ where
     Ok(())
 }
 
+#[inline]
+#[tracing::instrument(
+    skip_all,
+    fields(
+        host = %String::from_utf8_lossy(&rhost),
+        port = rport,
+    ),
+)]
 async fn handle_associate<RW>(
     mut stream: RW,
     rhost: Bytes,
@@ -223,8 +237,9 @@ async fn handle_associate<RW>(
     handler_resources: &HandlerResources,
 ) -> Result<(), Error>
 where
-    RW: AsyncBufRead + AsyncWrite + Unpin,
+    RW: AsyncRead + AsyncWrite + Unpin,
 {
+    debug!("SOCKS associate");
     let socket = match UdpSocket::bind((local_addr, 0)).await {
         Ok(s) => s,
         Err(e) => {
@@ -281,6 +296,7 @@ async fn udp_relay(
 
 /// Parse a UDP relay request.
 /// Returns (dst, dport, data, src, sport)
+#[inline]
 async fn handle_udp_relay_header(
     socket: &UdpSocket,
 ) -> Result<Option<(Bytes, u16, Bytes, IpAddr, u16)>, Error> {
@@ -326,6 +342,7 @@ async fn handle_udp_relay_header(
 }
 
 /// Send a UDP relay response
+#[inline]
 pub async fn send_udp_relay_response(
     socket: &UdpSocket,
     target: &SocketAddr,

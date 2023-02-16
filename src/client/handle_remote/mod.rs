@@ -50,12 +50,12 @@ pub enum FatalError {
 /// to persist after the connection.
 /// This should be spawned as tasks and they will remain as long as `client`
 /// is alive. Individual connection tasks are spawned as connections appear.
-#[tracing::instrument(skip(handler_resources), level = "debug")]
+#[tracing::instrument(skip_all, fields(remote = %remote), level = "debug")]
 pub(super) async fn handle_remote(
     remote: &'static Remote,
     handler_resources: HandlerResources,
 ) -> Result<(), FatalError> {
-    debug!("opening remote {remote}");
+    debug!("opening remote");
     match (&remote.local_addr, &remote.remote_addr, remote.protocol) {
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Inet((rhost, rport)), Protocol::Tcp) => {
             handle_tcp(lhost, *lport, rhost, *rport, &handler_resources).await
