@@ -35,6 +35,8 @@ pub enum Error {
     AddressType(u8),
     #[error("Cannot {0} in SOCKS request: {1}")]
     ProcessSocksRequest(&'static str, std::io::Error),
+    #[error("Cannot parse SOCKS associate datagram")]
+    ParseAssociate,
     #[error("Client does not support NOAUTH")]
     OtherAuth,
     /// Fatal error that we should propagate to main.
@@ -304,6 +306,9 @@ async fn handle_udp_relay_header(
     let (len, addr) = socket.recv_from(&mut buf).await?;
     buf.truncate(len);
     let mut buf = Bytes::from(buf);
+    if buf.remaining() < 4 {
+        return Err(Error::ParseAssociate);
+    }
     let _reserved = buf.get_u16();
     let frag = buf.get_u8();
     if frag != 0 {
@@ -314,6 +319,9 @@ async fn handle_udp_relay_header(
     let (dst, port) = match atyp {
         0x01 => {
             // IPv4
+            if buf.remaining() < 6 {
+                return Err(Error::ParseAssociate);
+            }
             let addr = buf.get_u32();
             let dst = Ipv4Addr::from(addr).to_string();
             let port = buf.get_u16();
@@ -321,13 +329,22 @@ async fn handle_udp_relay_header(
         }
         0x03 => {
             // Domain name
+            if buf.remaining() < 1 {
+                return Err(Error::ParseAssociate);
+            }
             let len = usize::from(buf.get_u8());
+            if buf.remaining() < len + 2 {
+                return Err(Error::ParseAssociate);
+            }
             let dst = buf.split_to(len);
             let port = buf.get_u16();
             (dst, port)
         }
         0x04 => {
             // IPv6
+            if buf.remaining() < 18 {
+                return Err(Error::ParseAssociate);
+            }
             let addr = buf.get_u128();
             let dst = Ipv6Addr::from(addr).to_string();
             let port = buf.get_u16();

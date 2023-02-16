@@ -289,6 +289,9 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
                     return Err(Error::ClientReceivedSyn);
                 }
                 // Decode Syn handshake
+                if data.remaining() < 10 {
+                    return Err(super::frame::Error::FrameTooShort.into());
+                }
                 let peer_rwnd = data.get_u64();
                 let dest_port = data.get_u16();
                 let dest_host = data;
@@ -314,6 +317,9 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
                 if self.role == Role::Server {
                     return Err(Error::ServerReceivedSynAck);
                 }
+                if data.remaining() < 8 {
+                    return Err(super::frame::Error::FrameTooShort.into());
+                }
                 // Decode `SynAck` handshake
                 let peer_rwnd = data.get_u64();
                 // "we" is `role == Client`
@@ -323,6 +329,9 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
             }
             StreamFlag::Ack => {
                 trace!("received `Ack` for {our_port}");
+                if data.remaining() < 8 {
+                    return Err(super::frame::Error::FrameTooShort.into());
+                }
                 let peer_processed = data.get_u64();
                 let streams = self.streams.read().await;
                 if let Some(stream_data) = streams.get(&our_port) {

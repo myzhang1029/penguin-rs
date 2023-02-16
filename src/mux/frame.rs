@@ -62,6 +62,8 @@ use tracing::warn;
 /// Errors that can occur when parsing a frame.
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("Frame is invalid or incomplete")]
+    FrameTooShort,
     #[error("Invalid frame type: {0}")]
     InvalidFrameType(u8),
     #[error("Invalid stream flag: {0}")]
@@ -323,6 +325,9 @@ impl TryFrom<Bytes> for StreamFrame {
 
     #[inline]
     fn try_from(mut data: Bytes) -> Result<Self, Self::Error> {
+        if data.remaining() < 5 {
+            return Err(Error::FrameTooShort);
+        }
         let sport = data.get_u16();
         let dport = data.get_u16();
         let flag = match data.get_u8() {
@@ -343,19 +348,28 @@ impl TryFrom<Bytes> for StreamFrame {
     }
 }
 
-impl From<Bytes> for DatagramFrame {
+impl TryFrom<Bytes> for DatagramFrame {
+    type Error = Error;
+
     #[inline]
-    fn from(mut data: Bytes) -> Self {
-        let host_len = data.get_u8();
-        let host = data.split_to(usize::from(host_len));
+    fn try_from(mut data: Bytes) -> Result<Self, Self::Error> {
+        if data.remaining() < 1 {
+            return Err(Error::FrameTooShort);
+        }
+        let host_len = usize::from(data.get_u8());
+
+        if data.remaining() < host_len + 6 {
+            return Err(Error::FrameTooShort);
+        }
+        let host = data.split_to(host_len);
         let port = data.get_u16();
         let sid = data.get_u32();
-        Self {
+        Ok(Self {
             host,
             port,
             sid,
             data,
-        }
+        })
     }
 }
 
@@ -365,10 +379,13 @@ impl TryFrom<Bytes> for Frame {
     #[tracing::instrument(skip_all, level = "trace")]
     #[inline]
     fn try_from(mut data: Bytes) -> Result<Self, Self::Error> {
+        if data.remaining() < 1 {
+            return Err(Error::FrameTooShort);
+        }
         let frame_type = data.get_u8();
         match frame_type {
             1 => Ok(Self::Stream(StreamFrame::try_from(data)?)),
-            3 => Ok(Self::Datagram(DatagramFrame::from(data))),
+            3 => Ok(Self::Datagram(DatagramFrame::try_from(data)?)),
             other => Err(Error::InvalidFrameType(other)),
         }
     }
@@ -385,6 +402,7 @@ impl From<StreamFrame> for Message {
 
 impl TryFrom<Vec<u8>> for Frame {
     type Error = <Self as TryFrom<Bytes>>::Error;
+
     #[inline]
     fn try_from(data: Vec<u8>) -> Result<Self, Self::Error> {
         Self::try_from(Bytes::from(data))
