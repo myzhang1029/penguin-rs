@@ -112,6 +112,9 @@ impl<S> crate::dupe::Dupe for LockedWebSocket<S> {
 impl<S: std::fmt::Debug> std::fmt::Debug for LockedWebSocket<S> {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        <Mutex<S> as std::fmt::Debug>::fmt(&*self.0, f)
+        match self.0.try_lock() {
+            Some(sink) => <S as std::fmt::Debug>::fmt(&*sink, f),
+            None => f.write_str("WebSocket (locked)"),
+        }
     }
 }

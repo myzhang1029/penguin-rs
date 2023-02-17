@@ -27,6 +27,8 @@ impl MaybeRetryableError for tokio_tungstenite::tungstenite::error::ProtocolErro
             Self::ReceivedAfterClosing
                 | Self::ResetWithoutClosingHandshake
                 | Self::SendAfterClosing
+                // Often happens in errorneous network conditions.
+                | Self::HandshakeIncomplete
         )
     }
 }

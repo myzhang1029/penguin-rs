@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
+mod backoff;
 mod handle_remote;
 mod maybe_retryable;
 pub mod ws_connect;
@@ -14,6 +15,7 @@ use crate::Dupe;
 use bytes::Bytes;
 use penguin_mux::{DatagramFrame, IntKey, Multiplexor, Role};
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -153,10 +155,40 @@ pub struct ClientIdMaps {
 
 impl ClientIdMaps {
     #[must_use]
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             client_id_map: HashMap::new(),
             client_addr_map: HashMap::new(),
+        }
+    }
+
+    /// Send a datagram to a client
+    async fn send_datagram(
+        lock_self: &RwLock<Self>,
+        client_id: u32,
+        data: Bytes,
+    ) -> Option<std::io::Result<()>> {
+        if client_id == 0 {
+            // Used for stdio
+            Some(tokio::io::stdout().write_all(&data).await)
+        } else if let Some(information) = lock_self.read().await.client_id_map.get(&client_id) {
+            let send_result = if information.socks5 {
+                handle_remote::socks::send_udp_relay_response(
+                    &information.socket,
+                    &information.peer_addr,
+                    &data,
+                )
+                .await
+            } else {
+                information
+                    .socket
+                    .send_to(&data, &information.peer_addr)
+                    .await
+            }
+            .map(|_| ());
+            Some(send_result)
+        } else {
+            None
         }
     }
 }
@@ -223,6 +255,7 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
     for remote in &args.remote {
         jobs.spawn(handle_remote(remote, handler_resources.dupe()));
     }
+    // Check if any listener has failed. If so, quit immediately.
     let check_listeners_future = async move {
         while let Some(result) = jobs.join_next().await {
             // Quit immediately if any handler fails
@@ -234,9 +267,13 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
         Ok::<(), Error>(())
     };
     let main_future = async move {
-        let mut current_retry_count: u32 = 0;
         // Initial retry interval is 200ms
-        let mut current_retry_interval: u64 = 200;
+        let mut backoff = backoff::Backoff::new(
+            Duration::from_millis(200),
+            Duration::from_millis(args.max_retry_interval),
+            2,
+            args.max_retry_count,
+        );
         // Place to park one failed stream request so that it can be retried
         let mut failed_stream_request: Option<StreamCommand> = None;
         // Keep alive interval
@@ -251,16 +288,7 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
         loop {
             // TODO: Timeout for `ws_connect::handshake`.
             match ws_connect::handshake(args).await {
-                Err(e) => {
-                    if !e.retryable() {
-                        return Err(e.into());
-                    }
-                    // else, retry
-                }
                 Ok(ws_stream) => {
-                    // This future is not cancel-safe, but if the previous
-                    // future is returns, it is a fatal error and we don't
-                    // care about this future anymore.
                     let error = on_connected(
                         ws_stream,
                         &mut stream_command_rx,
@@ -270,28 +298,31 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
                         keepalive,
                         channel_timeout,
                     )
-                    .await;
-                    warn!("Disconnected from server: {error}");
-                    if !error.retryable() {
+                    .await
+                    .expect_err("on_connected should never return `Ok` (this is a bug)");
+                    if error.retryable() {
+                        warn!("Disconnected from server: {error}");
+                        // Since we once connected, reset the retry count
+                        backoff.reset();
+                        // Now retry
+                    } else {
                         return Err(error);
                     }
-                    // Since we once connected, reset the retry count
-                    current_retry_count = 0;
-                    current_retry_interval = 200;
-                    // Now retry
+                }
+                Err(e) if !e.retryable() => {
+                    return Err(e.into());
+                }
+                Err(_) => {
+                    // else, retry
                 }
             }
             // If we get here, retry.
-            warn!("Reconnecting in {current_retry_interval} ms");
-            current_retry_count += 1;
-            if args.max_retry_count != 0 && current_retry_count > args.max_retry_count {
+            let Some(current_retry_interval) = backoff.advance() else {
                 warn!("Max retry count reached, giving up");
                 return Err(Error::MaxRetryCountReached);
-            }
-            time::sleep(Duration::from_millis(current_retry_interval)).await;
-            if current_retry_interval < args.max_retry_interval {
-                current_retry_interval *= 2;
-            }
+            };
+            warn!("Reconnecting in {current_retry_interval:?}");
+            time::sleep(current_retry_interval).await;
         }
     };
     tokio::select! {
@@ -306,6 +337,8 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
 /// Called when the main socket is connected. Accepts connection requests from
 /// local listeners, establishes them, and sends them back to the listeners.
 /// Datagrams are simply dropped if we fail to send them.
+///
+/// # Errors
 /// This function returns when the connection is lost, and the caller should
 /// retry based on the error.
 #[tracing::instrument(skip_all, level = "debug")]
@@ -317,7 +350,7 @@ async fn on_connected(
     udp_client_map: Arc<RwLock<ClientIdMaps>>,
     keepalive: Option<Duration>,
     channel_timeout: Duration,
-) -> Error {
+) -> Result<Infallible, Error> {
     let mut mux_task_joinset = JoinSet::new();
     let mut mux = Multiplexor::new(
         ws_stream,
@@ -328,24 +361,16 @@ async fn on_connected(
     info!("Connected to server");
     // If we have a failed stream request, try it first
     if let Some(sender) = failed_stream_request.take() {
-        if let Err(e) =
-            get_send_stream_chan(&mut mux, sender, failed_stream_request, channel_timeout).await
-        {
-            return e;
-        }
+        get_send_stream_chan(&mut mux, sender, failed_stream_request, channel_timeout).await?;
     }
     // Main loop
     loop {
         tokio::select! {
             Some(mux_task_joinset_result) = mux_task_joinset.join_next() => {
-                if let Err(e) = mux_task_joinset_result.expect("JoinSet panicked (this is a bug)") {
-                    return Error::Mux(e);
-                }
+                mux_task_joinset_result.expect("JoinSet panicked (this is a bug)")?;
             }
             Some(sender) = stream_command_rx.recv() => {
-                if let Err(e) = get_send_stream_chan(&mut mux, sender, failed_stream_request, channel_timeout).await {
-                    return e;
-                }
+                get_send_stream_chan(&mut mux, sender, failed_stream_request, channel_timeout).await?;
             }
             Some(datagram) = datagram_rx.recv() => {
                 if let Err(e) = mux.send_datagram(datagram).await {
@@ -355,28 +380,14 @@ async fn on_connected(
             Ok(dgram_frame) = mux.get_datagram() => {
                 let client_id = dgram_frame.sid;
                 let data = dgram_frame.data;
-                if client_id == 0 {
-                    // Used for stdio
-                    if let Err(e) = tokio::io::stdout().write_all(&data).await {
-                        error!("Failed to write to stdout: {e}");
+                match ClientIdMaps::send_datagram(&udp_client_map, client_id, data).await {
+                    Some(Ok(())) => {
+                        trace!("sent datagram to client {client_id}");
                     }
-                } else {
-                    let udp_client_map = udp_client_map.read().await;
-                    if let Some(information) = udp_client_map.client_id_map.get(&client_id) {
-                        let send_result =
-                        if information.socks5 {
-                            handle_remote::socks::send_udp_relay_response(
-                                &information.socket,
-                                &information.peer_addr,
-                                &data,
-                            ).await
-                        } else {
-                            information.socket.send_to(&data, &information.peer_addr).await
-                        };
-                        if let Err(e) = send_result {
-                            warn!("Failed to send datagram to client: {e}");
-                        }
-                    } else {
+                    Some(Err(e)) => {
+                        warn!("Failed to send datagram to client {client_id}: {e}");
+                    }
+                    None => {
                         // Just drop the datagram
                         info!("Received datagram for unknown client ID: {client_id}");
                     }
@@ -384,7 +395,7 @@ async fn on_connected(
             }
             else => {
                 // The multiplexor has closed for some reason
-                return Error::RemoteDisconnected;
+                return Err(Error::RemoteDisconnected);
             }
         }
     }

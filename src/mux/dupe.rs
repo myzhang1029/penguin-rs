@@ -12,35 +12,35 @@ pub trait Dupe {
 }
 
 macro_rules! impl_dupe_as_clone {
-    ($($t:ty),*) => {
-        $(
-            impl Dupe for $t {
+    ($t:ty => $($g:ident),* $(,)?) => {
+            impl<$($g),*> Dupe for $t {
                 fn dupe(&self) -> Self {
                     self.clone()
                 }
             }
-        )*
+    };
+    ($($t:ty => ($($g:ident),* $(,)?)),* $(,)?) => {
+        $(impl_dupe_as_clone!($t => $($g),*);)*
     };
 }
 
 impl_dupe_as_clone! {
-    bytes::Bytes
-}
-
-impl<T> Dupe for std::sync::Arc<T> {
-    fn dupe(&self) -> Self {
-        Self::clone(self)
-    }
-}
-
-impl<T> Dupe for tokio::sync::mpsc::Sender<T> {
-    fn dupe(&self) -> Self {
-        self.clone()
-    }
-}
-
-impl<T> Dupe for tokio::sync::mpsc::UnboundedSender<T> {
-    fn dupe(&self) -> Self {
-        self.clone()
-    }
+    // `Bytes` is a reference-counted type.
+    bytes::Bytes => (),
+    // `HeaderValue` is a wrapper around `Bytes`.
+    http::header::HeaderValue => (),
+    // `Authority` is a wrapper around `Bytes`.
+    http::uri::Authority => (),
+    // `Scheme` by default is a wrapper around `Bytes`.
+    http::uri::Scheme => (),
+    // `PathAndQuery` is a wrapper around `Bytes`.
+    http::uri::PathAndQuery => (),
+    // `Uri` is the combination of the above.
+    http::Uri => (),
+    // `Arc` is a reference-counted type.
+    std::sync::Arc<T> => (T),
+    // `Sender` is designed to be cheaply cloned.
+    tokio::sync::mpsc::Sender<T> => (T),
+    // `UnboundedSender` is designed to be cheaply cloned.
+    tokio::sync::mpsc::UnboundedSender<T> => (T),
 }

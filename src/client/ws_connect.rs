@@ -6,6 +6,7 @@ use crate::arg::ClientArgs;
 use crate::config;
 use crate::proto_version::PROTOCOL_VERSION;
 use crate::tls::make_tls_connector;
+use crate::Dupe;
 use http::header::HeaderValue;
 use thiserror::Error;
 use tokio::net::TcpStream;
@@ -40,7 +41,7 @@ pub async fn handshake(
         == "wss";
 
     // Use a request to allow additional headers
-    let mut req: Request = args.server.0.clone().into_client_request()?;
+    let mut req: Request = args.server.0.dupe().into_client_request()?;
     let req_headers = req.headers_mut();
     // Add protocol version
     req_headers.insert(
@@ -49,15 +50,15 @@ pub async fn handshake(
     );
     // Add PSK
     if let Some(ref ws_psk) = args.ws_psk {
-        req_headers.insert("x-penguin-psk", ws_psk.clone());
+        req_headers.insert("x-penguin-psk", ws_psk.dupe());
     }
     // Add potentially custom hostname
     if let Some(ref hostname) = args.hostname {
-        req_headers.insert("host", hostname.clone());
+        req_headers.insert("host", hostname.dupe());
     }
     // Now add custom headers
     for header in &args.header {
-        req_headers.insert(&header.name, header.value.clone());
+        req_headers.insert(&header.name, header.value.dupe());
     }
 
     let connector = if is_tls {

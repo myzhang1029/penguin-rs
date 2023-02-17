@@ -116,8 +116,8 @@ impl State<'static> {
 
             let uri = Uri::builder()
                 // `expect`: `BackendUrl` is validated by clap.
-                .scheme(scheme.clone())
-                .authority(authority.clone())
+                .scheme(scheme.dupe())
+                .authority(authority.dupe())
                 .path_and_query(format!("{}{req_path_query}", backend_path.path()))
                 .build()
                 .expect("Failed to build URI for backend (this is a bug)");

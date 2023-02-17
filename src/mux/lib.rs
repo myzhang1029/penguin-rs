@@ -265,10 +265,7 @@ impl<S: WebSocketStream> Multiplexor<S> {
 
 impl<S> Drop for Multiplexor<S> {
     fn drop(&mut self) {
-        self.inner
-            .dropped_ports_tx
-            .send((0, 0))
-            .unwrap_or_else(|_| warn!("Failed to notify task of dropped mux"));
+        self.inner.dropped_ports_tx.send((0, 0)).ok();
     }
 }
 

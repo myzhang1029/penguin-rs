@@ -71,10 +71,10 @@ pub enum Error {
 
 impl Display for Protocol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Tcp => write!(f, "tcp"),
-            Self::Udp => write!(f, "udp"),
-        }
+        f.write_str(match self {
+            Self::Tcp => "tcp",
+            Self::Udp => "udp",
+        })
     }
 }
 
@@ -125,7 +125,7 @@ impl Display for Remote {
                     write!(f, "{host}:{port}")?;
                 }
             }
-            LocalSpec::Stdio => write!(f, "stdio")?,
+            LocalSpec::Stdio => f.write_str("stdio")?,
         }
         match &self.remote_addr {
             RemoteSpec::Inet((host, port)) => {
@@ -135,7 +135,7 @@ impl Display for Remote {
                     write!(f, ":{host}:{port}")?;
                 }
             }
-            RemoteSpec::Socks => write!(f, ":socks")?,
+            RemoteSpec::Socks => f.write_str(":socks")?,
         }
         write!(f, "/{}", self.protocol)?;
         Ok(())

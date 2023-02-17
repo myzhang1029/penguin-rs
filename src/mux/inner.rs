@@ -484,5 +484,8 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
         }
         // This also effectively `Rst`s all streams on the other side
         self.ws.close().await.ok();
+        self.ws.flush_ignore_closed().await.ok();
+        // Intentionally flushing twice: this time we should get a `ConnectionClosed` error
+        self.ws.flush_ignore_closed().await.ok();
     }
 }
