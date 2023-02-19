@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 /// Exponential backoff generator.
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub(super) struct Backoff {
     /// Initial backoff duration.
     initial: Duration,

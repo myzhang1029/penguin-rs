@@ -88,7 +88,7 @@ impl<S> AsyncRead for MuxStream<S> {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
+    ) -> Poll<io::Result<()>> {
         let remaining = buf.remaining();
         if self.buf.is_empty() {
             trace!("polling the stream");
@@ -152,7 +152,7 @@ where
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
-    ) -> Poll<std::io::Result<usize>> {
+    ) -> Poll<io::Result<usize>> {
         // Atomic ordering: if the operations around this line are reordered,
         // the sent frame will be `Rst`ed by the remote peer, which is harmless.
         // Both `close_port` and `shutdown` in `inner.rs` set this flag with
@@ -200,7 +200,7 @@ where
 
     #[tracing::instrument(skip(cx), level = "trace")]
     #[inline]
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         ready!(self.ws.poll_flush(cx)).map_err(WebSocketError::into_io_error)?;
         Poll::Ready(Ok(()))
     }
@@ -210,7 +210,7 @@ where
     /// to the remote peer.
     #[tracing::instrument(skip(cx), level = "trace")]
     #[inline]
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         // There is no need to send a `Fin` frame if the mux task has already removed the stream
         // because either:
         // 1. `MuxStream` was dropped before `poll_shutdown` is completed and the mux task should
