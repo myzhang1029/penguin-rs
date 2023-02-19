@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc::error::TrySendError;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, oneshot, RwLock};
 use tokio::time::MissedTickBehavior;
 use tracing::{debug, trace, warn};
 
@@ -38,6 +38,30 @@ pub struct MuxStreamData {
     writer_waker: Arc<AtomicWaker>,
 }
 
+#[derive(Debug)]
+pub enum MuxStreamSlot<S> {
+    /// The stream is requested by the `client`.
+    Requested(oneshot::Sender<MuxStream<S>>),
+    /// The stream is established.
+    Established(MuxStreamData),
+}
+
+impl<S> MuxStreamSlot<S> {
+    /// Take the sender and set the slot to `Established`.
+    /// Returns `None` if the slot is already established.
+    pub fn establish(&mut self, data: MuxStreamData) -> Option<oneshot::Sender<MuxStream<S>>> {
+        // Make sure it is not replaced in the error case
+        if matches!(self, Self::Established(_)) {
+            return None;
+        }
+        let sender = match std::mem::replace(self, Self::Established(data)) {
+            Self::Requested(sender) => sender,
+            Self::Established(_) => unreachable!(),
+        };
+        Some(sender)
+    }
+}
+
 /// Multiplexor inner
 pub struct MultiplexorInner<S> {
     /// The role of this multiplexor
@@ -47,7 +71,7 @@ pub struct MultiplexorInner<S> {
     /// Interval between keepalive `Ping`s
     pub keepalive_interval: Option<std::time::Duration>,
     /// Open stream channels: our_port -> `MuxStreamData`
-    pub streams: Arc<RwLock<HashMap<u16, MuxStreamData>>>,
+    pub streams: Arc<RwLock<HashMap<u16, MuxStreamSlot<S>>>>,
     /// Channel for notifying the task of a dropped `MuxStream`
     /// (in the form (our_port, their_port)).
     /// Sending (0, _) means that the multiplexor is being dropped and the
@@ -97,13 +121,13 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
     pub async fn task(
         mut self,
         datagram_tx: mpsc::Sender<DatagramFrame>,
-        stream_tx: mpsc::Sender<MuxStream<S>>,
+        server_stream_tx: mpsc::Sender<MuxStream<S>>,
         dropped_ports_rx: mpsc::UnboundedReceiver<(u16, u16)>,
         ack_rx: mpsc::UnboundedReceiver<(u16, u16, u64)>,
     ) -> Result<()> {
         let result = tokio::try_join!(
             self.keepalive_task(),
-            self.process_messages_task(datagram_tx, stream_tx),
+            self.process_messages_task(datagram_tx, server_stream_tx),
             self.close_port_task(dropped_ports_rx),
             self.send_ack_task(ack_rx),
         );
@@ -169,8 +193,8 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
     /// Message processing subtask
     async fn process_messages_task(
         &self,
-        mut datagram_tx: mpsc::Sender<DatagramFrame>,
-        mut stream_tx: mpsc::Sender<MuxStream<S>>,
+        datagram_tx: mpsc::Sender<DatagramFrame>,
+        server_stream_tx: mpsc::Sender<MuxStream<S>>,
     ) -> Result<()> {
         while let Some(msg) = self.ws.next().await {
             let msg = msg.map_err(Error::Next)?;
@@ -178,7 +202,7 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
             // Messages cannot be processed concurrently
             // because doing so will break stream ordering
             if self
-                .process_message(msg, &mut datagram_tx, &mut stream_tx)
+                .process_message(msg, &datagram_tx, &server_stream_tx)
                 .await?
             {
                 // `Close` message was received, so we can exit
@@ -197,8 +221,8 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
     async fn process_message(
         &self,
         msg: Message,
-        datagram_tx: &mut mpsc::Sender<DatagramFrame>,
-        stream_tx: &mut mpsc::Sender<MuxStream<S>>,
+        datagram_tx: &mpsc::Sender<DatagramFrame>,
+        server_stream_tx: &mpsc::Sender<MuxStream<S>>,
     ) -> Result<bool> {
         match msg {
             Message::Binary(data) => {
@@ -223,7 +247,8 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
                     }
                     Frame::Stream(stream_frame) => {
                         trace!("received stream frame: {:?}", stream_frame);
-                        self.process_stream_frame(stream_frame, stream_tx).await?;
+                        self.process_stream_frame(stream_frame, server_stream_tx)
+                            .await?;
                     }
                 }
                 Ok(false)
@@ -268,7 +293,7 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
     async fn process_stream_frame(
         &self,
         stream_frame: StreamFrame,
-        stream_tx: &mut mpsc::Sender<MuxStream<S>>,
+        server_stream_tx: &mpsc::Sender<MuxStream<S>>,
     ) -> Result<()> {
         let StreamFrame {
             dport: our_port,
@@ -295,32 +320,17 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
                 let peer_rwnd = data.get_u64();
                 let dest_port = data.get_u16();
                 let dest_host = data;
-                // TODO: There is a potential race condition here:
-                // - We find an available port
-                // - The port is taken by another stream
-                // - We create a new stream with the port
-                // - The other stream is replaced
-                // TODO 2: There is another potential race condition of sending the
-                // wrong stream to the user when multiple streams are created at the
-                // same time. We might want to use a `oneshot` channel to send the
-                // stream to the user instead of a `mpsc` channel.
-                let our_port = u16::next_available_key(&*self.streams.read().await);
-                trace!("port: {}", our_port);
                 // "we" is `role == Server`
                 // "they" is `role == Client`
-                self.new_stream(
-                    our_port, their_port, dest_host, dest_port, peer_rwnd, stream_tx,
+                self.server_new_stream(
+                    our_port,
+                    their_port,
+                    dest_host,
+                    dest_port,
+                    peer_rwnd,
+                    server_stream_tx,
                 )
                 .await?;
-                // Send a `SynAck`
-                trace!("sending `SynAck`");
-                self.ws
-                    .send_with(|| {
-                        StreamFrame::new_synack(our_port, their_port, config::RWND).into()
-                    })
-                    .await
-                    .map_err(Error::SendStreamFrame)?;
-                self.ws.flush_ignore_closed().await.map_err(Error::Flush)?;
             }
             StreamFlag::SynAck => {
                 if self.role == Role::Server {
@@ -333,7 +343,7 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
                 let peer_rwnd = data.get_u64();
                 // "we" is `role == Client`
                 // "they" is `role == Server`
-                self.new_stream(our_port, their_port, Bytes::new(), 0, peer_rwnd, stream_tx)
+                self.client_new_stream(our_port, their_port, peer_rwnd)
                     .await?;
             }
             StreamFlag::Ack => {
@@ -343,7 +353,7 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
                 }
                 let peer_processed = data.get_u64();
                 let streams = self.streams.read().await;
-                if let Some(stream_data) = streams.get(&our_port) {
+                if let Some(MuxStreamSlot::Established(stream_data)) = streams.get(&our_port) {
                     // Atomic ordering: as long as the value is incremented atomically,
                     // whether a writer sees the new value or the old value is not
                     // important. If it sees the old value and decides to return
@@ -363,14 +373,18 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
                 self.close_port(our_port, their_port, true).await;
             }
             StreamFlag::Fin => {
-                if let Some(stream_data) = self.streams.read().await.get(&our_port) {
+                if let Some(MuxStreamSlot::Established(stream_data)) =
+                    self.streams.read().await.get(&our_port)
+                {
                     // Make sure the user receives `EOF`.
                     stream_data.sender.send(Bytes::new()).await.ok();
                 }
                 // And our end can still send
             }
             StreamFlag::Psh => {
-                if let Some(stream_data) = self.streams.read().await.get(&our_port) {
+                if let Some(MuxStreamSlot::Established(stream_data)) =
+                    self.streams.read().await.get(&our_port)
+                {
                     if stream_data.sender.send(data).await.is_ok() {
                         // The data is sent successfully
                         return Ok(());
@@ -389,31 +403,48 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
         Ok(())
     }
 
-    /// Create a new `MuxStream` and add it into the map
-    async fn new_stream(
+    /// Create a new `MuxStream`, add it to the map, and send a `SynAck` frame.
+    /// If `our_port` is 0, a new port will be allocated.
+    #[inline]
+    async fn server_new_stream(
         &self,
         our_port: u16,
         their_port: u16,
         dest_host: Bytes,
         dest_port: u16,
         peer_rwnd: u64,
-        stream_tx: &mut mpsc::Sender<MuxStream<S>>,
+        server_stream_tx: &mpsc::Sender<MuxStream<S>>,
     ) -> Result<()> {
+        assert_eq!(self.role, Role::Server);
         // `tx` is our end, `rx` is the user's end
         let (frame_tx, frame_rx) = mpsc::channel(config::STREAM_FRAME_BUFFER_SIZE);
         let can_write = Arc::new(AtomicBool::new(true));
         let psh_send_remaining = Arc::new(AtomicU64::new(peer_rwnd));
         let writer_waker = Arc::new(AtomicWaker::new());
         // Save the TX end of the stream so we can write to it when subsequent frames arrive
-        self.streams.write().await.insert(
+        let mut streams = self.streams.write().await;
+        let our_port = if our_port == 0 {
+            // Allocate a new port
+            let result = u16::next_available_key(&streams);
+            trace!("port {our_port} allocated");
+            result
+        } else {
+            // Check if the port is available
+            if streams.contains_key(&our_port) {
+                return Err(Error::InvalidSynPort(our_port));
+            }
+            our_port
+        };
+        streams.insert(
             our_port,
-            MuxStreamData {
+            MuxStreamSlot::Established(MuxStreamData {
                 sender: frame_tx,
                 can_write: can_write.dupe(),
                 psh_send_remaining: psh_send_remaining.dupe(),
                 writer_waker: writer_waker.dupe(),
-            },
+            }),
         );
+        drop(streams);
         let stream = MuxStream {
             frame_rx,
             our_port,
@@ -429,12 +460,74 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
             ws: self.ws.dupe(),
             dropped_ports_tx: self.dropped_ports_tx.dupe(),
         };
+        // Send a `SynAck`
+        // Make sure `SynAck` is sent before the stream is sent to the user
+        // so that the stream is `Established` when the user uses it.
+        trace!("sending `SynAck`");
+        self.ws
+            .send_with(|| StreamFrame::new_synack(our_port, their_port, config::RWND).into())
+            .await
+            .map_err(Error::SendStreamFrame)?;
+        self.ws.flush_ignore_closed().await.map_err(Error::Flush)?;
+        // At the server side, we use `server_stream_tx` to send the new stream to the
+        // user.
         trace!("sending stream to user");
         // This goes to the user
-        stream_tx
+        server_stream_tx
             .send(stream)
             .await
-            .map_err(|_| Error::SendStreamToClient)
+            .map_err(|_| Error::SendStreamToClient)?;
+        Ok(())
+    }
+
+    /// Create a new `MuxStream` and change the state of the port to `Established`.
+    #[inline]
+    async fn client_new_stream(
+        &self,
+        our_port: u16,
+        their_port: u16,
+        peer_rwnd: u64,
+    ) -> Result<()> {
+        assert_eq!(self.role, Role::Client);
+        // `tx` is our end, `rx` is the user's end
+        let (frame_tx, frame_rx) = mpsc::channel(config::STREAM_FRAME_BUFFER_SIZE);
+        let can_write = Arc::new(AtomicBool::new(true));
+        let psh_send_remaining = Arc::new(AtomicU64::new(peer_rwnd));
+        let writer_waker = Arc::new(AtomicWaker::new());
+        let stream_data = MuxStreamData {
+            sender: frame_tx,
+            can_write: can_write.dupe(),
+            psh_send_remaining: psh_send_remaining.dupe(),
+            writer_waker: writer_waker.dupe(),
+        };
+        let stream = MuxStream {
+            frame_rx,
+            our_port,
+            their_port,
+            dest_host: Bytes::new(),
+            dest_port: 0,
+            can_write,
+            psh_send_remaining,
+            psh_recvd_since: AtomicU64::new(0),
+            ack_tx: self.ack_tx.dupe(),
+            writer_waker,
+            buf: Bytes::new(),
+            ws: self.ws.dupe(),
+            dropped_ports_tx: self.dropped_ports_tx.dupe(),
+        };
+        // Save the TX end of the stream so we can write to it when subsequent frames arrive
+        let mut streams = self.streams.write().await;
+        assert_ne!(our_port, 0);
+        let entry = streams.get_mut(&our_port).ok_or(Error::BogusSynAck)?;
+        // Change the state of the port to `Established`
+        let Some(sender) = entry.establish(stream_data)else {
+            return Err(Error::BogusSynAck);
+        };
+        // Send the stream to the user
+        // At the client side, we use the associated oneshot channel to send the new stream
+        trace!("sending stream to user");
+        sender.send(stream).map_err(|_| Error::SendStreamToClient)?;
+        Ok(())
     }
 
     /// Close a port. That is, send `Rst` if `Fin` is not sent,
@@ -443,7 +536,9 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
     #[inline]
     pub async fn close_port(&self, our_port: u16, their_port: u16, inhibit_rst: bool) {
         // Free the port for reuse
-        if let Some(stream_data) = self.streams.write().await.remove(&our_port) {
+        if let Some(MuxStreamSlot::Established(stream_data)) =
+            self.streams.write().await.remove(&our_port)
+        {
             // Make sure the user receives `EOF`.
             stream_data.sender.send(Bytes::new()).await.ok();
             // Atomic ordering:
@@ -469,20 +564,23 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
         debug!("freed connection {our_port} -> {their_port}");
     }
 
-    /// Should really only be called when the mux is dropped
+    /// Should really only be called when the mux is dropped.
     #[tracing::instrument(skip_all, level = "trace")]
     async fn shutdown(&mut self) {
         debug!("closing all connections");
         for (_, stream_data) in self.streams.write().await.drain() {
-            // Make sure the user receives `EOF`.
-            stream_data.sender.send(Bytes::new()).await.ok();
-            // Prevent the user from writing
-            // Atomic ordering: It does not matter whether the user calls `poll_shutdown` or not,
-            // the stream is shut down and the final value of `can_write` is `false`.
-            stream_data.can_write.store(false, Ordering::Relaxed);
-            // If there is a writer waiting for `Ack`, wake it up because it will never receive one.
-            // Waking it here and the user should receive a `BrokenPipe` error.
-            stream_data.writer_waker.wake();
+            if let MuxStreamSlot::Established(stream_data) = stream_data {
+                // Make sure the user receives `EOF`.
+                stream_data.sender.send(Bytes::new()).await.ok();
+                // Prevent the user from writing
+                // Atomic ordering: It does not matter whether the user calls `poll_shutdown` or not,
+                // the stream is shut down and the final value of `can_write` is `false`.
+                stream_data.can_write.store(false, Ordering::Relaxed);
+                // If there is a writer waiting for `Ack`, wake it up because it will never receive one.
+                // Waking it here and the user should receive a `BrokenPipe` error.
+                stream_data.writer_waker.wake();
+            }
+            // else: just drop the sender
         }
         // This also effectively `Rst`s all streams on the other side
         self.ws.close().await.ok();
