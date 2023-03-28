@@ -49,7 +49,7 @@ webpki = { version = "0.22", optional = true }
 webpki-roots = { version = "0.22", optional = true }
 
 [dev-dependencies]
-ctor = "0.1"
+ctor = "0.2"
 tempfile = "3"
 rcgen = "0.10"
 
