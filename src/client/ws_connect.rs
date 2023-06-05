@@ -75,7 +75,7 @@ pub async fn handshake(
         Connector::Plain
     };
     let (ws_stream, _response) =
-        connect_async_tls_with_config(req, Some(config::DEFAULT_WS_CONFIG), Some(connector))
+        connect_async_tls_with_config(req, Some(config::DEFAULT_WS_CONFIG), false, Some(connector))
             .await?;
     // We don't need to check the response now...
     debug!("WebSocket handshake succeeded");

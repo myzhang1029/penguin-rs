@@ -34,15 +34,15 @@ native-tls = { version = "0.2", optional = true }
 once_cell = { version = "1", optional = true }
 parking_lot = "0.12"
 rand = "0.8"
-rustls = { version = "0.20", optional = true, features = ["dangerous_configuration"] }
+rustls = { version = "0.21", optional = true, features = ["dangerous_configuration"] }
 rustls-native-certs = { version = "0.6", optional = true }
 rustls-pemfile = { version = "1", optional = true }
 sha1 = { version = "0.10", optional = true }
 thiserror = "1"
 tokio = { version = ">=1.23.1", features = ["macros", "parking_lot", "rt", "sync", "time"] }
 tokio-native-tls = { version = "0.3", optional = true }
-tokio-rustls = { version = "0.23", optional = true }
-tokio-tungstenite = { version = "0.18", default-features = false }
+tokio-rustls = { version = "0.24", optional = true }
+tokio-tungstenite = { version = "0.19", default-features = false }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", optional = true }
 webpki = { version = "0.22", optional = true }

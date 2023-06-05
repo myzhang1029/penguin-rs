@@ -130,17 +130,16 @@ impl State<'static> {
                 Ok(resp) => Ok(resp),
                 Err(e) => {
                     error!("Failed to proxy request to backend: {}", e);
-                    self.not_found_handler().await
+                    self.not_found_handler()
                 }
             }
         } else {
-            self.not_found_handler().await
+            self.not_found_handler()
         }
     }
 
     /// 404 handler
-    #[allow(clippy::unused_async)]
-    async fn not_found_handler(self) -> Result<Response<Body>, Infallible> {
+    fn not_found_handler(self) -> Result<Response<Body>, Infallible> {
         Ok(Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body(Body::from(self.not_found_resp))
@@ -167,9 +166,9 @@ impl State<'static> {
             return self.backend_or_404_handler(req).await;
         }
         let Some(sec_websocket_key) = sec_websocket_key else {
-        warn!("Invalid WebSocket request: no `sec-websocket-key` header");
-        return self.backend_or_404_handler(req).await;
-    };
+            warn!("Invalid WebSocket request: no `sec-websocket-key` header");
+            return self.backend_or_404_handler(req).await;
+        };
         if !header_matches!(connection, UPGRADE)
             || !header_matches!(upgrade, WEBSOCKET)
             || !header_matches!(sec_websocket_version, WEBSOCKET_VERSION)
@@ -178,9 +177,9 @@ impl State<'static> {
             return self.backend_or_404_handler(req).await;
         }
         let Some(on_upgrade) = on_upgrade else {
-        error!("Empty `on_upgrade`");
-        return self.backend_or_404_handler(req).await;
-    };
+            error!("Empty `on_upgrade`");
+            return self.backend_or_404_handler(req).await;
+        };
 
         // Now we know it's a valid WebSocket request, so we can upgrade to a WebSocket.
         debug!("Upgrading to WebSocket");

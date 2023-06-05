@@ -46,7 +46,7 @@ pub async fn make_server_config(
     let config = ServerConfig::builder().with_safe_defaults();
     let mut config = if let Some(client_ca_path) = client_ca_path {
         let store = load_ca_store(client_ca_path).await?;
-        config.with_client_cert_verifier(AllowAnyAuthenticatedClient::new(store))
+        config.with_client_cert_verifier(Arc::new(AllowAnyAuthenticatedClient::new(store)))
     } else {
         config.with_no_client_auth()
     }
