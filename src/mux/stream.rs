@@ -59,7 +59,7 @@ impl<S> std::fmt::Debug for MuxStream<S> {
             .field("psh_send_remaining", &self.psh_send_remaining)
             .field("psh_recvd_since", &self.psh_recvd_since)
             .field("buf.len", &self.buf.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

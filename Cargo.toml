@@ -51,7 +51,7 @@ webpki-roots = { version = "0.23", optional = true }
 [dev-dependencies]
 ctor = "0.2"
 tempfile = "3"
-rcgen = "0.10"
+rcgen = "0.11"
 
 [features]
 default = ["rustls-native-roots", "tests-real-internet4", "penguin-binary"]

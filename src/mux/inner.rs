@@ -89,7 +89,7 @@ impl<S> std::fmt::Debug for MultiplexorInner<S> {
         f.debug_struct("MultiplexorInner")
             .field("role", &self.role)
             .field("keepalive_interval", &self.keepalive_interval)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -523,6 +523,7 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
         let Some(sender) = entry.establish(stream_data)else {
             return Err(Error::BogusSynAck);
         };
+        drop(streams);
         // Send the stream to the user
         // At the client side, we use the associated oneshot channel to send the new stream
         trace!("sending stream to user");
@@ -569,6 +570,7 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
     async fn shutdown(&mut self) {
         debug!("closing all connections");
         for (_, stream_data) in self.streams.write().await.drain() {
+            // Make sure `self.streams` is not locked in loop body
             if let MuxStreamSlot::Established(stream_data) = stream_data {
                 // Make sure the user receives `EOF`.
                 stream_data.sender.send(Bytes::new()).await.ok();

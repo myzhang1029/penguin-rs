@@ -38,6 +38,7 @@ impl<S: WebSocketStream> LockedWebSocket<S> {
         ready!(sink.poll_ready_unpin(cx))?;
         let msg = ready!(msg_fn(cx));
         let result = sink.start_send_unpin(msg);
+        drop(sink);
         trace!("message sent");
         Poll::Ready(result)
     }
