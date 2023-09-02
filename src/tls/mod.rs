@@ -34,9 +34,6 @@ pub enum Error {
     #[error("Empty client certificate store")]
     #[cfg(feature = "__rustls")]
     EmptyClientCertStore,
-    #[error("Failed to parse CA store: {0}")]
-    #[cfg(feature = "__rustls")]
-    CaStoreParse(#[from] webpki::Error),
     #[error("Rustls error: {0}")]
     #[cfg(feature = "__rustls")]
     Rustls(#[from] ::rustls::Error),

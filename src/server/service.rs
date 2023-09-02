@@ -4,7 +4,6 @@
 
 use super::websocket::handle_websocket;
 use crate::arg::BackendUrl;
-use crate::config;
 use crate::proto_version::PROTOCOL_VERSION;
 use crate::tls::make_client_https;
 use crate::Dupe;
@@ -189,12 +188,7 @@ impl State<'static> {
         tokio::spawn(async move {
             match on_upgrade.await {
                 Ok(upgraded) => {
-                    let ws = WebSocketStream::from_raw_socket(
-                        upgraded,
-                        Role::Server,
-                        Some(config::DEFAULT_WS_CONFIG),
-                    )
-                    .await;
+                    let ws = WebSocketStream::from_raw_socket(upgraded, Role::Server, None).await;
                     handle_websocket(ws).await;
                 }
                 Err(err) => {

@@ -520,7 +520,7 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
         assert_ne!(our_port, 0);
         let entry = streams.get_mut(&our_port).ok_or(Error::BogusSynAck)?;
         // Change the state of the port to `Established`
-        let Some(sender) = entry.establish(stream_data)else {
+        let Some(sender) = entry.establish(stream_data) else {
             return Err(Error::BogusSynAck);
         };
         drop(streams);

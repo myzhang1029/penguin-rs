@@ -45,8 +45,7 @@ tokio-rustls = { version = "0.24", optional = true }
 tokio-tungstenite = { version = "0.19", default-features = false }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", optional = true }
-webpki = { version = "0.22", optional = true }
-webpki-roots = { version = "0.23", optional = true }
+webpki-roots = { version = "0.25", optional = true }
 
 [dev-dependencies]
 ctor = "0.2"
@@ -60,7 +59,7 @@ default = ["rustls-native-roots", "tests-real-internet4", "penguin-binary"]
 # enabled.
 rustls-webpki-roots = ["webpki-roots", "tokio-tungstenite/rustls-tls-webpki-roots", "hyper-rustls/webpki-tokio", "__rustls"]
 rustls-native-roots = ["rustls-native-certs", "tokio-tungstenite/rustls-tls-native-roots", "hyper-rustls/native-tokio", "__rustls"]
-__rustls = ["rustls", "rustls-pemfile", "hyper-rustls", "tokio-rustls", "webpki"]
+__rustls = ["rustls", "rustls-pemfile", "hyper-rustls", "tokio-rustls"]
 nativetls = ["native-tls", "tokio-native-tls", "hyper-tls", "tokio-tungstenite/native-tls"]
 # Allow some tests that require real internet connection
 tests-real-internet4 = []

@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use crate::arg::ClientArgs;
-use crate::config;
 use crate::proto_version::PROTOCOL_VERSION;
 use crate::tls::make_tls_connector;
 use crate::Dupe;
@@ -75,8 +74,7 @@ pub async fn handshake(
         Connector::Plain
     };
     let (ws_stream, _response) =
-        connect_async_tls_with_config(req, Some(config::DEFAULT_WS_CONFIG), false, Some(connector))
-            .await?;
+        connect_async_tls_with_config(req, None, false, Some(connector)).await?;
     // We don't need to check the response now...
     debug!("WebSocket handshake succeeded");
     Ok(ws_stream)

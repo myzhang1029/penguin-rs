@@ -69,13 +69,13 @@ pub async fn make_client_config(
     let mut config = match (tls_skip_verify, client_certificate) {
         (true, Some((cert_chain, key_der))) => config
             .with_custom_certificate_verifier(Arc::new(EmptyVerifier {}))
-            .with_single_cert(cert_chain, key_der)?,
+            .with_client_auth_cert(cert_chain, key_der)?,
         (true, None) => config
             .with_custom_certificate_verifier(Arc::new(EmptyVerifier {}))
             .with_no_client_auth(),
         (false, Some((cert_chain, key_der))) => config
             .with_root_certificates(roots)
-            .with_single_cert(cert_chain, key_der)?,
+            .with_client_auth_cert(cert_chain, key_der)?,
         (false, None) => config.with_root_certificates(roots).with_no_client_auth(),
     };
     config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
@@ -95,7 +95,7 @@ fn get_system_certs() -> Result<RootCertStore, Error> {
 #[allow(clippy::unnecessary_wraps)]
 fn get_system_certs() -> Result<RootCertStore, Error> {
     let mut roots = RootCertStore::empty();
-    roots.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
+    roots.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.iter().map(|ta| {
         rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(
             ta.subject,
             ta.spki,
@@ -142,8 +142,10 @@ async fn try_load_certificate(
         let certs = certs.into_iter().map(Certificate).collect();
         // Load private key
         let key = tokio::fs::read(key).await?;
-        let Some(Item::RSAKey(key) | Item::PKCS8Key(key) | Item::ECKey(key)) = rustls_pemfile::read_one(&mut key.as_ref())? else {
-            return Err(Error::PrivateKeyNotSupported)
+        let Some(Item::RSAKey(key) | Item::PKCS8Key(key) | Item::ECKey(key)) =
+            rustls_pemfile::read_one(&mut key.as_ref())?
+        else {
+            return Err(Error::PrivateKeyNotSupported);
         };
         let key = rustls::PrivateKey(key);
         Ok(Some((certs, key)))

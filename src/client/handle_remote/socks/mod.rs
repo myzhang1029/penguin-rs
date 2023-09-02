@@ -276,7 +276,7 @@ async fn udp_relay(
     let socket = Arc::new(socket);
     loop {
         let Some((dst, dport, data, src, sport)) = handle_udp_relay_header(&socket).await? else {
-            continue
+            continue;
         };
         let client_id = handler_resources
             .add_udp_client((src, sport).into(), socket.dupe(), true)
