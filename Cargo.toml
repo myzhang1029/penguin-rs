@@ -1,6 +1,6 @@
 [package]
 name = "rusty-penguin"
-version = "0.5.2"
+version = "0.5.3"
 authors = ["Zhang Maiyun <me@myzhangll.xyz>"]
 edition = "2021"
 description = "A fast TCP/UDP tunnel, transported over HTTP WebSocket"
@@ -43,8 +43,6 @@ tokio = { version = ">=1.23.1", features = ["macros", "parking_lot", "rt", "sync
 tokio-native-tls = { version = "0.3", optional = true }
 tokio-rustls = { version = "0.24", optional = true }
 tokio-tungstenite = { version = ">=0.20.1", default-features = false }
-#tokio-tungstenite = { git = "https://github.com/snapview/tokio-tungstenite.git", rev="f4dcfec257b06a3dbab43df9b2efa7c2b7c8a6db", default-features = false }
-#tokio-tungstenite = { version = "0.19", default-features = false }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", optional = true }
 webpki-roots = { version = "0.25", optional = true }
