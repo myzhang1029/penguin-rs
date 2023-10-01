@@ -54,9 +54,8 @@ impl MaybeRetryableError for penguin_mux::Error {
         match self {
             Self::SendDatagram(e)
             | Self::SendStreamFrame(e)
-            | Self::SendPing(e)
             | Self::Next(e)
-            | Self::Flush(e) => e.retryable(),
+            | Self::PingPong(e) => e.retryable(),
             Self::Closed => true,
             _ => false,
         }

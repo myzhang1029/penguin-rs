@@ -55,18 +55,15 @@ pub enum Error {
     /// WebSocket error when polling the next message.
     #[error("Failed to receive message: {0}")]
     Next(crate::ws::Error),
-    /// WebSocket error when flushing messages.
-    #[error("Failed to flush messages: {0}")]
-    Flush(crate::ws::Error),
     /// WebSocket error when sending a datagram.
     #[error("Failed to send datagram: {0}")]
     SendDatagram(crate::ws::Error),
     /// WebSocket error when sending a stream frame.
     #[error("Failed to send stream frame: {0}")]
     SendStreamFrame(crate::ws::Error),
-    /// WebSocket error when sending a ping.
-    #[error("Failed to send ping: {0}")]
-    SendPing(crate::ws::Error),
+    /// WebSocket error when working with [Ping](Message::Ping)/[Pong](Message::Pong) frames.
+    #[error("Failed to send ping/pong: {0}")]
+    PingPong(crate::ws::Error),
 
     // These are the ones that shouldn't normally happen
     /// Datagram target host longer than 255 octets.
@@ -201,11 +198,6 @@ impl<S: WebSocketStream> Multiplexor<S> {
             .send_with(|| StreamFrame::new_syn(host, port, sport, config::RWND).into())
             .await
             .map_err(Error::SendStreamFrame)?;
-        self.inner
-            .ws
-            .flush_ignore_closed()
-            .await
-            .map_err(Error::Flush)?;
         trace!("sending stream to user");
         let stream = stream_rx
             .await
@@ -272,6 +264,7 @@ impl<S: WebSocketStream> Multiplexor<S> {
     #[inline]
     pub async fn send_datagram(&self, frame: DatagramFrame) -> Result<()> {
         let payload: Bytes = Vec::<u8>::try_from(frame)?.into();
+        // Always flush datagrams immediately
         self.inner
             .ws
             .send_with(|| Message::Binary(payload.dupe().into()))

@@ -113,6 +113,7 @@ impl<S> AsyncRead for MuxStream<S> {
                 // `Psh` frames received - `Ack`ed amount is correct.
                 let amount_to_ack = self.psh_recvd_since.swap(0, Ordering::Relaxed);
                 // Send an `Ack` frame
+                debug!("queueing `Ack` of {amount_to_ack} frames");
                 self.ack_tx
                     .send((self.our_port, self.their_port, amount_to_ack))
                     .ok();
@@ -163,8 +164,13 @@ where
             debug!("stream has been closed, returning `BrokenPipe`");
             return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
         }
+        // Our purpose is to transparently pipe data with `Sink`/`Stream`,
+        // so when some data arrives, we really should flush it as soon as
+        // practical. XXX: performance penalty?
         // `ready`: nothing happens if return here
-        ready!(self.ws.poll_send_with(cx, |cx| {
+        ready!(self.ws.poll_flush(cx)).map_err(WebSocketError::into_io_error)?;
+        // `ready`: extra flushes are harmless although they are not necessary
+        ready!(self.ws.poll_feed_with(cx, |cx| {
             loop {
                 // Atomic ordering: we don't really have a critical section here,
                 // so `Relaxed` should be enough.
@@ -174,6 +180,9 @@ where
                     // We have reached the congestion window limit. Wait for an `Ack`
                     debug!("waiting for `Ack`");
                     self.writer_waker.register(cx.waker());
+                    // Since all writes start with `poll_flush`, we don't need to
+                    // flush here. There is actually no way to `poll_flush` without
+                    // magic.
                     return Poll::Pending;
                 }
                 let new = original - 1;
@@ -221,7 +230,7 @@ where
         if self.can_write.load(Ordering::Relaxed) {
             // Can write means that things above have not happened, so we should send a `Fin` frame.
             // `ready`: nothing happens if return here
-            ready!(self.ws.poll_send_with(cx, |_cx| {
+            ready!(self.ws.poll_feed_with(cx, |_cx| {
                 Poll::Ready(StreamFrame::new_fin(self.our_port, self.their_port).into())
             }))
             .map_err(WebSocketError::into_io_error)?;

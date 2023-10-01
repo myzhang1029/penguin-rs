@@ -7,6 +7,22 @@ use bytes::Bytes;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, info};
 
+// Looks like since `mux` is a separate target (i.e. lib vs bin), we need to
+// have a separate `test_setup_log` function here.
+#[ctor::ctor]
+fn test_setup_log() {
+    use tracing_subscriber::{filter, fmt, prelude::*};
+    let fmt_layer = fmt::Layer::default()
+        .compact()
+        .with_thread_ids(true)
+        .with_timer(fmt::time::time())
+        .with_writer(std::io::stderr);
+    tracing_subscriber::registry()
+        .with(filter::LevelFilter::INFO)
+        .with(fmt_layer)
+        .init();
+}
+
 #[tokio::test]
 async fn connect_succeeds() {
     let (client, server) = crate::ws::mock::get_pair().await;
@@ -38,12 +54,14 @@ async fn datagram_channel_passes_data() {
     let server_task = tokio::spawn(async move {
         for _ in 0..64 {
             let dgram = server_mux.get_datagram().await.unwrap();
+            debug!("Server got datagram");
             server_mux.send_datagram(dgram).await.unwrap();
         }
     });
 
     for _ in 0..64 {
         let payload: Bytes = (0..32768).map(|_| rand::random::<u8>()).collect();
+        debug!("Client sending datagram");
         client_mux
             .send_datagram(DatagramFrame {
                 host: Bytes::from_static("example.com".as_bytes()),
@@ -53,6 +71,7 @@ async fn datagram_channel_passes_data() {
             })
             .await
             .unwrap();
+        debug!("Client awaiting datagram");
         let recvd = client_mux.get_datagram().await.unwrap();
         assert_eq!(recvd.host, "example.com".as_bytes());
         assert_eq!(recvd.port, 53);

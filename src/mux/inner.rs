@@ -140,16 +140,15 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
         if let Some(keepalive_interval) = self.keepalive_interval {
             let mut interval = tokio::time::interval(keepalive_interval);
             // If we missed a tick, it is probably doing networking, so we don't need to
-            // send a ping
+            // make up for it.
             interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
             loop {
                 interval.tick().await;
                 trace!("sending ping");
-                // Tungstenite should deliver `Ping` immediately
                 self.ws
                     .send_with(|| Message::Ping(vec![]))
                     .await
-                    .map_err(Error::SendPing)?;
+                    .map_err(Error::PingPong)?;
             }
         } else {
             futures_util::future::pending::<()>().await;
@@ -256,7 +255,10 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
             Message::Ping(_data) => {
                 // `tokio-tungstenite` handles `Ping` messages automatically
                 trace!("received ping");
-                self.ws.flush_ignore_closed().await.map_err(Error::Flush)?;
+                self.ws
+                    .flush_ignore_closed()
+                    .await
+                    .map_err(Error::PingPong)?;
                 Ok(false)
             }
             Message::Pong(_data) => {
@@ -305,8 +307,7 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
             self.ws
                 .send_with(|| StreamFrame::new_rst(our_port, their_port).into())
                 .await
-                .map_err(Error::SendStreamFrame)?;
-            self.ws.flush_ignore_closed().await.map_err(Error::Flush)
+                .map_err(Error::SendStreamFrame)
         };
         match flag {
             StreamFlag::Syn => {
@@ -352,6 +353,7 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
                     return Err(super::frame::Error::FrameTooShort.into());
                 }
                 let peer_processed = data.get_u64();
+                debug!("peer processed {peer_processed} frames");
                 let streams = self.streams.read().await;
                 if let Some(MuxStreamSlot::Established(stream_data)) = streams.get(&our_port) {
                     // Atomic ordering: as long as the value is incremented atomically,
@@ -468,7 +470,6 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
             .send_with(|| StreamFrame::new_synack(our_port, their_port, config::RWND).into())
             .await
             .map_err(Error::SendStreamFrame)?;
-        self.ws.flush_ignore_closed().await.map_err(Error::Flush)?;
         // At the server side, we use `server_stream_tx` to send the new stream to the
         // user.
         trace!("sending stream to user");
@@ -556,7 +557,6 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
                     .send_with(|| StreamFrame::new_rst(our_port, their_port).into())
                     .await
                     .ok();
-                self.ws.flush_ignore_closed().await.ok();
             }
             // If there is a writer waiting for `Ack`, wake it up because it will never receive one.
             // Waking it here and the user should receive a `BrokenPipe` error.
