@@ -41,10 +41,9 @@ some functionalities:
 
 - There is no server keep-alive because client keep-alive is enough.
 
-- There is no reverse port forwarding because it is equivalent to spawning
-  another server on the client side.
-
 - There is no support to acquire an ACME certificate on-the-fly.
+
+- There is no reverse port forwarding because I am too lazy. (TODO!)
 
 Other than that, this project offers these functionalities compared to
 `chisel`:
