@@ -1,6 +1,7 @@
 //! Hyper services for the server.
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
+// TODO: revisit expect
 
 use super::websocket::handle_websocket;
 use crate::arg::BackendUrl;
@@ -10,9 +11,10 @@ use base64::engine::general_purpose::STANDARD as B64_STANDARD_ENGINE;
 use base64::Engine;
 use bytes::Bytes;
 use http::{header, HeaderValue, Method, Request, Response, StatusCode, Uri};
-use http_body_util::Full as FullBody;
+use http_body_util::{BodyExt, Full as FullBody};
 use hyper::service::Service;
 use hyper::upgrade::OnUpgrade;
+use hyper_util::rt::TokioIo;
 use sha1::{Digest, Sha1};
 use std::convert::Infallible;
 use std::future::Future;
@@ -92,10 +94,11 @@ impl State<'static> {
     /// Reverse proxy and 404
     async fn backend_or_404_handler<B>(
         self,
-        mut req: Request<B>,
+        req: Request<B>,
     ) -> Result<Response<FullBody<Bytes>>, Infallible>
     where
         B: hyper::body::Body,
+        <B as hyper::body::Body>::Error: std::fmt::Debug,
     {
         if let Some(BackendUrl {
             scheme,
@@ -144,10 +147,11 @@ impl State<'static> {
                         .expect("Failed to convert header (this is a bug)"),
                 );
             }
+            let body = body.collect().await.unwrap().to_bytes();
             let req = self
                 .client
                 .request(method, uri)
-                .body(body.into())
+                .body(body)
                 .headers(new_headers)
                 .build()
                 .expect("Failed to build request (this is a bug)");
@@ -185,6 +189,7 @@ impl State<'static> {
     ) -> Result<Response<FullBody<Bytes>>, Infallible>
     where
         B: hyper::body::Body,
+        <B as hyper::body::Body>::Error: std::fmt::Debug,
     {
         let on_upgrade = req.extensions_mut().remove::<OnUpgrade>();
         let headers = req.headers();
@@ -227,7 +232,12 @@ impl State<'static> {
         tokio::spawn(async move {
             match on_upgrade.await {
                 Ok(upgraded) => {
-                    let ws = WebSocketStream::from_raw_socket(upgraded, Role::Server, None).await;
+                    let ws = WebSocketStream::from_raw_socket(
+                        TokioIo::new(upgraded),
+                        Role::Server,
+                        None,
+                    )
+                    .await;
                     handle_websocket(ws).await;
                 }
                 Err(err) => {
@@ -250,7 +260,9 @@ impl State<'static> {
 
 impl<B> Service<Request<B>> for State<'static>
 where
-    B: hyper::body::Body,
+    B: hyper::body::Body + Send + 'static,
+    <B as hyper::body::Body>::Error: std::fmt::Debug,
+    <B as hyper::body::Body>::Data: Send,
 {
     type Response = Response<FullBody<Bytes>>;
     type Error = Infallible;
@@ -320,7 +332,7 @@ mod test {
     #[tokio::test]
     async fn test_obfs_or_not() {
         // Test `/health` without obfuscation
-        let mut state = State::new(None, None, "not found in the test", false);
+        let state = State::new(None, None, "not found in the test", false);
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/health")
@@ -331,7 +343,7 @@ mod test {
         let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(body_bytes, "OK");
         // Test `/health` with obfuscation
-        let mut state = State::new(None, None, "not found in the test", true);
+        let state = State::new(None, None, "not found in the test", true);
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/health")
@@ -342,7 +354,7 @@ mod test {
         let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(body_bytes, "not found in the test");
         // Test `/version` without obfuscation
-        let mut state = State::new(None, None, "not found in the test", false);
+        let state = State::new(None, None, "not found in the test", false);
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/version")
@@ -353,7 +365,7 @@ mod test {
         let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(body_bytes, env!("CARGO_PKG_VERSION"));
         // Test `/version` with obfuscation
-        let mut state = State::new(None, None, "not found in the test", true);
+        let state = State::new(None, None, "not found in the test", true);
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/health")
@@ -373,7 +385,7 @@ mod test {
         static BACKEND: Lazy<BackendUrl> =
             Lazy::new(|| BackendUrl::from_str("http://httpbin.org").unwrap());
         // Test that the backend is actually working
-        let mut state = State::new(Some(&BACKEND), None, "not found in the test", false);
+        let state = State::new(Some(&BACKEND), None, "not found in the test", false);
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/status/200")
@@ -381,7 +393,7 @@ mod test {
             .unwrap();
         let resp = state.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let mut state = State::new(Some(&BACKEND), None, "not found in the test", false);
+        let state = State::new(Some(&BACKEND), None, "not found in the test", false);
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/status/418")
@@ -394,7 +406,7 @@ mod test {
     #[tokio::test]
     async fn test_stealth_websocket_upgrade_from_request_parts() {
         // Test missing upgrade header
-        let mut state = State::new(None, None, "not found in the test", false);
+        let state = State::new(None, None, "not found in the test", false);
         let req = Request::builder()
             .method(Method::GET)
             .header("connection", "UpGrAdE")
@@ -409,7 +421,7 @@ mod test {
         assert_eq!(body_bytes, "not found in the test");
         // Test wrong PSK
         static PSK: HeaderValue = HeaderValue::from_static("correct PSK");
-        let mut state = State::new(None, Some(&PSK), "not found in the test", false);
+        let state = State::new(None, Some(&PSK), "not found in the test", false);
         let req = Request::builder()
             .method(Method::GET)
             .header("connection", "UpGrAdE")
