@@ -157,11 +157,26 @@ impl State<'static> {
                 .expect("Failed to build request (this is a bug)");
             match self.client.execute(req).await {
                 Ok(resp) => {
-                    let resp = Response::new(FullBody::new(
-                        resp.bytes()
-                            .await
-                            .expect("Failed to read response body (this is a bug)"),
-                    ));
+                    let status = resp.status().as_u16();
+                    let mut resp_builder = Response::builder().status(status);
+                    {
+                        let headers = resp.headers();
+                        for (name, value) in headers.iter() {
+                            resp_builder = resp_builder.header(
+                                name.as_str(),
+                                value
+                                    .to_str()
+                                    .expect("Failed to convert header (this is a bug)"),
+                            );
+                        }
+                    }
+                    let body = resp
+                        .bytes()
+                        .await
+                        .expect("Failed to read response body (this is a bug)");
+                    let resp = resp_builder
+                        .body(FullBody::new(body))
+                        .expect("Failed to build response (this is a bug)");
                     Ok(resp)
                 }
                 Err(e) => {
@@ -384,6 +399,33 @@ mod test {
         use std::str::FromStr;
         static BACKEND: Lazy<BackendUrl> =
             Lazy::new(|| BackendUrl::from_str("http://httpbin.org").unwrap());
+        // Test that the backend is actually working
+        let state = State::new(Some(&BACKEND), None, "not found in the test", false);
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("http://example.com/status/200")
+            .body(FullBody::new(Bytes::new()))
+            .unwrap();
+        let resp = state.call(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let state = State::new(Some(&BACKEND), None, "not found in the test", false);
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("http://example.com/status/418")
+            .body(FullBody::new(Bytes::new()))
+            .unwrap();
+        let resp = state.call(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::IM_A_TEAPOT);
+    }
+
+    #[cfg(any(feature = "tests-real-internet4", feature = "tests-real-internet6"))]
+    #[tokio::test]
+    async fn test_backend_tls() {
+        // Check that this test makes sense: remove TLS deps of `reqwest`
+        use once_cell::sync::Lazy;
+        use std::str::FromStr;
+        static BACKEND: Lazy<BackendUrl> =
+            Lazy::new(|| BackendUrl::from_str("https://httpbin.org").unwrap());
         // Test that the backend is actually working
         let state = State::new(Some(&BACKEND), None, "not found in the test", false);
         let req = Request::builder()
