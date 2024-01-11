@@ -8,7 +8,7 @@ mod websocket;
 
 use std::net::SocketAddr;
 
-use self::service::{MakeStateService, State};
+use self::service::State;
 use crate::arg::ServerArgs;
 use crate::tls::{make_tls_identity, reload_tls_identity};
 use crate::Dupe;
@@ -21,7 +21,7 @@ use tokio::net::TcpListener;
 use tokio_tungstenite::WebSocketStream;
 use tracing::{error, info, trace};
 
-type WebSocket = WebSocketStream<Upgraded>;
+type WebSocket = WebSocketStream<TokioIo<Upgraded>>;
 
 /// Server Errors
 #[derive(Debug, Error)]
@@ -85,12 +85,20 @@ pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
     }
     loop {
         let (stream, _) = listener.accept().await?;
+        let hyper_io = TokioIo::new(stream);
         let state = state.dupe();
         tokio::spawn(async move {
-            auto::Builder::new(TokioExecutor::new())
-                .serve_connection(TokioIo::new(stream), state)
-                .await
-                .unwrap_or_else(|err| error!("Error: {err}"));
+            let conn = auto::Builder::new(TokioExecutor::new());
+            let conn = conn.serve_connection_with_upgrades(hyper_io, state);
+            let conn = assert_send(conn);
+            conn.await.unwrap_or_else(|err| error!("Error: {err}"));
         });
     }
+}
+
+/// Workaround at https://github.com/rust-lang/rust/issues/102211#issuecomment-1367900125
+fn assert_send<'u, R>(
+    fut: impl 'u + Send + std::future::Future<Output = R>,
+) -> impl 'u + Send + std::future::Future<Output = R> {
+    fut
 }
