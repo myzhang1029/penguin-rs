@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-//mod acceptor;
 #[cfg(feature = "nativetls")]
 mod native;
 #[cfg(feature = "__rustls")]
@@ -16,8 +15,6 @@ use native::{make_client_config, make_server_config, TlsIdentityInner};
 use std::sync::Arc;
 use thiserror::Error;
 use tokio_tungstenite::Connector;
-
-//pub use acceptor::TlsAcceptor;
 
 /// A hot-swappable container for a TLS key and certificate.
 pub type TlsIdentity = Arc<ArcSwap<TlsIdentityInner>>;
@@ -33,6 +30,9 @@ pub enum Error {
     #[error("Rustls error: {0}")]
     #[cfg(feature = "__rustls")]
     Rustls(#[from] ::rustls::Error),
+    #[error("Verifier error: {0}")]
+    #[cfg(feature = "__rustls")]
+    Verifier(#[from] ::rustls::client::VerifierBuilderError),
     #[error("Failed to parse certificates: {0}")]
     #[cfg(feature = "nativetls")]
     CertParse(#[from] native_tls::Error),
