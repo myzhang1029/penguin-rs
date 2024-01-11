@@ -7,7 +7,6 @@ use std::{
     str::FromStr,
     time::Duration,
 };
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 use tempfile::TempDir;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -73,9 +72,7 @@ fn make_client_args(servhost: &str, servport: u16, remotes: Vec<Remote>) -> arg:
 
 /// Generate a self-signed server cert into a temporary directory.
 /// Returns the path to the directory. The cert is named `cert.pem` and the key is named `privkey.pem`.
-// macOS and Windows's native TLS don't support Ed25519 nor ECDSA-based certificates.
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
-async fn make_server_cert() -> TempDir {
+async fn make_server_cert_ecdsa() -> TempDir {
     let mut cert_params = rcgen::CertificateParams::new(vec!["localhost".to_string()]);
     cert_params.alg = &rcgen::PKCS_ECDSA_P384_SHA384;
     let dir = tempfile::tempdir().unwrap();
@@ -158,8 +155,10 @@ async fn test_it_works_v6() {
     client_task.abort();
 }
 
+
+// `native_tls` on macOS and Windows doesn't support reading Ed25519 nor ECDSA-based certificates.
 #[tokio::test]
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+#[cfg(not(all(feature = "nativetls", any(target_os = "macos", target_os = "windows"))))]
 async fn test_it_works_tls_simple() {
     static SERVER_ARGS: OnceCell<arg::ServerArgs> = OnceCell::new();
     static CLIENT_ARGS: Lazy<arg::ClientArgs> = Lazy::new(|| arg::ClientArgs {
@@ -183,7 +182,7 @@ async fn test_it_works_tls_simple() {
     });
 
     let mut serv_cfg = make_server_args("127.0.0.1", 20353);
-    let cert_dir = make_server_cert().await;
+    let cert_dir = make_server_cert_ecdsa().await;
     serv_cfg.tls_cert = Some(format!("{}/cert.pem", cert_dir.path().display()));
     serv_cfg.tls_key = Some(format!("{}/privkey.pem", cert_dir.path().display()));
     SERVER_ARGS.set(serv_cfg).unwrap();
