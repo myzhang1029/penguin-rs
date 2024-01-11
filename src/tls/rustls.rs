@@ -4,30 +4,54 @@
 
 use super::Error;
 use rustls::{
-    client::{ServerCertVerified, ServerCertVerifier, ServerName},
-    server::AllowAnyAuthenticatedClient,
-    Certificate, ClientConfig, RootCertStore, ServerConfig,
+    client::danger::{ServerCertVerified, ServerCertVerifier},
+    pki_types::{CertificateDer, PrivateKeyDer, ServerName},
+    server::WebPkiClientVerifier,
+    ClientConfig, RootCertStore, ServerConfig,
 };
-use rustls_pemfile::Item;
 use std::sync::Arc;
 
 /// Type alias for the inner TLS identity type.
 pub type TlsIdentityInner = ServerConfig;
 
 /// Skip TLS verification
+#[derive(Debug)]
 pub struct EmptyVerifier;
 
 impl ServerCertVerifier for EmptyVerifier {
     fn verify_server_cert(
         &self,
-        _: &Certificate,
-        _: &[Certificate],
-        _: &ServerName,
-        _: &mut dyn Iterator<Item = &[u8]>,
-        _: &[u8],
-        _: std::time::SystemTime,
+        end_entity: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        server_name: &ServerName<'_>,
+        ocsp_response: &[u8],
+        now: rustls::pki_types::UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
         Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        // XXX: Should we skip signature verification?
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        // XXX: Should we skip signature verification?
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        vec![]
     }
 }
 
@@ -43,10 +67,11 @@ pub async fn make_server_config(
         .await?
         .expect("`try_load_certificate` returned `None` (this is a bug)");
     // Build config
-    let config = ServerConfig::builder().with_safe_defaults();
+    let config = ServerConfig::builder();
     let mut config = if let Some(client_ca_path) = client_ca_path {
         let store = load_ca_store(client_ca_path).await?;
-        config.with_client_cert_verifier(Arc::new(AllowAnyAuthenticatedClient::new(store)))
+        let verifier = WebPkiClientVerifier::builder(Arc::new(store)).build()?;
+        config.with_client_cert_verifier(verifier)
     } else {
         config.with_no_client_auth()
     }
@@ -61,16 +86,18 @@ pub async fn make_client_config(
     ca_path: Option<&str>,
     tls_skip_verify: bool,
 ) -> Result<ClientConfig, Error> {
-    let config = ClientConfig::builder().with_safe_defaults();
+    let config = ClientConfig::builder();
     // Whether there is a custom CA store
     let roots = generate_rustls_rootcertstore(ca_path).await?;
     let client_certificate = try_load_certificate(key_path, cert_path).await?;
     // Whether to skip TLS verification and whether there is a client certificate
     let mut config = match (tls_skip_verify, client_certificate) {
         (true, Some((cert_chain, key_der))) => config
+            .dangerous()
             .with_custom_certificate_verifier(Arc::new(EmptyVerifier {}))
             .with_client_auth_cert(cert_chain, key_der)?,
         (true, None) => config
+            .dangerous()
             .with_custom_certificate_verifier(Arc::new(EmptyVerifier {}))
             .with_no_client_auth(),
         (false, Some((cert_chain, key_der))) => config
@@ -87,7 +114,7 @@ pub async fn make_client_config(
 fn get_system_certs() -> Result<RootCertStore, Error> {
     let mut roots = RootCertStore::empty();
     for cert in rustls_native_certs::load_native_certs()? {
-        roots.add(&Certificate(cert.0))?;
+        roots.add(cert)?;
     }
     Ok(roots)
 }
@@ -95,13 +122,7 @@ fn get_system_certs() -> Result<RootCertStore, Error> {
 #[allow(clippy::unnecessary_wraps)]
 fn get_system_certs() -> Result<RootCertStore, Error> {
     let mut roots = RootCertStore::empty();
-    roots.add_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.iter().map(|ta| {
-        rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(
-            ta.subject,
-            ta.spki,
-            ta.name_constraints,
-        )
-    }));
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     Ok(roots)
 }
 
@@ -109,8 +130,9 @@ fn get_system_certs() -> Result<RootCertStore, Error> {
 async fn load_ca_store(ca_path: &str) -> Result<RootCertStore, Error> {
     let mut store = RootCertStore::empty();
     let client_ca = tokio::fs::read(ca_path).await?;
-    let client_ca = rustls_pemfile::certs(&mut client_ca.as_ref())?;
-    let (new, _) = store.add_parsable_certificates(&client_ca);
+    let client_ca: std::io::Result<Vec<CertificateDer<'_>>> =
+        rustls_pemfile::certs(&mut client_ca.as_ref()).collect();
+    let (new, _) = store.add_parsable_certificates(client_ca?.into_iter());
     if new == 0 {
         Err(Error::EmptyClientCertStore)
     } else {
@@ -134,21 +156,18 @@ async fn generate_rustls_rootcertstore(
 async fn try_load_certificate(
     tls_key: Option<&str>,
     tls_cert: Option<&str>,
-) -> Result<Option<(Vec<Certificate>, rustls::PrivateKey)>, Error> {
+) -> Result<Option<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)>, Error> {
     if let (Some(key), Some(cert)) = (tls_key, tls_cert) {
         // Load certificate chain
         let certs = tokio::fs::read(cert).await?;
-        let certs = rustls_pemfile::certs(&mut certs.as_ref())?;
-        let certs = certs.into_iter().map(Certificate).collect();
+        let certs: std::io::Result<Vec<CertificateDer<'_>>> =
+            rustls_pemfile::certs(&mut certs.as_ref()).collect();
         // Load private key
         let key = tokio::fs::read(key).await?;
-        let Some(Item::RSAKey(key) | Item::PKCS8Key(key) | Item::ECKey(key)) =
-            rustls_pemfile::read_one(&mut key.as_ref())?
-        else {
+        let Some(key) = rustls_pemfile::private_key(&mut key.as_ref())? else {
             return Err(Error::PrivateKeyNotSupported);
         };
-        let key = rustls::PrivateKey(key);
-        Ok(Some((certs, key)))
+        Ok(Some((certs?, key)))
     } else {
         Ok(None)
     }
@@ -201,7 +220,10 @@ mod test {
         .unwrap();
         let (loaded_cert, loaded_key) = loaded_cert;
         assert_eq!(loaded_cert.len(), 1);
-        assert_eq!(loaded_key.0, custom_crt.serialize_private_key_der());
+        assert_eq!(
+            loaded_key.secret_der(),
+            custom_crt.serialize_private_key_der()
+        );
         let mut cert_params = rcgen::CertificateParams::new(vec!["example.com".into()]);
         cert_params.alg = &rcgen::PKCS_ED25519;
         let custom_crt = rcgen::Certificate::from_params(cert_params).unwrap();
@@ -218,7 +240,10 @@ mod test {
         .unwrap();
         let (loaded_cert, loaded_key) = loaded_cert;
         assert_eq!(loaded_cert.len(), 1);
-        assert_eq!(loaded_key.0, custom_crt.serialize_private_key_der());
+        assert_eq!(
+            loaded_key.secret_der(),
+            custom_crt.serialize_private_key_der()
+        );
     }
 
     #[tokio::test]

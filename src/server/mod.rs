@@ -6,14 +6,18 @@ mod forwarder;
 mod service;
 mod websocket;
 
+use std::net::SocketAddr;
+
 use self::service::{MakeStateService, State};
 use crate::arg::ServerArgs;
-use crate::tls::{make_tls_identity, reload_tls_identity, TlsAcceptor};
+use crate::tls::{make_tls_identity, reload_tls_identity};
 use crate::Dupe;
-use hyper::server::conn::AddrIncoming;
 use hyper::upgrade::Upgraded;
-use hyper::Server;
+use hyper_util::rt::tokio::TokioExecutor;
+use hyper_util::rt::TokioIo;
+use hyper_util::server::conn::auto;
 use thiserror::Error;
+use tokio::net::TcpListener;
 use tokio_tungstenite::WebSocketStream;
 use tracing::{error, info, trace};
 
@@ -28,15 +32,17 @@ pub enum Error {
     Tls(#[from] crate::tls::Error),
     #[error("Cannot register signal handler: {0}")]
     Signal(std::io::Error),
-    #[error("HTTP server error: {0}")]
-    Hyper(#[from] hyper::Error),
+    #[error("HTTP server I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    // #[error("HTTP server error: {0}")]
+    // Hyper(#[from] hyper::Error),
 }
 
 #[tracing::instrument(level = "trace")]
 pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
     let host = crate::parse_remote::remove_brackets(&args.host);
-    let sockaddr = (host.parse::<std::net::IpAddr>()?, args.port).into();
-    let incoming = AddrIncoming::bind(&sockaddr)?;
+    let sockaddr: SocketAddr = (host.parse::<std::net::IpAddr>()?, args.port).into();
+    let listener = TcpListener::bind(sockaddr).await?;
 
     let state = State::new(
         args.backend.as_ref(),
@@ -74,14 +80,17 @@ pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
                 }
             });
         }
-        Server::builder(TlsAcceptor::new(tls_config, incoming))
-            .serve(MakeStateService(state))
-            .await?;
     } else {
         info!("Listening on ws://{sockaddr}/ws");
-        Server::builder(incoming)
-            .serve(MakeStateService(state))
-            .await?;
     }
-    Ok(())
+    loop {
+        let (stream, _) = listener.accept().await?;
+        let state = state.dupe();
+        tokio::spawn(async move {
+            auto::Builder::new(TokioExecutor::new())
+                .serve_connection(TokioIo::new(stream), state)
+                .await
+                .unwrap_or_else(|err| error!("Error: {err}"));
+        });
+    }
 }

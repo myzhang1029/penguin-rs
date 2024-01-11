@@ -5,25 +5,18 @@
 use super::websocket::handle_websocket;
 use crate::arg::BackendUrl;
 use crate::proto_version::PROTOCOL_VERSION;
-use crate::tls::make_client_https;
 use crate::Dupe;
 use base64::engine::general_purpose::STANDARD as B64_STANDARD_ENGINE;
 use base64::Engine;
+use bytes::Bytes;
 use http::{header, HeaderValue, Method, Request, Response, StatusCode, Uri};
-use hyper::client::HttpConnector;
+use http_body_util::Full as FullBody;
 use hyper::service::Service;
 use hyper::upgrade::OnUpgrade;
-use hyper::{Body, Client};
-#[cfg(feature = "__rustls")]
-use hyper_rustls::HttpsConnector;
-#[cfg(feature = "nativetls")]
-use hyper_tls::HttpsConnector;
 use sha1::{Digest, Sha1};
 use std::convert::Infallible;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
 use tokio_tungstenite::tungstenite::protocol::Role;
 use tokio_tungstenite::WebSocketStream;
 use tracing::{debug, error, warn};
@@ -64,8 +57,8 @@ pub(super) struct State<'a> {
     pub not_found_resp: &'a str,
     /// Whether to obfuscate
     pub obfs: bool,
-    /// Hyper client
-    pub client: Arc<Client<HttpsConnector<HttpConnector>, Body>>,
+    /// Reqwest client
+    pub client: reqwest::Client,
 }
 
 impl<'a> Dupe for State<'a> {
@@ -92,15 +85,18 @@ impl State<'static> {
             ws_psk,
             not_found_resp,
             obfs,
-            client: Arc::new(Client::builder().build(make_client_https())),
+            client: reqwest::Client::new(),
         }
     }
 
     /// Reverse proxy and 404
-    async fn backend_or_404_handler(
+    async fn backend_or_404_handler<B>(
         self,
-        mut req: Request<Body>,
-    ) -> Result<Response<Body>, Infallible> {
+        mut req: Request<B>,
+    ) -> Result<Response<FullBody<Bytes>>, Infallible>
+    where
+        B: hyper::body::Body,
+    {
         if let Some(BackendUrl {
             scheme,
             authority,
@@ -119,14 +115,51 @@ impl State<'static> {
                 .authority(authority.dupe())
                 .path_and_query(format!("{}{req_path_query}", backend_path.path()))
                 .build()
-                .expect("Failed to build URI for backend (this is a bug)");
-            *req.uri_mut() = uri;
+                .expect("Failed to build URI for backend (this is a bug)")
+                .to_string();
+            // XXX: This bridge between hyper and reqwest is very ugly. They are actually the same
+            // type, so I have no idea why reqwest doesn't just use http::Request and http::Response.
+            // This is no longer relevant since we're using reqwest instead of hyper.
+            // Kept here for reference.
             // This may not be the best way to do this, but to avoid panicking if
             // we have a HTTP/2 request, but `backend` does not support h2, let's
             // downgrade to HTTP/1.1 and let them upgrade if they want to.
-            *req.version_mut() = http::version::Version::default();
-            match self.client.request(req).await {
-                Ok(resp) => Ok(resp),
+            // *req.version_mut() = http::version::Version::default();
+            let (parts, body) = req.into_parts();
+            let method = parts
+                .method
+                .as_str()
+                .as_bytes()
+                .try_into()
+                .expect("Failed to convert hyper method to reqwest method (this is a bug)");
+            let headers = parts.headers;
+            let mut new_headers = reqwest::header::HeaderMap::with_capacity(headers.len());
+            for (name, value) in headers.iter() {
+                new_headers.insert(
+                    reqwest::header::HeaderName::try_from(name.as_str())
+                        .expect("Failed to convert header (this is a bug)"),
+                    value
+                        .as_bytes()
+                        .try_into()
+                        .expect("Failed to convert header (this is a bug)"),
+                );
+            }
+            let req = self
+                .client
+                .request(method, uri)
+                .body(body.into())
+                .headers(new_headers)
+                .build()
+                .expect("Failed to build request (this is a bug)");
+            match self.client.execute(req).await {
+                Ok(resp) => {
+                    let resp = Response::new(FullBody::new(
+                        resp.bytes()
+                            .await
+                            .expect("Failed to read response body (this is a bug)"),
+                    ));
+                    Ok(resp)
+                }
                 Err(e) => {
                     error!("Failed to proxy request to backend: {}", e);
                     self.not_found_handler()
@@ -138,15 +171,21 @@ impl State<'static> {
     }
 
     /// 404 handler
-    fn not_found_handler(self) -> Result<Response<Body>, Infallible> {
+    fn not_found_handler(self) -> Result<Response<FullBody<Bytes>>, Infallible> {
         Ok(Response::builder()
             .status(StatusCode::NOT_FOUND)
-            .body(Body::from(self.not_found_resp))
+            .body(FullBody::new(self.not_found_resp.into()))
             .expect("Failed to build 404 response (this is a bug)"))
     }
 
     /// Check the PSK and protocol version and upgrade to a WebSocket if the PSK matches (if required).
-    pub async fn ws_handler(self, mut req: Request<Body>) -> Result<Response<Body>, Infallible> {
+    pub async fn ws_handler<B>(
+        self,
+        mut req: Request<B>,
+    ) -> Result<Response<FullBody<Bytes>>, Infallible>
+    where
+        B: hyper::body::Body,
+    {
         let on_upgrade = req.extensions_mut().remove::<OnUpgrade>();
         let headers = req.headers();
         let connection = headers.get(header::CONNECTION);
@@ -204,28 +243,31 @@ impl State<'static> {
             .header(header::UPGRADE, &WEBSOCKET)
             .header(header::SEC_WEBSOCKET_PROTOCOL, &WANTED_PROTOCOL)
             .header(header::SEC_WEBSOCKET_ACCEPT, sec_websocket_accept)
-            .body(Body::empty())
+            .body(FullBody::new(Bytes::new()))
             .expect("Failed to build WebSocket response (this is a bug)"))
     }
 }
 
-impl Service<Request<Body>> for State<'static> {
-    type Response = Response<Body>;
+impl<B> Service<Request<B>> for State<'static>
+where
+    B: hyper::body::Body,
+{
+    type Response = Response<FullBody<Bytes>>;
     type Error = Infallible;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
-    fn poll_ready(&mut self, _: &mut Context) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
     /// Hyper service handler
-    fn call(&mut self, req: Request<Body>) -> Self::Future {
+    fn call(&self, req: Request<B>) -> Self::Future {
         // Only allow `/health` and `/version` if not obfuscating
         if req.uri().path() == "/health" && !self.obfs {
-            return Box::pin(async { Ok(Response::new(Body::from("OK"))) });
+            return Box::pin(async { Ok(Response::new(FullBody::new(Bytes::from_static(b"OK")))) });
         }
         if req.uri().path() == "/version" && !self.obfs {
-            return Box::pin(async { Ok(Response::new(Body::from(env!("CARGO_PKG_VERSION")))) });
+            return Box::pin(async {
+                Ok(Response::new(FullBody::new(Bytes::from_static(
+                    env!("CARGO_PKG_VERSION").as_bytes(),
+                ))))
+            });
         }
         // If `/ws`, handle WebSocket
         if req.uri().path() == "/ws" {
@@ -251,11 +293,7 @@ impl<T> Service<T> for MakeStateService {
     type Error = Infallible;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
-    fn poll_ready(&mut self, _: &mut Context) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn call(&mut self, _: T) -> Self::Future {
+    fn call(&self, _: T) -> Self::Future {
         let cloned_self = self.dupe();
         Box::pin(async { Ok(cloned_self.0) })
     }
@@ -263,6 +301,8 @@ impl<T> Service<T> for MakeStateService {
 
 #[cfg(test)]
 mod test {
+    use http_body_util::BodyExt;
+
     use super::*;
 
     #[test]
@@ -280,72 +320,48 @@ mod test {
     #[tokio::test]
     async fn test_obfs_or_not() {
         // Test `/health` without obfuscation
-        let mut state = State {
-            ws_psk: None,
-            backend: None,
-            not_found_resp: "not found in the test",
-            obfs: false,
-            client: Arc::new(Client::builder().build(make_client_https())),
-        };
+        let mut state = State::new(None, None, "not found in the test", false);
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/health")
-            .body(Body::empty())
+            .body(FullBody::new(Bytes::new()))
             .unwrap();
         let resp = state.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let body_bytes = hyper::body::to_bytes(resp.into_body()).await.unwrap();
+        let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(body_bytes, "OK");
         // Test `/health` with obfuscation
-        let mut state = State {
-            ws_psk: None,
-            backend: None,
-            not_found_resp: "not found in the test",
-            obfs: true,
-            client: Arc::new(Client::builder().build(make_client_https())),
-        };
+        let mut state = State::new(None, None, "not found in the test", true);
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/health")
-            .body(Body::empty())
+            .body(FullBody::new(Bytes::new()))
             .unwrap();
         let resp = state.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-        let body_bytes = hyper::body::to_bytes(resp.into_body()).await.unwrap();
+        let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(body_bytes, "not found in the test");
         // Test `/version` without obfuscation
-        let mut state = State {
-            ws_psk: None,
-            backend: None,
-            not_found_resp: "not found in the test",
-            obfs: false,
-            client: Arc::new(Client::builder().build(make_client_https())),
-        };
+        let mut state = State::new(None, None, "not found in the test", false);
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/version")
-            .body(Body::empty())
+            .body(FullBody::new(Bytes::new()))
             .unwrap();
         let resp = state.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let body_bytes = hyper::body::to_bytes(resp.into_body()).await.unwrap();
+        let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(body_bytes, env!("CARGO_PKG_VERSION"));
         // Test `/version` with obfuscation
-        let mut state = State {
-            ws_psk: None,
-            backend: None,
-            not_found_resp: "not found in the test",
-            obfs: true,
-            client: Arc::new(Client::builder().build(make_client_https())),
-        };
+        let mut state = State::new(None, None, "not found in the test", true);
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/health")
-            .body(Body::empty())
+            .body(FullBody::new(Bytes::new()))
             .unwrap();
         let resp = state.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-        let body_bytes = hyper::body::to_bytes(resp.into_body()).await.unwrap();
+        let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(body_bytes, "not found in the test");
     }
 
@@ -357,31 +373,19 @@ mod test {
         static BACKEND: Lazy<BackendUrl> =
             Lazy::new(|| BackendUrl::from_str("http://httpbin.org").unwrap());
         // Test that the backend is actually working
-        let mut state = State {
-            ws_psk: None,
-            backend: Some(&BACKEND),
-            not_found_resp: "not found in the test",
-            obfs: false,
-            client: Arc::new(Client::builder().build(make_client_https())),
-        };
+        let mut state = State::new(Some(&BACKEND), None, "not found in the test", false);
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/status/200")
-            .body(Body::empty())
+            .body(FullBody::new(Bytes::new()))
             .unwrap();
         let resp = state.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let mut state = State {
-            ws_psk: None,
-            backend: Some(&BACKEND),
-            not_found_resp: "not found in the test",
-            obfs: false,
-            client: Arc::new(Client::builder().build(make_client_https())),
-        };
+        let mut state = State::new(Some(&BACKEND), None, "not found in the test", false);
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/status/418")
-            .body(Body::empty())
+            .body(FullBody::new(Bytes::new()))
             .unwrap();
         let resp = state.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::IM_A_TEAPOT);
@@ -390,34 +394,22 @@ mod test {
     #[tokio::test]
     async fn test_stealth_websocket_upgrade_from_request_parts() {
         // Test missing upgrade header
-        let mut state = State {
-            ws_psk: None,
-            backend: None,
-            not_found_resp: "not found in the test",
-            obfs: false,
-            client: Arc::new(Client::builder().build(make_client_https())),
-        };
+        let mut state = State::new(None, None, "not found in the test", false);
         let req = Request::builder()
             .method(Method::GET)
             .header("connection", "UpGrAdE")
             .header("upgrade", "WEBSOCKET")
             .header("sec-websocket-version", "13")
             .header("sec-websocket-protocol", &WANTED_PROTOCOL)
-            .body(Body::empty())
+            .body(FullBody::new(Bytes::new()))
             .unwrap();
         let result = state.call(req).await.unwrap();
         assert_eq!(result.status(), StatusCode::NOT_FOUND);
-        let body_bytes = hyper::body::to_bytes(result.into_body()).await.unwrap();
+        let body_bytes = result.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(body_bytes, "not found in the test");
         // Test wrong PSK
         static PSK: HeaderValue = HeaderValue::from_static("correct PSK");
-        let mut state = State {
-            ws_psk: Some(&PSK),
-            backend: None,
-            not_found_resp: "not found in the test",
-            obfs: false,
-            client: Arc::new(Client::builder().build(make_client_https())),
-        };
+        let mut state = State::new(None, Some(&PSK), "not found in the test", false);
         let req = Request::builder()
             .method(Method::GET)
             .header("connection", "UpGrAdE")
@@ -426,11 +418,11 @@ mod test {
             .header("sec-websocket-protocol", &WANTED_PROTOCOL)
             .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
             .header("x-penguin-psk", "wrong PSK")
-            .body(Body::empty())
+            .body(FullBody::new(Bytes::new()))
             .unwrap();
         let result = state.call(req).await.unwrap();
         assert_eq!(result.status(), StatusCode::NOT_FOUND);
-        let body_bytes = hyper::body::to_bytes(result.into_body()).await.unwrap();
+        let body_bytes = result.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(body_bytes, "not found in the test");
     }
 }

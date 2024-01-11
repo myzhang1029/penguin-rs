@@ -26,26 +26,29 @@ bytes = "1"
 clap = { version = "4", features = ["cargo", "derive"], optional = true }
 console-subscriber = { version = "0.2", optional = true }
 futures-util = { version = "0.3", default-features = false }
-http = "0.2"
-hyper = { version = "^0.14, >=0.14.10", features = ["client", "server", "http1", "http2"], optional = true }
-hyper-rustls = { version = "0.24", features = ["http1", "http2"], optional = true }
-hyper-tls = { version = "0.5", optional = true }
+http = "1"
+http-body-util = { version = "0.1", optional = true }
+hyper = { version = "1", features = ["client", "server", "http1", "http2"], optional = true }
+hyper-rustls = { version = "0.25", features = ["http1", "http2"], optional = true }
+hyper-tls = { version = "0.6", optional = true }
+hyper-util = { version = "0.1", features = ["server", "server-auto"], optional = true }
 native-tls = { version = "0.2", optional = true }
 once_cell = { version = "1", optional = true }
 parking_lot = "0.12"
 rand = "0.8"
-rustls = { version = "0.21", optional = true, features = ["dangerous_configuration"] }
-rustls-native-certs = { version = "0.6", optional = true }
-rustls-pemfile = { version = "1", optional = true }
+reqwest = { version = "0.11", optional = true }
+rustls = { version = "0.22", optional = true }
+rustls-native-certs = { version = "0.7", optional = true }
+rustls-pemfile = { version = "2", optional = true }
 sha1 = { version = "0.10", optional = true }
 thiserror = "1"
 tokio = { version = "^1, >=1.23.1", features = ["macros", "parking_lot", "rt", "sync", "time"] }
 tokio-native-tls = { version = "0.3", optional = true }
-tokio-rustls = { version = "0.24", optional = true }
-tokio-tungstenite = { version = "^0.20, >=0.20.1", default-features = false }
+tokio-rustls = { version = "0.25", optional = true }
+tokio-tungstenite = { version = "0.21", default-features = false }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", optional = true }
-webpki-roots = { version = "0.25", optional = true }
+webpki-roots = { version = "0.26", optional = true }
 
 [dev-dependencies]
 ctor = "0.2"
@@ -53,7 +56,8 @@ tempfile = "3"
 rcgen = "0.12"
 
 [features]
-default = ["rustls-native-roots", "tests-real-internet4", "penguin-binary"]
+#default = ["rustls-native-roots", "tests-real-internet4", "penguin-binary"]
+default = ["nativetls", "tests-real-internet4", "penguin-binary"]
 # Note that it does not make sense to use more than one TLS implementations
 # at the same time, but there must be at least one if `penguin-binary` is
 # enabled.
@@ -75,8 +79,11 @@ penguin-binary = [
     "arc-swap",
     "base64",
     "clap",
+    "http-body-util",
     "hyper",
+    "hyper-util",
     "once_cell",
+    "reqwest",
     "sha1",
     "tracing-subscriber",
     "tokio/fs", "tokio/io-std", "tokio/net", "tokio/rt-multi-thread", "tokio/signal",
