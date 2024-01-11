@@ -1,7 +1,8 @@
 //! Common TLS functionalities.
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
-mod acceptor;
+
+//mod acceptor;
 #[cfg(feature = "nativetls")]
 mod native;
 #[cfg(feature = "__rustls")]
@@ -10,18 +11,13 @@ mod rustls;
 #[cfg(feature = "__rustls")]
 use self::rustls::{make_client_config, make_server_config, TlsIdentityInner};
 use arc_swap::ArcSwap;
-use hyper::client::HttpConnector;
-#[cfg(feature = "__rustls")]
-use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
-#[cfg(feature = "nativetls")]
-use hyper_tls::HttpsConnector;
 #[cfg(feature = "nativetls")]
 use native::{make_client_config, make_server_config, TlsIdentityInner};
 use std::sync::Arc;
 use thiserror::Error;
 use tokio_tungstenite::Connector;
 
-pub use acceptor::{TlsAcceptor, TlsStream};
+//pub use acceptor::TlsAcceptor;
 
 /// A hot-swappable container for a TLS key and certificate.
 pub type TlsIdentity = Arc<ArcSwap<TlsIdentityInner>>;
@@ -43,29 +39,6 @@ pub enum Error {
     #[error("Unsupported private key type")]
     #[cfg(feature = "__rustls")]
     PrivateKeyNotSupported,
-}
-
-#[cfg(feature = "rustls-native-roots")]
-pub fn make_client_https() -> HttpsConnector<HttpConnector> {
-    HttpsConnectorBuilder::new()
-        .with_native_roots()
-        .https_or_http()
-        .enable_http1()
-        .enable_http2()
-        .build()
-}
-#[cfg(feature = "rustls-webpki-roots")]
-pub fn make_client_https() -> HttpsConnector<HttpConnector> {
-    HttpsConnectorBuilder::new()
-        .with_webpki_roots()
-        .https_or_http()
-        .enable_http1()
-        .enable_http2()
-        .build()
-}
-#[cfg(feature = "nativetls")]
-pub fn make_client_https() -> HttpsConnector<HttpConnector> {
-    HttpsConnector::new()
 }
 
 /// Make a `Connector`.

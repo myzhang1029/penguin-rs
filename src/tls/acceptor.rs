@@ -4,10 +4,6 @@
 
 use super::{TlsIdentity, TlsIdentityInner};
 use futures_util::Future;
-use hyper::server::{
-    accept::Accept,
-    conn::{AddrIncoming, AddrStream},
-};
 use std::{
     io,
     pin::Pin,
