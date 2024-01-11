@@ -74,12 +74,13 @@ impl<'a> Dupe for State<'a> {
         }
     }
 }
-impl State<'static> {
+
+impl<'a> State<'a> {
     /// Create a new `State`
     pub fn new(
-        backend: Option<&'static BackendUrl>,
-        ws_psk: Option<&'static HeaderValue>,
-        not_found_resp: &'static str,
+        backend: Option<&'a BackendUrl>,
+        ws_psk: Option<&'a HeaderValue>,
+        not_found_resp: &'a str,
         obfs: bool,
     ) -> Self {
         Self {
@@ -90,7 +91,9 @@ impl State<'static> {
             client: reqwest::Client::new(),
         }
     }
+}
 
+impl State<'static> {
     /// Reverse proxy and 404
     async fn backend_or_404_handler<B>(
         self,
@@ -112,11 +115,19 @@ impl State<'static> {
                 .path_and_query()
                 .map_or(req_path, http::uri::PathAndQuery::as_str);
 
+            // Remove repeated forward slashes
+            let base_path = backend_path.path();
+            let new_path = if base_path.ends_with('/') && req_path_query.starts_with('/') {
+                format!("{}{}", base_path, &req_path_query[1..])
+            } else {
+                format!("{}{}", base_path, req_path_query)
+            };
+
             let uri = Uri::builder()
                 // `expect`: `BackendUrl` is validated by clap.
                 .scheme(scheme.dupe())
                 .authority(authority.dupe())
-                .path_and_query(format!("{}{req_path_query}", backend_path.path()))
+                .path_and_query(new_path)
                 .build()
                 .expect("Failed to build URI for backend (this is a bug)")
                 .to_string();
@@ -193,7 +204,9 @@ impl State<'static> {
     fn not_found_handler(self) -> Result<Response<FullBody<Bytes>>, Infallible> {
         Ok(Response::builder()
             .status(StatusCode::NOT_FOUND)
-            .body(FullBody::new(self.not_found_resp.into()))
+            .body(FullBody::new(Bytes::from_static(
+                self.not_found_resp.as_bytes(),
+            )))
             .expect("Failed to build 404 response (this is a bug)"))
     }
 
@@ -302,27 +315,6 @@ where
         }
         // Else, proxy to backend or return 404
         Box::pin(self.dupe().backend_or_404_handler(req))
-    }
-}
-
-/// The corresponding `MakeService` for `State`.
-#[derive(Clone, Debug)]
-pub(super) struct MakeStateService(pub State<'static>);
-
-impl Dupe for MakeStateService {
-    fn dupe(&self) -> Self {
-        Self(self.0.dupe())
-    }
-}
-
-impl<T> Service<T> for MakeStateService {
-    type Response = State<'static>;
-    type Error = Infallible;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
-
-    fn call(&self, _: T) -> Self::Future {
-        let cloned_self = self.dupe();
-        Box::pin(async { Ok(cloned_self.0) })
     }
 }
 
