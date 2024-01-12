@@ -1,7 +1,6 @@
 //! Hyper services for the server.
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
-// TODO: revisit expect
 
 use super::websocket::handle_websocket;
 use crate::arg::BackendUrl;
@@ -16,9 +15,9 @@ use hyper::service::Service;
 use hyper::upgrade::OnUpgrade;
 use hyper_util::rt::TokioIo;
 use sha1::{Digest, Sha1};
-use std::convert::Infallible;
 use std::future::Future;
 use std::pin::Pin;
+use thiserror::Error;
 use tokio_tungstenite::tungstenite::protocol::Role;
 use tokio_tungstenite::WebSocketStream;
 use tracing::{debug, error, warn};
@@ -46,6 +45,20 @@ fn make_sec_websocket_accept(key: &HeaderValue) -> HeaderValue {
     let accept = B64_STANDARD_ENGINE.encode(hasher.finalize().as_slice());
     // `expect`: Base64-encoded string should be valid UTF-8
     accept.parse().expect("Broken header value (this is a bug)")
+}
+
+/// Possible errors when processing requests.
+/// Any of these actually should never happen.
+#[derive(Debug, Error)]
+pub(super) enum Error {
+    #[error(transparent)]
+    Http(#[from] http::Error),
+    #[error(transparent)]
+    InvalidHeaderName(#[from] reqwest::header::InvalidHeaderName),
+    #[error(transparent)]
+    InvalidHeaderValue(#[from] reqwest::header::InvalidHeaderValue),
+    #[error(transparent)]
+    Reqwest(#[from] reqwest::Error),
 }
 
 /// Required state for each request.
@@ -98,7 +111,7 @@ impl State<'static> {
     async fn backend_or_404_handler<B>(
         self,
         req: Request<B>,
-    ) -> Result<Response<FullBody<Bytes>>, Infallible>
+    ) -> Result<Response<FullBody<Bytes>>, Error>
     where
         B: hyper::body::Body,
         <B as hyper::body::Body>::Error: std::fmt::Debug,
@@ -128,11 +141,9 @@ impl State<'static> {
                 .scheme(scheme.dupe())
                 .authority(authority.dupe())
                 .path_and_query(new_path)
-                .build()
-                .expect("Failed to build URI for backend (this is a bug)")
+                .build()?
                 .to_string();
-            // XXX: This bridge between hyper and reqwest is very ugly. They are actually the same
-            // type, so I have no idea why reqwest doesn't just use http::Request and http::Response.
+            // XXX: Remove this bridging code when `reqwest` upgrades to `http = ^1`
             // This is no longer relevant since we're using reqwest instead of hyper.
             // Kept here for reference.
             // This may not be the best way to do this, but to avoid panicking if
@@ -140,32 +151,29 @@ impl State<'static> {
             // downgrade to HTTP/1.1 and let them upgrade if they want to.
             // *req.version_mut() = http::version::Version::default();
             let (parts, body) = req.into_parts();
-            let method = parts
-                .method
-                .as_str()
-                .as_bytes()
-                .try_into()
-                .expect("Failed to convert hyper method to reqwest method (this is a bug)");
+            // XXX: remove this `unwrap` when `reqwest` upgrades to `http = ^1`
+            let method = parts.method.as_str().try_into().unwrap();
             let headers = parts.headers;
             let mut new_headers = reqwest::header::HeaderMap::with_capacity(headers.len());
             for (name, value) in headers.iter() {
                 new_headers.insert(
-                    reqwest::header::HeaderName::try_from(name.as_str())
-                        .expect("Failed to convert header (this is a bug)"),
-                    value
-                        .as_bytes()
-                        .try_into()
-                        .expect("Failed to convert header (this is a bug)"),
+                    reqwest::header::HeaderName::try_from(name.as_str())?,
+                    value.as_bytes().try_into()?,
                 );
             }
+            // Change the `host` header to the real backend host
+            new_headers.insert(
+                reqwest::header::HOST,
+                reqwest::header::HeaderValue::from_str(authority.as_str())?,
+            );
+            // XXX: remove this `unwrap` when `reqwest` upgrades to `http = ^1`
             let body = body.collect().await.unwrap().to_bytes();
             let req = self
                 .client
                 .request(method, uri)
                 .body(body)
                 .headers(new_headers)
-                .build()
-                .expect("Failed to build request (this is a bug)");
+                .build()?;
             match self.client.execute(req).await {
                 Ok(resp) => {
                     let status = resp.status().as_u16();
@@ -173,21 +181,11 @@ impl State<'static> {
                     {
                         let headers = resp.headers();
                         for (name, value) in headers.iter() {
-                            resp_builder = resp_builder.header(
-                                name.as_str(),
-                                value
-                                    .to_str()
-                                    .expect("Failed to convert header (this is a bug)"),
-                            );
+                            resp_builder = resp_builder.header(name.as_str(), value.as_bytes());
                         }
                     }
-                    let body = resp
-                        .bytes()
-                        .await
-                        .expect("Failed to read response body (this is a bug)");
-                    let resp = resp_builder
-                        .body(FullBody::new(body))
-                        .expect("Failed to build response (this is a bug)");
+                    let body = resp.bytes().await?;
+                    let resp = resp_builder.body(FullBody::new(body))?;
                     Ok(resp)
                 }
                 Err(e) => {
@@ -201,20 +199,16 @@ impl State<'static> {
     }
 
     /// 404 handler
-    fn not_found_handler(self) -> Result<Response<FullBody<Bytes>>, Infallible> {
+    fn not_found_handler(self) -> Result<Response<FullBody<Bytes>>, Error> {
         Ok(Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body(FullBody::new(Bytes::from_static(
                 self.not_found_resp.as_bytes(),
-            )))
-            .expect("Failed to build 404 response (this is a bug)"))
+            )))?)
     }
 
     /// Check the PSK and protocol version and upgrade to a WebSocket if the PSK matches (if required).
-    pub async fn ws_handler<B>(
-        self,
-        mut req: Request<B>,
-    ) -> Result<Response<FullBody<Bytes>>, Infallible>
+    async fn ws_handler<B>(self, mut req: Request<B>) -> Result<Response<FullBody<Bytes>>, Error>
     where
         B: hyper::body::Body,
         <B as hyper::body::Body>::Error: std::fmt::Debug,
@@ -274,15 +268,13 @@ impl State<'static> {
             };
         });
 
-        // Shouldn't panic
         Ok(Response::builder()
             .status(StatusCode::SWITCHING_PROTOCOLS)
             .header(header::CONNECTION, &UPGRADE)
             .header(header::UPGRADE, &WEBSOCKET)
             .header(header::SEC_WEBSOCKET_PROTOCOL, &WANTED_PROTOCOL)
             .header(header::SEC_WEBSOCKET_ACCEPT, sec_websocket_accept)
-            .body(FullBody::new(Bytes::new()))
-            .expect("Failed to build WebSocket response (this is a bug)"))
+            .body(FullBody::new(Bytes::new()))?)
     }
 }
 
@@ -293,7 +285,7 @@ where
     <B as hyper::body::Body>::Data: Send,
 {
     type Response = Response<FullBody<Bytes>>;
-    type Error = Infallible;
+    type Error = Error;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
     /// Hyper service handler

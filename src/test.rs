@@ -155,7 +155,6 @@ async fn test_it_works_v6() {
     client_task.abort();
 }
 
-
 // `native_tls` on macOS and Windows doesn't support reading Ed25519 nor ECDSA-based certificates.
 #[tokio::test]
 #[cfg(not(all(feature = "nativetls", any(target_os = "macos", target_os = "windows"))))]
