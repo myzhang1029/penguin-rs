@@ -7,6 +7,7 @@ use std::{
     str::FromStr,
     time::Duration,
 };
+#[cfg(not(all(feature = "nativetls", any(target_os = "macos", target_os = "windows"))))]
 use tempfile::TempDir;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -72,6 +73,7 @@ fn make_client_args(servhost: &str, servport: u16, remotes: Vec<Remote>) -> arg:
 
 /// Generate a self-signed server cert into a temporary directory.
 /// Returns the path to the directory. The cert is named `cert.pem` and the key is named `privkey.pem`.
+#[cfg(not(all(feature = "nativetls", any(target_os = "macos", target_os = "windows"))))]
 async fn make_server_cert_ecdsa() -> TempDir {
     let mut cert_params = rcgen::CertificateParams::new(vec!["localhost".to_string()]);
     cert_params.alg = &rcgen::PKCS_ECDSA_P384_SHA384;
