@@ -430,7 +430,26 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_stealth_websocket_upgrade_from_request_parts() {
+    async fn test_stealth_websocket_upgrade_method() {
+        // Test non-GET request
+        let state = State::new(None, None, "not found in the test", false);
+        let req = Request::builder()
+            .method(Method::POST)
+            .header("connection", "UpGrAdE")
+            .header("upgrade", "WEBSOCKET")
+            .header("sec-websocket-version", "13")
+            .header("sec-websocket-protocol", &WANTED_PROTOCOL)
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .body(FullBody::new(Bytes::new()))
+            .unwrap();
+        let result = state.call(req).await.unwrap();
+        assert_eq!(result.status(), StatusCode::NOT_FOUND);
+        let body_bytes = result.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(body_bytes, "not found in the test");
+    }
+
+    #[tokio::test]
+    async fn test_stealth_websocket_upgrade_missing_key_header() {
         // Test missing upgrade header
         let state = State::new(None, None, "not found in the test", false);
         let req = Request::builder()
@@ -445,6 +464,10 @@ mod test {
         assert_eq!(result.status(), StatusCode::NOT_FOUND);
         let body_bytes = result.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(body_bytes, "not found in the test");
+    }
+
+    #[tokio::test]
+    async fn test_stealth_websocket_upgrade_wrong_psk() {
         // Test wrong PSK
         static PSK: HeaderValue = HeaderValue::from_static("correct PSK");
         let state = State::new(None, Some(&PSK), "not found in the test", false);

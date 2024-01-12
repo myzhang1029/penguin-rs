@@ -55,7 +55,6 @@ rcgen = "0.12"
 
 [features]
 default = ["rustls-native-roots", "tests-real-internet4", "penguin-binary"]
-#default = ["nativetls", "tests-real-internet4", "penguin-binary"]
 # Note that it does not make sense to use more than one TLS implementations
 # at the same time, but there must be at least one if `penguin-binary` is
 # enabled.
