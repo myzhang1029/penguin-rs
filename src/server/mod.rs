@@ -17,9 +17,10 @@ use hyper_util::rt::tokio::TokioExecutor;
 use hyper_util::rt::TokioIo;
 use hyper_util::server::conn::auto;
 use thiserror::Error;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio_tungstenite::WebSocketStream;
-use tracing::{error, info, trace};
+use tracing::{debug, error, info, trace};
 
 type WebSocket = WebSocketStream<TokioIo<Upgraded>>;
 
@@ -34,8 +35,9 @@ pub enum Error {
     Signal(std::io::Error),
     #[error("HTTP server I/O error: {0}")]
     Io(#[from] std::io::Error),
-    // #[error("HTTP server error: {0}")]
-    // Hyper(#[from] hyper::Error),
+    #[error("TLS error: {0}")]
+    #[cfg(feature = "nativetls")]
+    NativeTls(#[from] native_tls::Error),
 }
 
 #[tracing::instrument(level = "trace")]
@@ -80,20 +82,54 @@ pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
                 }
             });
         }
+        loop {
+            let (stream, peer) = listener.accept().await?;
+            debug!("accepted connection from {peer} for TLS");
+            #[cfg(feature = "__rustls")]
+            {
+                let acceptor = tokio_rustls::TlsAcceptor::from(tls_config.load_full());
+                match acceptor.accept(stream).await {
+                    Ok(stream) => {
+                        tokio::spawn(serve_connection(stream, state.dupe()));
+                    }
+                    Err(err) => {
+                        error!("TLS handshake error: {err}");
+                    }
+                }
+            }
+            // `main.rs` has checks to ensure that only one TLS backend is
+            // enabled at a time.
+            #[cfg(feature = "nativetls")]
+            {
+                match tls_config.load().accept(stream).await {
+                    Ok(stream) => {
+                        tokio::spawn(serve_connection(stream, state.dupe()));
+                    }
+                    Err(err) => {
+                        error!("TLS handshake error: {err}");
+                    }
+                }
+            }
+        }
     } else {
         info!("Listening on ws://{sockaddr}/ws");
+        loop {
+            let (stream, peer) = listener.accept().await?;
+            debug!("accepted connection from {peer}");
+            tokio::spawn(serve_connection(stream, state.dupe()));
+        }
     }
-    loop {
-        let (stream, _) = listener.accept().await?;
-        let hyper_io = TokioIo::new(stream);
-        let state = state.dupe();
-        tokio::spawn(async move {
-            let conn = auto::Builder::new(TokioExecutor::new());
-            let conn = conn.serve_connection_with_upgrades(hyper_io, state);
-            let conn = assert_send(conn);
-            conn.await.unwrap_or_else(|err| error!("Error: {err}"));
-        });
-    }
+}
+
+async fn serve_connection<S>(stream: S, state: State<'static>)
+where
+    S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+{
+    let hyper_io = TokioIo::new(stream);
+    let conn = auto::Builder::new(TokioExecutor::new());
+    let conn = conn.serve_connection_with_upgrades(hyper_io, state);
+    let conn = assert_send(conn);
+    conn.await.unwrap_or_else(|err| error!("Error: {err}"));
 }
 
 /// Workaround at https://github.com/rust-lang/rust/issues/102211#issuecomment-1367900125
