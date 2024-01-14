@@ -1521,7 +1521,7 @@ checksum = "7ffc183a10b4478d04cbbbfc96d0873219d962dd5accaff2ffbd4ceb7df837f4"
 
 [[package]]
 name = "rusty-penguin"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "arc-swap",
  "base64",
