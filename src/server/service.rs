@@ -312,9 +312,10 @@ where
 
 #[cfg(test)]
 mod test {
+    use super::*;
     use http_body_util::BodyExt;
 
-    use super::*;
+    type EmptyBody = http_body_util::Empty<Bytes>;
 
     #[test]
     fn test_make_sec_websocket_accept() {
@@ -335,7 +336,7 @@ mod test {
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/health")
-            .body(FullBody::new(Bytes::new()))
+            .body(EmptyBody::new())
             .unwrap();
         let resp = state.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
@@ -346,7 +347,7 @@ mod test {
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/health")
-            .body(FullBody::new(Bytes::new()))
+            .body(EmptyBody::new())
             .unwrap();
         let resp = state.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
@@ -357,7 +358,7 @@ mod test {
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/version")
-            .body(FullBody::new(Bytes::new()))
+            .body(EmptyBody::new())
             .unwrap();
         let resp = state.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
@@ -368,7 +369,7 @@ mod test {
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/health")
-            .body(FullBody::new(Bytes::new()))
+            .body(EmptyBody::new())
             .unwrap();
         let resp = state.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
@@ -388,7 +389,7 @@ mod test {
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/status/200")
-            .body(FullBody::new(Bytes::new()))
+            .body(EmptyBody::new())
             .unwrap();
         let resp = state.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
@@ -396,7 +397,7 @@ mod test {
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/status/418")
-            .body(FullBody::new(Bytes::new()))
+            .body(EmptyBody::new())
             .unwrap();
         let resp = state.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::IM_A_TEAPOT);
@@ -415,7 +416,7 @@ mod test {
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/status/200")
-            .body(FullBody::new(Bytes::new()))
+            .body(EmptyBody::new())
             .unwrap();
         let resp = state.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
@@ -423,7 +424,7 @@ mod test {
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/status/418")
-            .body(FullBody::new(Bytes::new()))
+            .body(EmptyBody::new())
             .unwrap();
         let resp = state.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::IM_A_TEAPOT);
@@ -440,7 +441,7 @@ mod test {
             .header("sec-websocket-version", "13")
             .header("sec-websocket-protocol", &WANTED_PROTOCOL)
             .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
-            .body(FullBody::new(Bytes::new()))
+            .body(EmptyBody::new())
             .unwrap();
         let result = state.call(req).await.unwrap();
         assert_eq!(result.status(), StatusCode::NOT_FOUND);
@@ -458,7 +459,7 @@ mod test {
             .header("upgrade", "WEBSOCKET")
             .header("sec-websocket-version", "13")
             .header("sec-websocket-protocol", &WANTED_PROTOCOL)
-            .body(FullBody::new(Bytes::new()))
+            .body(EmptyBody::new())
             .unwrap();
         let result = state.call(req).await.unwrap();
         assert_eq!(result.status(), StatusCode::NOT_FOUND);
@@ -479,7 +480,7 @@ mod test {
             .header("sec-websocket-protocol", &WANTED_PROTOCOL)
             .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
             .header("x-penguin-psk", "wrong PSK")
-            .body(FullBody::new(Bytes::new()))
+            .body(EmptyBody::new())
             .unwrap();
         let result = state.call(req).await.unwrap();
         assert_eq!(result.status(), StatusCode::NOT_FOUND);

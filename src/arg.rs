@@ -499,11 +499,12 @@ mod test {
             assert_eq!(server_uri.host(), Some("127.0.0.1"));
             assert_eq!(server_uri.port_u16(), Some(9999));
             assert_eq!(server_uri.path(), "/endpoint");
+            // This probably is covered by tests in `parse_remote`, but just in case
             assert_eq!(
                 args.remote,
                 [Remote {
-                    local_addr: LocalSpec::Inet(("0.0.0.0".to_string(), 1234)),
-                    remote_addr: RemoteSpec::Inet(("127.0.0.1".to_string(), 1234)),
+                    local_addr: LocalSpec::Inet((crate::parse_remote::default_host!(unspec).to_string(), 1234)),
+                    remote_addr: RemoteSpec::Inet((crate::parse_remote::default_host!(local).to_string(), 1234)),
                     protocol: Protocol::Tcp,
                 }]
             );

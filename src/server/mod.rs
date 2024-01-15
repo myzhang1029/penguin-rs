@@ -37,7 +37,7 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("TLS error: {0}")]
     #[cfg(feature = "nativetls")]
-    NativeTls(#[from] native_tls::Error),
+    NativeTls(#[from] tokio_native_tls::native_tls::Error),
 }
 
 #[tracing::instrument(level = "trace")]

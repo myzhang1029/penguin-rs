@@ -1534,7 +1534,6 @@ dependencies = [
  "http-body-util",
  "hyper 1.1.0",
  "hyper-util",
- "native-tls",
  "once_cell",
  "parking_lot",
  "rand",

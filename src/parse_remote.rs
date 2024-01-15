@@ -26,6 +26,9 @@ macro_rules! default_host {
     };
 }
 
+// Export this macro for use in `arg.rs`.
+pub(crate) use default_host;
+
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct Remote {
     pub local_addr: LocalSpec,
@@ -252,32 +255,30 @@ pub fn remove_brackets(s: &str) -> &str {
 #[cfg(test)]
 mod test {
     use super::*;
-    #[cfg(not(feature = "default-is-ipv6"))]
-    use std::net::Ipv4Addr;
-    #[cfg(feature = "default-is-ipv6")]
-    use std::net::Ipv6Addr;
 
+    // We could have DRYed, but this is to physically show the difference.
+    #[cfg(not(feature = "default-is-ipv6"))]
     #[test]
     fn test_default_host() {
-        #[cfg(feature = "default-is-ipv6")]
         assert_eq!(
-            Ipv6Addr::from_str(&default_host!(unspec)).unwrap(),
-            Ipv6Addr::UNSPECIFIED
+            std::net::Ipv4Addr::from_str(&default_host!(unspec)).unwrap(),
+            std::net::Ipv4Addr::UNSPECIFIED
         );
-        #[cfg(not(feature = "default-is-ipv6"))]
         assert_eq!(
-            Ipv4Addr::from_str(&default_host!(unspec)).unwrap(),
-            Ipv4Addr::UNSPECIFIED
+            std::net::Ipv4Addr::from_str(&default_host!(local)).unwrap(),
+            std::net::Ipv4Addr::LOCALHOST
         );
-        #[cfg(feature = "default-is-ipv6")]
+    }
+    #[cfg(feature = "default-is-ipv6")]
+    #[test]
+    fn test_default_host() {
         assert_eq!(
-            Ipv6Addr::from_str(&default_host!(local)).unwrap(),
-            Ipv6Addr::LOCALHOST
+            std::net::Ipv6Addr::from_str(&default_host!(unspec)).unwrap(),
+            std::net::Ipv6Addr::UNSPECIFIED
         );
-        #[cfg(not(feature = "default-is-ipv6"))]
         assert_eq!(
-            Ipv4Addr::from_str(&default_host!(local)).unwrap(),
-            Ipv4Addr::LOCALHOST
+            std::net::Ipv6Addr::from_str(&default_host!(local)).unwrap(),
+            std::net::Ipv6Addr::LOCALHOST
         );
     }
 

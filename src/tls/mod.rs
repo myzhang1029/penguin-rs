@@ -35,7 +35,7 @@ pub enum Error {
     Verifier(#[from] ::rustls::client::VerifierBuilderError),
     #[error("Failed to parse certificates: {0}")]
     #[cfg(feature = "nativetls")]
-    CertParse(#[from] native_tls::Error),
+    CertParse(#[from] tokio_native_tls::native_tls::Error),
     #[error("Unsupported private key type")]
     #[cfg(feature = "__rustls")]
     PrivateKeyNotSupported,

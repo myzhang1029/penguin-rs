@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::Error;
-use native_tls::{Identity, TlsAcceptor, TlsConnector};
+use tokio_native_tls::native_tls::{Certificate, Identity, TlsAcceptor, TlsConnector};
 
 /// Type alias for the inner TLS identity type.
 pub type TlsIdentityInner = tokio_native_tls::TlsAcceptor;
@@ -31,7 +31,7 @@ pub async fn make_client_config(
         .danger_accept_invalid_hostnames(tls_skip_verify);
     if let Some(ca_path) = ca_path {
         let ca = tokio::fs::read(ca_path).await?;
-        tls_config_builder.add_root_certificate(native_tls::Certificate::from_pem(&ca)?);
+        tls_config_builder.add_root_certificate(Certificate::from_pem(&ca)?);
     }
     if let Some(cert_path) = cert_path {
         let identity = read_key_cert(key_path.unwrap_or(cert_path), cert_path).await?;
@@ -53,14 +53,14 @@ mod test {
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     async fn test_read_key_cert() {
         use super::*;
-        use rcgen::{Certificate, CertificateParams};
+        use rcgen::CertificateParams;
         use tempfile::tempdir;
         let tmpdir = tempdir().unwrap();
         let key_path = tmpdir.path().join("key.pem");
         let cert_path = tmpdir.path().join("cert.pem");
         let mut cert_params = CertificateParams::new(vec!["example.com".into()]);
         cert_params.alg = &rcgen::PKCS_ECDSA_P384_SHA384;
-        let custom_crt = Certificate::from_params(cert_params).unwrap();
+        let custom_crt = rcgen::Certificate::from_params(cert_params).unwrap();
         let crt = custom_crt.serialize_pem().unwrap();
         let crt_key = custom_crt.serialize_private_key_pem();
         tokio::fs::write(&cert_path, crt).await.unwrap();
