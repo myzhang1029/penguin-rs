@@ -81,52 +81,16 @@ pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
         }
         for sockaddr in sockaddrs {
             let listener = create_listener(sockaddr).await?;
-            let state = state.dupe();
-            let tls_config = tls_config.dupe();
-            listening_tasks.spawn(async move {
-                loop {
-                    let (stream, peer) = match listener.accept().await {
-                        Ok((stream, peer)) => (stream, peer),
-                        Err(err) => {
-                            error!("Accept error: {err}");
-                            continue;
-                        }
-                    };
-                    debug!("accepted connection from {peer} with TLS");
-                    #[cfg(feature = "__rustls")]
-                    let stream = tokio_rustls::TlsAcceptor::from(tls_config.load_full())
-                        .accept(stream)
-                        .await;
-                    #[cfg(feature = "nativetls")]
-                    let stream = tls_config.load().accept(stream).await;
-                    match stream {
-                        Ok(stream) => {
-                            tokio::spawn(serve_connection(stream, state.dupe()));
-                        }
-                        Err(err) => {
-                            error!("TLS handshake error: {err}");
-                        }
-                    }
-                }
-            });
+            listening_tasks.spawn(run_listener(
+                listener,
+                Some(tls_config.dupe()),
+                state.dupe(),
+            ));
         }
     } else {
         for sockaddr in sockaddrs {
             let listener = create_listener(sockaddr).await?;
-            let state = state.dupe();
-            listening_tasks.spawn(async move {
-                loop {
-                    let (stream, peer) = match listener.accept().await {
-                        Ok((stream, peer)) => (stream, peer),
-                        Err(err) => {
-                            error!("Accept error: {err}");
-                            continue;
-                        }
-                    };
-                    debug!("accepted connection from {peer}");
-                    tokio::spawn(serve_connection(stream, state.dupe()));
-                }
-            });
+            listening_tasks.spawn(run_listener(listener, None, state.dupe()));
         }
     }
     while let Some(res) = listening_tasks.join_next().await {
@@ -164,7 +128,46 @@ async fn create_listener(sockaddr: SocketAddr) -> Result<TcpListener, Error> {
     Ok(listener)
 }
 
-/// Serves a single connection from a client.
+/// Runs a listener.
+#[tracing::instrument(skip_all, level = "debug", fields(tls = %tls_config.is_some()))]
+async fn run_listener(
+    listener: TcpListener,
+    tls_config: Option<crate::tls::TlsIdentity>,
+    state: State<'static>,
+) {
+    loop {
+        let new_state = state.dupe();
+        let (stream, peer) = match listener.accept().await {
+            Ok((stream, peer)) => (stream, peer),
+            Err(err) => {
+                error!("Accept error: {err}");
+                continue;
+            }
+        };
+        debug!("accepted connection from {peer}");
+        if let Some(tls_config) = &tls_config {
+            #[cfg(feature = "__rustls")]
+            let stream = tokio_rustls::TlsAcceptor::from(tls_config.load_full())
+                .accept(stream)
+                .await;
+            #[cfg(feature = "nativetls")]
+            let stream = tls_config.load().accept(stream).await;
+            match stream {
+                Ok(stream) => {
+                    tokio::spawn(serve_connection(stream, new_state));
+                }
+                Err(err) => {
+                    error!("TLS handshake error: {err}");
+                }
+            }
+        } else {
+            tokio::spawn(serve_connection(stream, new_state));
+        }
+    }
+}
+
+/// Serves a single connection from a client, ignoring errors.
+#[tracing::instrument(skip_all, level = "debug")]
 async fn serve_connection<S>(stream: S, state: State<'static>)
 where
     S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
