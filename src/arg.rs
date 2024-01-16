@@ -120,7 +120,7 @@ pub struct ClientArgs {
     #[arg(long, default_value_t = 25)]
     pub keepalive: u64,
     /// Maximum number of times to retry before exiting.
-    /// Defaults 0, meaning unlimited.
+    /// A value of 0 means unlimited.
     #[arg(long, default_value_t = 0)]
     pub max_retry_count: u32,
     /// Maximum wait time (in milliseconds) before retrying after a
@@ -182,11 +182,10 @@ pub struct ClientArgs {
 #[derive(Args, Debug)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct ServerArgs {
-    /// Defines the HTTP listening host - the network interface
-    /// (defaults to ::).
+    /// Defines the HTTP listening host - the network interface.
     #[arg(long, default_value = "::")]
     pub host: String,
-    /// Defines the HTTP listening port (defaults to port 8080).
+    /// Defines the HTTP listening port.
     #[arg(short, long, default_value_t = 8080)]
     pub port: u16,
     /// Specifies another HTTP server to proxy requests to when
@@ -200,7 +199,7 @@ pub struct ServerArgs {
     /// and TLS.
     #[arg(long)]
     pub obfs: bool,
-    /// Content to send with a 404 response. Defaults to 'Not found'.
+    /// Content to send with a 404 response.
     #[arg(long = "404-resp", default_value = "Not found")]
     pub not_found_resp: String,
     /// An optional Pre-Shared Key for WebSocket upgrade. If this
