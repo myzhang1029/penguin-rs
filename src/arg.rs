@@ -179,7 +179,6 @@ pub struct ClientArgs {
 }
 
 /// Penguin server arguments.
-/// TODO: validation of `host` and `port`: must be at least one
 #[derive(Args, Debug)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct ServerArgs {

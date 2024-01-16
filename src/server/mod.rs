@@ -129,7 +129,13 @@ pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
             });
         }
     }
-    todo!()
+    while let Some(res) = listening_tasks.join_next().await {
+        if let Err(err) = res {
+            assert!(!err.is_panic(), "Panic in a listener: {err}");
+            error!("Listener finished with error: {err}");
+        }
+    }
+    Ok(())
 }
 
 /// Create a list of `SocketAddr`s from the command-line arguments on which to listen.
