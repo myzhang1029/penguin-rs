@@ -142,6 +142,7 @@ pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
 fn arg_to_sockaddrs(arg: &ServerArgs) -> Result<Vec<SocketAddr>, Error> {
     // `expect`: `clap` ensures that `--port` has at least one element.
     let last_port = arg.port.last().expect("`port` is empty (this is a bug)");
+    assert!(!arg.host.is_empty(), "`host` is empty (this is a bug)");
     // Fill the rest of `port` with the last element.
     let ports = arg.port.iter().chain(std::iter::repeat(last_port));
     // Fills the rest of `port` with the last element.
@@ -180,4 +181,115 @@ fn assert_send<'u, R>(
     fut: impl 'u + Send + std::future::Future<Output = R>,
 ) -> impl 'u + Send + std::future::Future<Output = R> {
     fut
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    fn get_server_args(host: Vec<String>, port: Vec<u16>) -> ServerArgs {
+        ServerArgs {
+            host,
+            port,
+            backend: None,
+            obfs: false,
+            not_found_resp: String::new(),
+            ws_psk: None,
+            tls_key: None,
+            tls_cert: None,
+            tls_ca: None,
+            _pid: false,
+            _socks5: false,
+            _reverse: false,
+            _keepalive: 0,
+            _auth: None,
+            _authfile: None,
+            _key: None,
+        }
+    }
+
+    /// Test `arg_to_sockaddrs` with no hosts and no ports.
+    #[test]
+    #[should_panic]
+    fn test_arg_to_sockaddrs_empty() {
+        let args = get_server_args(vec![], vec![]);
+        let _ = arg_to_sockaddrs(&args).unwrap();
+    }
+
+    /// Test `arg_to_sockaddrs` with no hosts and one port.
+    #[test]
+    #[should_panic]
+    fn test_arg_to_sockaddrs_empty_host() {
+        let args = get_server_args(vec![], vec![1234]);
+        let _ = arg_to_sockaddrs(&args).unwrap();
+    }
+
+    /// Test `arg_to_sockaddrs` with one host and no ports.
+    #[test]
+    #[should_panic]
+    fn test_arg_to_sockaddrs_empty_port() {
+        let args = get_server_args(vec!["::".to_string()], vec![]);
+        let _ = arg_to_sockaddrs(&args).unwrap();
+    }
+
+    /// Test `arg_to_sockaddrs` with a single host and a single port.
+    #[test]
+    fn test_arg_to_sockaddrs_single_v4() {
+        let args = get_server_args(vec!["127.0.0.1".to_string()], vec![9999]);
+        let sockaddrs = arg_to_sockaddrs(&args).unwrap();
+        assert_eq!(sockaddrs.len(), 1);
+        assert_eq!(
+            sockaddrs[0].ip(),
+            std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1))
+        );
+        assert_eq!(sockaddrs[0].port(), 9999);
+    }
+
+    /// Test `arg_to_sockaddrs` with a single host and a single port.
+    #[test]
+    fn test_arg_to_sockaddrs_single_v6() {
+        let args = get_server_args(vec!["[::1]".to_string()], vec![1532]);
+        let sockaddrs = arg_to_sockaddrs(&args).unwrap();
+        assert_eq!(sockaddrs.len(), 1);
+        assert_eq!(
+            sockaddrs[0].ip(),
+            std::net::IpAddr::V6(std::net::Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1))
+        );
+        assert_eq!(sockaddrs[0].port(), 1532);
+    }
+
+    /// Test `arg_to_sockaddrs` with several hosts and one port.
+    #[test]
+    fn test_arg_to_sockaddrs_multi_v4() {
+        let args = get_server_args(
+            vec![
+                "127.0.0.1".to_string(),
+                "0.0.0.0".to_string(),
+                "[::]".to_string(),
+                "::1".to_string(),
+            ],
+            vec![1233],
+        );
+        let sockaddrs = arg_to_sockaddrs(&args).unwrap();
+        assert_eq!(sockaddrs.len(), 4);
+        assert_eq!(
+            sockaddrs[0].ip(),
+            std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1))
+        );
+        assert_eq!(sockaddrs[0].port(), 1233);
+        assert_eq!(
+            sockaddrs[1].ip(),
+            std::net::IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0))
+        );
+        assert_eq!(sockaddrs[1].port(), 1233);
+        assert_eq!(
+            sockaddrs[2].ip(),
+            std::net::IpAddr::V6(std::net::Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0))
+        );
+        assert_eq!(sockaddrs[2].port(), 1233);
+        assert_eq!(
+            sockaddrs[3].ip(),
+            std::net::IpAddr::V6(std::net::Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1))
+        );
+        assert_eq!(sockaddrs[3].port(), 1233);
+    }
 }

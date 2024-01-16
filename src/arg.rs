@@ -185,14 +185,14 @@ pub struct ServerArgs {
     /// Defines the HTTP listening host - the network interface.
     /// If multiple ports are specified, `penguin` will listen on all of them.
     /// If TLS is enabled, it will apply to all listening hosts.
-    #[arg(long, default_values = ["::"], required = true)]
+    #[arg(long, default_values = ["::"])]
     pub host: Vec<String>,
     /// Defines the HTTP listening port.
     /// If the number of ports is less than the number of hosts,
     /// the last port will be used for the remaining hosts. If the number of
     /// ports is greater than the number of hosts, the remaining ports will
     /// be ignored.
-    #[arg(short, long, default_values_t = [8080], required = true)]
+    #[arg(short, long, default_values_t = [8080])]
     pub port: Vec<u16>,
     /// Specifies another HTTP server to proxy requests to when
     /// penguin receives a normal HTTP request. Useful for hiding penguin in
@@ -404,11 +404,9 @@ impl FromStr for Header {
 
 #[cfg(test)]
 mod test {
-    use std::str::FromStr;
-
-    use crate::parse_remote::{LocalSpec, Protocol, RemoteSpec};
-
     use super::*;
+    use crate::parse_remote::{LocalSpec, Protocol, RemoteSpec};
+    use std::str::FromStr;
 
     #[test]
     fn test_serverurl_fromstr() {
@@ -576,6 +574,125 @@ mod test {
             );
             assert_eq!(args.header, [Header::from_str("X-Test:test").unwrap()]);
             assert_eq!(args.hostname, Some(HeaderValue::from_static("example.com")));
+        }
+    }
+
+    #[test]
+    fn test_server_args_minimal() {
+        let args = PenguinCli::parse_from(["penguin", "server"]);
+        assert!(matches!(args.subcommand, Commands::Server(_)));
+        if let Commands::Server(args) = args.subcommand {
+            assert_eq!(args.host, ["::"]);
+            assert_eq!(args.port, [8080]);
+            assert_eq!(args.backend, None);
+            assert_eq!(args.obfs, false);
+            assert_eq!(args.not_found_resp, "Not found");
+            assert_eq!(args.ws_psk, None);
+            assert_eq!(args.tls_key, None);
+            assert_eq!(args.tls_cert, None);
+            assert_eq!(args.tls_ca, None);
+        }
+    }
+
+    #[test]
+    fn test_server_args_just_host() {
+        let args = PenguinCli::parse_from(["penguin", "server", "--host", "0.0.0.0"]);
+        assert!(matches!(args.subcommand, Commands::Server(_)));
+        if let Commands::Server(args) = args.subcommand {
+            assert_eq!(args.host, ["0.0.0.0"]);
+            assert_eq!(args.port, [8080]);
+            assert_eq!(args.backend, None);
+            assert_eq!(args.obfs, false);
+            assert_eq!(args.not_found_resp, "Not found");
+            assert_eq!(args.ws_psk, None);
+            assert_eq!(args.tls_key, None);
+            assert_eq!(args.tls_cert, None);
+            assert_eq!(args.tls_ca, None);
+        }
+    }
+
+    #[test]
+    fn test_server_args_just_port() {
+        let args = PenguinCli::parse_from(["penguin", "server", "--port", "45"]);
+        assert!(matches!(args.subcommand, Commands::Server(_)));
+        if let Commands::Server(args) = args.subcommand {
+            assert_eq!(args.host, ["::"]);
+            assert_eq!(args.port, [45]);
+            assert_eq!(args.backend, None);
+            assert_eq!(args.obfs, false);
+            assert_eq!(args.not_found_resp, "Not found");
+            assert_eq!(args.ws_psk, None);
+            assert_eq!(args.tls_key, None);
+            assert_eq!(args.tls_cert, None);
+            assert_eq!(args.tls_ca, None);
+        }
+    }
+
+    #[test]
+    fn test_server_args_port_cover_ahead() {
+        let args = PenguinCli::parse_from([
+            "penguin",
+            "server",
+            "--host",
+            "0.0.0.0",
+            "--host",
+            "127.0.0.1",
+        ]);
+        assert!(matches!(args.subcommand, Commands::Server(_)));
+        if let Commands::Server(args) = args.subcommand {
+            assert_eq!(args.host, ["0.0.0.0", "127.0.0.1"]);
+            assert_eq!(args.port, [8080]);
+            assert_eq!(args.backend, None);
+            assert_eq!(args.obfs, false);
+            assert_eq!(args.not_found_resp, "Not found");
+            assert_eq!(args.ws_psk, None);
+            assert_eq!(args.tls_key, None);
+            assert_eq!(args.tls_cert, None);
+            assert_eq!(args.tls_ca, None);
+        }
+    }
+
+    #[test]
+    fn test_server_args_full() {
+        let args = PenguinCli::parse_from([
+            "penguin",
+            "server",
+            "--host",
+            "example.com",
+            "--port",
+            "1234",
+            "--host",
+            "2.example.com",
+            "--port",
+            "5678",
+            "--backend",
+            "https://example.com",
+            "--obfs",
+            "--404-resp",
+            "404",
+            "--ws-psk",
+            "avocado",
+            "--tls-key",
+            "key.pem",
+            "--tls-cert",
+            "cert.pem",
+            "--tls-ca",
+            "ca.pem",
+        ]);
+        assert!(matches!(args.subcommand, Commands::Server(_)));
+        if let Commands::Server(args) = args.subcommand {
+            assert_eq!(args.host, ["example.com", "2.example.com"]);
+            assert_eq!(args.port, [1234, 5678]);
+            assert_eq!(
+                args.backend,
+                Some(BackendUrl::from_str("https://example.com").unwrap())
+            );
+            assert_eq!(args.obfs, true);
+            assert_eq!(args.not_found_resp, "404");
+            assert_eq!(args.ws_psk, Some(HeaderValue::from_static("avocado")));
+            assert_eq!(args.tls_key, Some("key.pem".to_string()));
+            assert_eq!(args.tls_cert, Some("cert.pem".to_string()));
+            assert_eq!(args.tls_ca, Some("ca.pem".to_string()));
         }
     }
 }
