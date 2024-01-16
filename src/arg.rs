@@ -179,15 +179,22 @@ pub struct ClientArgs {
 }
 
 /// Penguin server arguments.
+/// TODO: validation of `host` and `port`: must be at least one
 #[derive(Args, Debug)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct ServerArgs {
     /// Defines the HTTP listening host - the network interface.
-    #[arg(long, default_value = "::")]
-    pub host: String,
+    /// If multiple ports are specified, `penguin` will listen on all of them.
+    /// If TLS is enabled, it will apply to all listening hosts.
+    #[arg(long, default_values = ["::"], required = true)]
+    pub host: Vec<String>,
     /// Defines the HTTP listening port.
-    #[arg(short, long, default_value_t = 8080)]
-    pub port: u16,
+    /// If the number of ports is less than the number of hosts,
+    /// the last port will be used for the remaining hosts. If the number of
+    /// ports is greater than the number of hosts, the remaining ports will
+    /// be ignored.
+    #[arg(short, long, default_values_t = [8080], required = true)]
+    pub port: Vec<u16>,
     /// Specifies another HTTP server to proxy requests to when
     /// penguin receives a normal HTTP request. Useful for hiding penguin in
     /// plain sight.

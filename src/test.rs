@@ -30,8 +30,8 @@ fn test_setup_log() {
 
 fn make_server_args(host: &str, port: u16) -> arg::ServerArgs {
     arg::ServerArgs {
-        host: host.to_string(),
-        port,
+        host: vec![host.to_string()],
+        port: vec![port],
         backend: None,
         obfs: false,
         not_found_resp: "404".to_string(),

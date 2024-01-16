@@ -19,6 +19,7 @@ use hyper_util::server::conn::auto;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
+use tokio::task::JoinSet;
 use tokio_tungstenite::WebSocketStream;
 use tracing::{debug, error, info, trace};
 
@@ -42,17 +43,14 @@ pub enum Error {
 
 #[tracing::instrument(level = "trace")]
 pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
-    let host = crate::parse_remote::remove_brackets(&args.host);
-    let sockaddr: SocketAddr = (host.parse::<std::net::IpAddr>()?, args.port).into();
-    let listener = TcpListener::bind(sockaddr).await?;
-
     let state = State::new(
         args.backend.as_ref(),
         args.ws_psk.as_ref(),
         &args.not_found_resp,
         args.obfs,
     );
-
+    let sockaddrs = arg_to_sockaddrs(args)?;
+    let mut listening_tasks = JoinSet::new();
     if let Some(tls_key) = &args.tls_key {
         // `expect`: `clap` ensures that both `--tls-cert` and `--tls-key` are
         // specified if either is specified.
@@ -61,7 +59,6 @@ pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
             .as_ref()
             .expect("`tls_cert` is `None` (this is a bug)");
         trace!("Enabling TLS");
-        info!("Listening on wss://{sockaddr}/ws");
         let tls_config = make_tls_identity(tls_cert, tls_key, args.tls_ca.as_deref()).await?;
         #[cfg(unix)]
         {
@@ -82,34 +79,85 @@ pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
                 }
             });
         }
-        loop {
-            let (stream, peer) = listener.accept().await?;
-            debug!("accepted connection from {peer} with TLS");
-            #[cfg(feature = "__rustls")]
-            let stream = tokio_rustls::TlsAcceptor::from(tls_config.load_full())
-                .accept(stream)
-                .await;
-            #[cfg(feature = "nativetls")]
-            let stream = tls_config.load().accept(stream).await;
-            match stream {
-                Ok(stream) => {
-                    tokio::spawn(serve_connection(stream, state.dupe()));
+        for sockaddr in sockaddrs {
+            let listener = create_listener(sockaddr).await?;
+            let state = state.dupe();
+            let tls_config = tls_config.dupe();
+            listening_tasks.spawn(async move {
+                loop {
+                    let (stream, peer) = match listener.accept().await {
+                        Ok((stream, peer)) => (stream, peer),
+                        Err(err) => {
+                            error!("Accept error: {err}");
+                            continue;
+                        }
+                    };
+                    debug!("accepted connection from {peer} with TLS");
+                    #[cfg(feature = "__rustls")]
+                    let stream = tokio_rustls::TlsAcceptor::from(tls_config.load_full())
+                        .accept(stream)
+                        .await;
+                    #[cfg(feature = "nativetls")]
+                    let stream = tls_config.load().accept(stream).await;
+                    match stream {
+                        Ok(stream) => {
+                            tokio::spawn(serve_connection(stream, state.dupe()));
+                        }
+                        Err(err) => {
+                            error!("TLS handshake error: {err}");
+                        }
+                    }
                 }
-                Err(err) => {
-                    error!("TLS handshake error: {err}");
-                }
-            }
+            });
         }
     } else {
-        info!("Listening on ws://{sockaddr}/ws");
-        loop {
-            let (stream, peer) = listener.accept().await?;
-            debug!("accepted connection from {peer}");
-            tokio::spawn(serve_connection(stream, state.dupe()));
+        for sockaddr in sockaddrs {
+            let listener = create_listener(sockaddr).await?;
+            let state = state.dupe();
+            listening_tasks.spawn(async move {
+                loop {
+                    let (stream, peer) = match listener.accept().await {
+                        Ok((stream, peer)) => (stream, peer),
+                        Err(err) => {
+                            error!("Accept error: {err}");
+                            continue;
+                        }
+                    };
+                    debug!("accepted connection from {peer}");
+                    tokio::spawn(serve_connection(stream, state.dupe()));
+                }
+            });
         }
     }
+    todo!()
 }
 
+/// Create a list of `SocketAddr`s from the command-line arguments on which to listen.
+fn arg_to_sockaddrs(arg: &ServerArgs) -> Result<Vec<SocketAddr>, Error> {
+    // `expect`: `clap` ensures that `--port` has at least one element.
+    let last_port = arg.port.last().expect("`port` is empty (this is a bug)");
+    // Fill the rest of `port` with the last element.
+    let ports = arg.port.iter().chain(std::iter::repeat(last_port));
+    // Fills the rest of `port` with the last element.
+    arg.host
+        .iter()
+        .zip(ports)
+        .map(|(host, port)| {
+            let host = crate::parse_remote::remove_brackets(host);
+            let sockaddr: SocketAddr = (host.parse::<std::net::IpAddr>()?, *port).into();
+            Ok(sockaddr)
+        })
+        .collect()
+}
+
+/// Create a listener.
+async fn create_listener(sockaddr: SocketAddr) -> Result<TcpListener, Error> {
+    let listener = TcpListener::bind(sockaddr).await?;
+    info!("Listening on ws://{sockaddr}/ws");
+    Ok(listener)
+}
+
+/// Serves a single connection from a client.
 async fn serve_connection<S>(stream: S, state: State<'static>)
 where
     S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
