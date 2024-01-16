@@ -503,8 +503,14 @@ mod test {
             assert_eq!(
                 args.remote,
                 [Remote {
-                    local_addr: LocalSpec::Inet((crate::parse_remote::default_host!(unspec).to_string(), 1234)),
-                    remote_addr: RemoteSpec::Inet((crate::parse_remote::default_host!(local).to_string(), 1234)),
+                    local_addr: LocalSpec::Inet((
+                        crate::parse_remote::default_host!(unspec).to_string(),
+                        1234
+                    )),
+                    remote_addr: RemoteSpec::Inet((
+                        crate::parse_remote::default_host!(local).to_string(),
+                        1234
+                    )),
                     protocol: Protocol::Tcp,
                 }]
             );

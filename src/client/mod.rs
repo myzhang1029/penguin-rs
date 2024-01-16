@@ -329,7 +329,7 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
         biased;
         result = check_listeners_future => result,
         // This future never resolves
-        _ = prune_client_id_map_task(handler_resources) => unreachable!("prune_client_id_map_task should never return"),
+        () = prune_client_id_map_task(handler_resources) => unreachable!("prune_client_id_map_task should never return"),
         result = main_future => result,
     }
 }

@@ -107,10 +107,50 @@ impl<'a> State<'a> {
 }
 
 impl State<'static> {
+    /// Helper for sending a request to the backend
+    // XXX: Redo this bridging code when `reqwest` upgrades to `http = ^1`
+    async fn exec_request<B>(&self, req: Request<B>) -> Result<Response<FullBody<Bytes>>, Error>
+    where
+        B: hyper::body::Body,
+        <B as hyper::body::Body>::Error: std::fmt::Debug,
+    {
+        let (parts, body) = req.into_parts();
+        // XXX: remove this `unwrap` when `reqwest` upgrades to `http = ^1`
+        let method = parts.method.as_str().try_into().unwrap();
+        let headers = parts.headers;
+        let mut new_headers = reqwest::header::HeaderMap::with_capacity(headers.len());
+        for (name, value) in &headers {
+            new_headers.insert(
+                reqwest::header::HeaderName::try_from(name.as_str())?,
+                value.as_bytes().try_into()?,
+            );
+        }
+        // XXX: remove this `unwrap` when `reqwest` upgrades to `http = ^1`
+        let body = body.collect().await.unwrap().to_bytes();
+        let req = self
+            .client
+            .request(method, parts.uri.to_string())
+            .body(body)
+            .headers(new_headers)
+            .build()?;
+        let resp = self.client.execute(req).await?;
+        let status = resp.status().as_u16();
+        let mut resp_builder = Response::builder().status(status);
+        {
+            let headers = resp.headers();
+            for (name, value) in headers {
+                resp_builder = resp_builder.header(name.as_str(), value.as_bytes());
+            }
+        }
+        let body = resp.bytes().await?;
+        let resp = resp_builder.body(FullBody::new(body))?;
+        Ok(resp)
+    }
+
     /// Reverse proxy and 404
     async fn backend_or_404_handler<B>(
         self,
-        req: Request<B>,
+        mut req: Request<B>,
     ) -> Result<Response<FullBody<Bytes>>, Error>
     where
         B: hyper::body::Body,
@@ -133,7 +173,7 @@ impl State<'static> {
             let new_path = if base_path.ends_with('/') && req_path_query.starts_with('/') {
                 format!("{}{}", base_path, &req_path_query[1..])
             } else {
-                format!("{}{}", base_path, req_path_query)
+                format!("{base_path}{req_path_query}")
             };
 
             let uri = Uri::builder()
@@ -141,58 +181,18 @@ impl State<'static> {
                 .scheme(scheme.dupe())
                 .authority(authority.dupe())
                 .path_and_query(new_path)
-                .build()?
-                .to_string();
-            // XXX: Remove this bridging code when `reqwest` upgrades to `http = ^1`
+                .build()?;
+            *req.uri_mut() = uri;
             // This is no longer relevant since we're using reqwest instead of hyper.
             // Kept here for reference.
             // This may not be the best way to do this, but to avoid panicking if
             // we have a HTTP/2 request, but `backend` does not support h2, let's
             // downgrade to HTTP/1.1 and let them upgrade if they want to.
             // *req.version_mut() = http::version::Version::default();
-            let (parts, body) = req.into_parts();
-            // XXX: remove this `unwrap` when `reqwest` upgrades to `http = ^1`
-            let method = parts.method.as_str().try_into().unwrap();
-            let headers = parts.headers;
-            let mut new_headers = reqwest::header::HeaderMap::with_capacity(headers.len());
-            for (name, value) in headers.iter() {
-                new_headers.insert(
-                    reqwest::header::HeaderName::try_from(name.as_str())?,
-                    value.as_bytes().try_into()?,
-                );
-            }
-            // Change the `host` header to the real backend host
-            new_headers.insert(
-                reqwest::header::HOST,
-                reqwest::header::HeaderValue::from_str(authority.as_str())?,
-            );
-            // XXX: remove this `unwrap` when `reqwest` upgrades to `http = ^1`
-            let body = body.collect().await.unwrap().to_bytes();
-            let req = self
-                .client
-                .request(method, uri)
-                .body(body)
-                .headers(new_headers)
-                .build()?;
-            match self.client.execute(req).await {
-                Ok(resp) => {
-                    let status = resp.status().as_u16();
-                    let mut resp_builder = Response::builder().status(status);
-                    {
-                        let headers = resp.headers();
-                        for (name, value) in headers.iter() {
-                            resp_builder = resp_builder.header(name.as_str(), value.as_bytes());
-                        }
-                    }
-                    let body = resp.bytes().await?;
-                    let resp = resp_builder.body(FullBody::new(body))?;
-                    Ok(resp)
-                }
-                Err(e) => {
-                    error!("Failed to proxy request to backend: {}", e);
-                    self.not_found_handler()
-                }
-            }
+            self.exec_request(req).await.or_else(|e| {
+                error!("Failed to proxy request to backend: {}", e);
+                self.not_found_handler()
+            })
         } else {
             self.not_found_handler()
         }

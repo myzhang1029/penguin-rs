@@ -84,30 +84,19 @@ pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
         }
         loop {
             let (stream, peer) = listener.accept().await?;
-            debug!("accepted connection from {peer} for TLS");
+            debug!("accepted connection from {peer} with TLS");
             #[cfg(feature = "__rustls")]
-            {
-                let acceptor = tokio_rustls::TlsAcceptor::from(tls_config.load_full());
-                match acceptor.accept(stream).await {
-                    Ok(stream) => {
-                        tokio::spawn(serve_connection(stream, state.dupe()));
-                    }
-                    Err(err) => {
-                        error!("TLS handshake error: {err}");
-                    }
-                }
-            }
-            // `main.rs` has checks to ensure that only one TLS backend is
-            // enabled at a time.
+            let stream = tokio_rustls::TlsAcceptor::from(tls_config.load_full())
+                .accept(stream)
+                .await;
             #[cfg(feature = "nativetls")]
-            {
-                match tls_config.load().accept(stream).await {
-                    Ok(stream) => {
-                        tokio::spawn(serve_connection(stream, state.dupe()));
-                    }
-                    Err(err) => {
-                        error!("TLS handshake error: {err}");
-                    }
+            let stream = tls_config.load().accept(stream).await;
+            match stream {
+                Ok(stream) => {
+                    tokio::spawn(serve_connection(stream, state.dupe()));
+                }
+                Err(err) => {
+                    error!("TLS handshake error: {err}");
                 }
             }
         }
