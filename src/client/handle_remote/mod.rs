@@ -99,8 +99,8 @@ impl Stdio {
 impl AsyncRead for Stdio {
     fn poll_read(
         mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context,
-        buf: &mut tokio::io::ReadBuf,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
         std::pin::Pin::new(&mut self.stdin).poll_read(cx, buf)
     }
@@ -109,7 +109,7 @@ impl AsyncRead for Stdio {
 impl AsyncWrite for Stdio {
     fn poll_write(
         mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context,
+        cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> std::task::Poll<std::io::Result<usize>> {
         std::pin::Pin::new(&mut self.stdout).poll_write(cx, buf)
@@ -117,14 +117,14 @@ impl AsyncWrite for Stdio {
 
     fn poll_flush(
         mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context,
+        cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
         std::pin::Pin::new(&mut self.stdout).poll_flush(cx)
     }
 
     fn poll_shutdown(
         mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context,
+        cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
         std::pin::Pin::new(&mut self.stdout).poll_shutdown(cx)
     }
