@@ -37,12 +37,18 @@ impl_dupe_as_clone! {
     http::uri::PathAndQuery => (),
     // `Uri` is the combination of the above.
     http::Uri => (),
-    // `Client` uses `Arc` internally.
-    reqwest::Client => (),
     // `Arc` is a reference-counted type.
     std::sync::Arc<T> => (T),
     // `Sender` is designed to be cheaply cloned.
     tokio::sync::mpsc::Sender<T> => (T),
     // `UnboundedSender` is designed to be cheaply cloned.
     tokio::sync::mpsc::UnboundedSender<T> => (T),
+}
+
+// `Client` uses `Arc` internally.
+#[cfg(feature = "reqwest")]
+impl Dupe for reqwest::Client {
+    fn dupe(&self) -> Self {
+        self.clone()
+    }
 }
