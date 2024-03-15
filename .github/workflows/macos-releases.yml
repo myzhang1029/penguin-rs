@@ -16,7 +16,7 @@ jobs:
 
     steps:
     - name: Checkout source
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
 
     - name: Rust Cache
       uses: Swatinem/rust-cache@v1
@@ -35,6 +35,6 @@ jobs:
         cargo build --release --target aarch64-apple-darwin
 
     - name: Upload binary
-      uses: actions/upload-artifact@v2.2.4
+      uses: actions/upload-artifact@v4
       with:
         path: target/*/release/penguin
