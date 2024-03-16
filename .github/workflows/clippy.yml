@@ -39,12 +39,8 @@ jobs:
           submodules: true
 
       - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          components: clippy
-          override: true
+        run:
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --component clippy
 
       - name: Install required cargo
         run: cargo install clippy-sarif sarif-fmt

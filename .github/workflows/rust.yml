@@ -34,12 +34,8 @@ jobs:
         submodules: true
 
     - name: Install Rust toolchain
-      uses: actions-rs/toolchain@v1
-      with:
-        profile: minimal
-        toolchain: stable
-        components: llvm-tools-preview
-        override: true
+      run:
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --component llvm-tools-preview
 
     - name: Install grcov
       run: cargo install grcov
