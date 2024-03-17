@@ -30,7 +30,7 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::oneshot;
 use tokio::{
-    sync::{mpsc, RwLock},
+    sync::{mpsc, Mutex, RwLock},
     task::JoinSet,
 };
 use tracing::{error, trace, warn};
@@ -100,10 +100,10 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub struct Multiplexor<S> {
     inner: MultiplexorInner<S>,
     /// Channel of received datagram frames for processing.
-    datagram_rx: RwLock<mpsc::Receiver<DatagramFrame>>,
+    datagram_rx: Mutex<mpsc::Receiver<DatagramFrame>>,
     /// Channel for a server-side `Multiplexor` to receive newly
     /// established streams.
-    server_stream_rx: RwLock<mpsc::Receiver<MuxStream<S>>>,
+    server_stream_rx: Mutex<mpsc::Receiver<MuxStream<S>>>,
 }
 
 impl<S: WebSocketStream> Multiplexor<S> {
@@ -158,8 +158,8 @@ impl<S: WebSocketStream> Multiplexor<S> {
 
         Self {
             inner,
-            datagram_rx: RwLock::new(datagram_rx),
-            server_stream_rx: RwLock::new(server_stream_rx),
+            datagram_rx: Mutex::new(datagram_rx),
+            server_stream_rx: Mutex::new(server_stream_rx),
         }
     }
 
@@ -223,7 +223,7 @@ impl<S: WebSocketStream> Multiplexor<S> {
     pub async fn server_new_stream_channel(&self) -> Result<MuxStream<S>> {
         assert_eq!(self.inner.role, Role::Server);
         self.server_stream_rx
-            .write()
+            .lock()
             .await
             .recv()
             .await
@@ -242,7 +242,7 @@ impl<S: WebSocketStream> Multiplexor<S> {
     #[inline]
     pub async fn get_datagram(&self) -> Result<DatagramFrame> {
         self.datagram_rx
-            .write()
+            .lock()
             .await
             .recv()
             .await

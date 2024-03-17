@@ -102,8 +102,7 @@ pub(crate) mod mock {
         }
 
         fn start_send(self: Pin<&mut Self>, msg: Message) -> Result<(), Self::Error> {
-            let mut other_end_recv_queue = self.other_end_recv_queue.lock();
-            other_end_recv_queue.push_back(msg);
+            self.other_end_recv_queue.lock().push_back(msg);
             Ok(())
         }
 

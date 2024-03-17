@@ -94,11 +94,10 @@ impl HandlerResources {
         let our_addr = socket
             .local_addr()
             .expect("Failed to get local address of UDP socket (this is a bug)");
-        let mut udp_client_map = self.udp_client_map.write().await;
         let ClientIdMaps {
             ref mut client_id_map,
             ref mut client_addr_map,
-        } = &mut *udp_client_map;
+        } = &mut *self.udp_client_map.write().await;
         if let Some(client_id) = client_addr_map.get(&(addr, our_addr)) {
             // The client already exists, just refresh the entry
             client_id_map
@@ -120,11 +119,10 @@ impl HandlerResources {
 
     /// Prune expired entries from the UDP client maps
     async fn prune_udp_clients(&self) {
-        let mut udp_client_map = self.udp_client_map.write().await;
         let ClientIdMaps {
             ref mut client_id_map,
             ref mut client_addr_map,
-        } = &mut *udp_client_map;
+        } = &mut *self.udp_client_map.write().await;
         let now = time::Instant::now();
         client_id_map.retain(|_, entry| {
             if entry.expires > now {
