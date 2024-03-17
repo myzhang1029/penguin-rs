@@ -30,9 +30,9 @@ macro_rules! default_host {
 pub(crate) use default_host;
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
-#[allow(clippy::struct_field_names)]
 pub struct Remote {
     pub local_addr: LocalSpec,
+    #[allow(clippy::struct_field_names)]
     pub remote_addr: RemoteSpec,
     pub protocol: Protocol,
 }

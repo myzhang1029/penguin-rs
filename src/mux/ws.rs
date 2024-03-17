@@ -54,9 +54,9 @@ impl WebSocketError for Error {
 }
 
 #[cfg(test)]
+#[allow(unused_imports)]
+#[allow(dead_code)]
 pub(crate) mod mock {
-    #![allow(unused_imports)]
-    #![allow(dead_code)]
     use super::*;
     use parking_lot::Mutex;
     use std::collections::VecDeque;

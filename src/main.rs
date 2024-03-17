@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 #![warn(missing_docs, missing_debug_implementations)]
 #![forbid(unsafe_code)]
-#![allow(clippy::module_name_repetitions)]
 
 mod arg;
 mod client;

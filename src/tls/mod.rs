@@ -17,6 +17,7 @@ use thiserror::Error;
 use tokio_tungstenite::Connector;
 
 /// A hot-swappable container for a TLS key and certificate.
+#[allow(clippy::module_name_repetitions)]
 pub type TlsIdentity = Arc<ArcSwap<TlsIdentityInner>>;
 
 /// Error type for TLS configuration
@@ -65,6 +66,7 @@ pub async fn make_tls_identity(
     Ok(Arc::new(ArcSwap::from_pointee(identity)))
 }
 
+#[cfg(unix)]
 pub async fn reload_tls_identity(
     identity: &TlsIdentity,
     cert_path: &str,

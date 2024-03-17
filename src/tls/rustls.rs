@@ -78,7 +78,6 @@ fn get_system_certs() -> Result<RootCertStore, Error> {
     Ok(roots)
 }
 #[cfg(feature = "rustls-webpki-roots")]
-#[allow(clippy::unnecessary_wraps)]
 fn get_system_certs() -> Result<RootCertStore, Error> {
     let mut roots = RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());

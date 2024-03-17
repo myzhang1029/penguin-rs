@@ -10,7 +10,9 @@ use std::net::SocketAddr;
 
 use self::service::State;
 use crate::arg::ServerArgs;
-use crate::tls::{make_tls_identity, reload_tls_identity};
+use crate::tls::make_tls_identity;
+#[cfg(unix)]
+use crate::tls::reload_tls_identity;
 use crate::Dupe;
 use hyper::upgrade::Upgraded;
 use hyper_util::rt::tokio::TokioExecutor;
@@ -32,6 +34,7 @@ pub enum Error {
     InvalidHost(#[from] std::net::AddrParseError),
     #[error(transparent)]
     Tls(#[from] crate::tls::Error),
+    #[cfg(unix)]
     #[error("Cannot register signal handler: {0}")]
     Signal(std::io::Error),
     #[error("HTTP server I/O error: {0}")]
@@ -61,26 +64,10 @@ pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
         trace!("Enabling TLS");
         let tls_config = make_tls_identity(tls_cert, tls_key, args.tls_ca.as_deref()).await?;
         #[cfg(unix)]
-        {
-            let mut sigusr1 =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined1())
-                    .map_err(Error::Signal)?;
-            let tls_config = tls_config.dupe();
-            // This `Future` does not fail, so we can ignore the `Result`.
-            tokio::spawn(async move {
-                while sigusr1.recv().await == Some(()) {
-                    info!("Reloading TLS certificate");
-                    if let Err(err) =
-                        reload_tls_identity(&tls_config, tls_cert, tls_key, args.tls_ca.as_deref())
-                            .await
-                    {
-                        error!("Cannot reload TLS certificate: {err}");
-                    }
-                }
-            });
-        }
+        register_signal_handler(tls_config.dupe(), tls_cert, tls_key, args.tls_ca.as_deref())?;
         for sockaddr in sockaddrs {
-            let listener = create_listener(sockaddr).await?;
+            let listener = TcpListener::bind(sockaddr).await?;
+            info!("Listening on wss://{sockaddr}/ws");
             listening_tasks.spawn(run_listener(
                 listener,
                 Some(tls_config.dupe()),
@@ -89,7 +76,8 @@ pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
         }
     } else {
         for sockaddr in sockaddrs {
-            let listener = create_listener(sockaddr).await?;
+            let listener = TcpListener::bind(sockaddr).await?;
+            info!("Listening on ws://{sockaddr}/ws");
             listening_tasks.spawn(run_listener(listener, None, state.dupe()));
         }
     }
@@ -99,6 +87,29 @@ pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
             error!("Listener finished with error: {err}");
         }
     }
+    Ok(())
+}
+
+/// Run a signal handler task to reload the TLS certificate.
+#[cfg(unix)]
+#[inline]
+fn register_signal_handler(
+    tls_config: crate::tls::TlsIdentity,
+    tls_cert: &'static str,
+    tls_key: &'static str,
+    tls_ca: Option<&'static str>,
+) -> Result<(), Error> {
+    let mut sigusr1 = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined1())
+        .map_err(Error::Signal)?;
+    // This `Future` does not fail, so we can ignore the `Result`.
+    tokio::spawn(async move {
+        while sigusr1.recv().await.is_some() {
+            info!("Reloading TLS certificate");
+            if let Err(err) = reload_tls_identity(&tls_config, tls_cert, tls_key, tls_ca).await {
+                error!("Cannot reload TLS certificate: {err}");
+            }
+        }
+    });
     Ok(())
 }
 
@@ -119,13 +130,6 @@ fn arg_to_sockaddrs(arg: &ServerArgs) -> Result<Vec<SocketAddr>, Error> {
             Ok(sockaddr)
         })
         .collect()
-}
-
-/// Create a listener.
-async fn create_listener(sockaddr: SocketAddr) -> Result<TcpListener, Error> {
-    let listener = TcpListener::bind(sockaddr).await?;
-    info!("Listening on ws://{sockaddr}/ws");
-    Ok(listener)
 }
 
 /// Runs a listener.

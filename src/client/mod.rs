@@ -144,6 +144,7 @@ impl HandlerResources {
 /// Type of the two client ID maps
 /// Map of client IDs to UDP sockets and the map of client addresses to client IDs
 #[derive(Clone, Debug)]
+#[allow(clippy::module_name_repetitions)]
 pub struct ClientIdMaps {
     /// Client ID -> Client ID map entry
     client_id_map: HashMap<u32, ClientIdMapEntry>,
@@ -195,6 +196,7 @@ impl ClientIdMaps {
 
 /// Type stored in the first client ID map
 #[derive(Clone, Debug)]
+#[allow(clippy::module_name_repetitions)]
 pub struct ClientIdMapEntry {
     /// The address of the client
     pub peer_addr: SocketAddr,

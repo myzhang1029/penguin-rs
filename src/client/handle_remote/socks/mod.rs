@@ -260,13 +260,16 @@ where
     // Send back a successful response
     v5::write_response(&mut stream, 0x00, sock_local_addr).await?;
     // My crude way to detect when the client closes the connection
-    stream.read(&mut [0; 1]).await.ok();
+    // I cannot pass a zero-length buffer to read_exact, because so it
+    // skips `poll_read` and just returns
+    stream.read_exact(&mut [0; 1]).await.ok();
     relay_task.abort();
     Ok(())
 }
 
 /// UDP task spawned by the TCP connection
 #[allow(clippy::similar_names)]
+#[allow(clippy::no_effect_underscore_binding)]
 async fn udp_relay(
     _rhost: Bytes,
     _rport: u16,

@@ -3,8 +3,8 @@ name = "rusty-penguin"
 version = "0.5.4"
 authors = ["Zhang Maiyun <me@maiyun.me>"]
 edition = "2021"
-# Binary is 1.74.1. Note that I do not consider raising MSRV a breaking change.
-rust-version = "1.65.0"
+# Lib is 1.65.0. Note that I do not consider raising MSRV a breaking change.
+rust-version = "1.74.1"
 description = "A fast TCP/UDP tunnel, transported over HTTP WebSocket"
 readme = "README.md"
 repository = "https://github.com/myzhang1029/penguin-rs"
