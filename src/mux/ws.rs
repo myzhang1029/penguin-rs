@@ -67,7 +67,7 @@ pub(crate) mod mock {
 
     /// A mock WebSocket stream.
     #[derive(Debug)]
-    pub(crate) struct MockWebSocket {
+    pub struct MockWebSocket {
         /// Messages to send.
         pub other_end_recv_queue: Arc<Mutex<VecDeque<Message>>>,
         /// Messages received.
@@ -81,12 +81,13 @@ pub(crate) mod mock {
 
         fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
             let mut recv_queue = self.recv_queue.lock();
-            if let Some(msg) = recv_queue.pop_front() {
-                Poll::Ready(Some(Ok(msg)))
-            } else {
-                cx.waker().wake_by_ref();
-                Poll::Pending
-            }
+            recv_queue.pop_front().map_or_else(
+                || {
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                },
+                |msg| Poll::Ready(Some(Ok(msg))),
+            )
         }
     }
 
@@ -128,7 +129,7 @@ pub(crate) mod mock {
     }
     // If we are not using `loom`, we create a pair of mock WebSocket streams
     // from a `tokio` `DuplexStream`.
-    pub(crate) async fn get_pair() -> (
+    pub async fn get_pair() -> (
         tokio_tungstenite::WebSocketStream<DuplexStream>,
         tokio_tungstenite::WebSocketStream<DuplexStream>,
     ) {

@@ -135,7 +135,6 @@ pub(super) async fn tcp_forwarder_on_channel(
 #[cfg(test)]
 mod test {
     use super::*;
-    use tokio::net::UdpSocket;
 
     #[tokio::test]
     async fn test_bind_and_send_v4() {

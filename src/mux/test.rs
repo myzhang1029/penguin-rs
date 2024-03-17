@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::*;
-use bytes::Bytes;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, info};
 
@@ -64,7 +63,7 @@ async fn datagram_channel_passes_data() {
         debug!("Client sending datagram");
         client_mux
             .send_datagram(DatagramFrame {
-                host: Bytes::from_static("example.com".as_bytes()),
+                host: Bytes::from_static(b"example.com"),
                 port: 53,
                 sid: 1,
                 data: payload.clone(),
@@ -73,7 +72,7 @@ async fn datagram_channel_passes_data() {
             .unwrap();
         debug!("Client awaiting datagram");
         let recvd = client_mux.get_datagram().await.unwrap();
-        assert_eq!(recvd.host, "example.com".as_bytes());
+        assert_eq!(*recvd.host, *b"example.com");
         assert_eq!(recvd.port, 53);
         assert_eq!(recvd.sid, 1);
         assert_eq!(recvd.data, payload);

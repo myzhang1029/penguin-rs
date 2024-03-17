@@ -406,7 +406,6 @@ impl FromStr for Header {
 mod test {
     use super::*;
     use crate::parse_remote::{LocalSpec, Protocol, RemoteSpec};
-    use std::str::FromStr;
 
     #[test]
     fn test_serverurl_fromstr() {
@@ -506,12 +505,9 @@ mod test {
             assert_eq!(
                 args.remote,
                 [Remote {
-                    local_addr: LocalSpec::Inet((
-                        crate::parse_remote::default_host!(unspec).to_string(),
-                        1234
-                    )),
+                    local_addr: LocalSpec::Inet((crate::parse_remote::default_host!(unspec), 1234)),
                     remote_addr: RemoteSpec::Inet((
-                        crate::parse_remote::default_host!(local).to_string(),
+                        crate::parse_remote::default_host!(local),
                         1234
                     )),
                     protocol: Protocol::Tcp,
@@ -585,7 +581,7 @@ mod test {
             assert_eq!(args.host, ["::"]);
             assert_eq!(args.port, [8080]);
             assert_eq!(args.backend, None);
-            assert_eq!(args.obfs, false);
+            assert!(!args.obfs);
             assert_eq!(args.not_found_resp, "Not found");
             assert_eq!(args.ws_psk, None);
             assert_eq!(args.tls_key, None);
@@ -602,7 +598,7 @@ mod test {
             assert_eq!(args.host, ["0.0.0.0"]);
             assert_eq!(args.port, [8080]);
             assert_eq!(args.backend, None);
-            assert_eq!(args.obfs, false);
+            assert!(!args.obfs);
             assert_eq!(args.not_found_resp, "Not found");
             assert_eq!(args.ws_psk, None);
             assert_eq!(args.tls_key, None);
@@ -619,7 +615,7 @@ mod test {
             assert_eq!(args.host, ["::"]);
             assert_eq!(args.port, [45]);
             assert_eq!(args.backend, None);
-            assert_eq!(args.obfs, false);
+            assert!(!args.obfs);
             assert_eq!(args.not_found_resp, "Not found");
             assert_eq!(args.ws_psk, None);
             assert_eq!(args.tls_key, None);
@@ -643,7 +639,7 @@ mod test {
             assert_eq!(args.host, ["0.0.0.0", "127.0.0.1"]);
             assert_eq!(args.port, [8080]);
             assert_eq!(args.backend, None);
-            assert_eq!(args.obfs, false);
+            assert!(!args.obfs);
             assert_eq!(args.not_found_resp, "Not found");
             assert_eq!(args.ws_psk, None);
             assert_eq!(args.tls_key, None);
@@ -687,7 +683,7 @@ mod test {
                 args.backend,
                 Some(BackendUrl::from_str("https://example.com").unwrap())
             );
-            assert_eq!(args.obfs, true);
+            assert!(args.obfs);
             assert_eq!(args.not_found_resp, "404");
             assert_eq!(args.ws_psk, Some(HeaderValue::from_static("avocado")));
             assert_eq!(args.tls_key, Some("key.pem".to_string()));

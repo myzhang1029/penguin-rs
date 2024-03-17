@@ -313,7 +313,6 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
-    use http_body_util::BodyExt;
 
     type EmptyBody = http_body_util::Empty<Bytes>;
 

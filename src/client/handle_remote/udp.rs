@@ -98,6 +98,8 @@ mod test {
 
     #[tokio::test]
     async fn test_handle_udp() {
+        static LHOST: &str = "127.0.0.1";
+        static RHOST: &str = "127.0.0.1";
         let (datagram_tx, mut datagram_rx) = tokio::sync::mpsc::channel(1);
         let (stream_command_tx, _) = tokio::sync::mpsc::channel(1);
         let udp_client_map = Arc::new(RwLock::new(ClientIdMaps::new()));
@@ -106,8 +108,6 @@ mod test {
             stream_command_tx,
             udp_client_map: udp_client_map.dupe(),
         };
-        static LHOST: &'static str = "127.0.0.1";
-        static RHOST: &'static str = "127.0.0.1";
         let forwarding_task =
             tokio::spawn(
                 async move { handle_udp(LHOST, 14196, RHOST, 255, &handler_resources).await },

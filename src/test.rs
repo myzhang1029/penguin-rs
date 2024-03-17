@@ -79,8 +79,8 @@ async fn make_server_cert_ecdsa() -> TempDir {
     cert_params.alg = &rcgen::PKCS_ECDSA_P384_SHA384;
     let dir = tempfile::tempdir().unwrap();
     let dir_path = dir.path().to_str().unwrap();
-    let cert_path = format!("{}/cert.pem", dir_path);
-    let key_path = format!("{}/privkey.pem", dir_path);
+    let cert_path = format!("{dir_path}/cert.pem");
+    let key_path = format!("{dir_path}/privkey.pem");
     let cert = rcgen::Certificate::from_params(cert_params).unwrap();
     let key = cert.serialize_private_key_pem();
     let cert = cert.serialize_pem().unwrap();
@@ -163,7 +163,7 @@ async fn test_it_works_v6() {
 async fn test_it_works_tls_simple() {
     static SERVER_ARGS: OnceCell<arg::ServerArgs> = OnceCell::new();
     static CLIENT_ARGS: Lazy<arg::ClientArgs> = Lazy::new(|| arg::ClientArgs {
-        server: ServerUrl::from_str(&format!("wss://127.0.0.1:20353/ws")).unwrap(),
+        server: ServerUrl::from_str("wss://127.0.0.1:20353/ws").unwrap(),
         remote: vec![Remote::from_str("127.0.0.1:24368:127.0.0.1:12034").unwrap()],
         ws_psk: None,
         keepalive: 0,
@@ -199,7 +199,7 @@ async fn test_it_works_tls_simple() {
     });
 
     let client_task = tokio::spawn(crate::client::client_main(&CLIENT_ARGS));
-    let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS.get().unwrap()));
+    let server_task = tokio::spawn(crate::server::server_main(SERVER_ARGS.get().unwrap()));
     tokio::time::sleep(Duration::from_secs(2)).await;
     let mut sock = TcpStream::connect("127.0.0.1:24368").await.unwrap();
     sock.write_all(&input_bytes).await.unwrap();
