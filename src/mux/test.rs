@@ -22,7 +22,6 @@ fn test_setup_log() {
         .init();
 }
 
-#[tokio::test]
 async fn connect_succeeds() {
     let (client, server) = crate::ws::mock::get_pair().await;
 
@@ -41,6 +40,14 @@ async fn connect_succeeds() {
     info!("sport = {}, dport = {}", stream.our_port, stream.their_port);
     debug!("Waiting for server task to finish");
     server_task.await.unwrap();
+}
+
+#[test]
+#[cfg(loom)]
+fn test_loom_connect_succeeds() {
+    loom::model(|| {
+        loom::thread::spawn(|| loom::future::block_on(connect_succeeds()));
+    });
 }
 
 #[tokio::test]

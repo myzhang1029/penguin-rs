@@ -5,11 +5,30 @@
 
 use crate::ws::{Message, Result, WebSocketError, WebSocketStream};
 use futures_util::{SinkExt, StreamExt};
+#[cfg(not(loom))]
 use parking_lot::Mutex;
+#[cfg(loom)]
+use loom::sync::Mutex as LoomMutex;
 use std::future::poll_fn;
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 use tracing::trace;
+
+#[cfg(loom)]
+struct Mutex<T>(LoomMutex<T>);
+
+#[cfg(loom)]
+impl<T> Mutex<T> {
+    fn new(t: T) -> Self {
+        Self(LoomMutex::new(t))
+    }
+    fn lock(&self) -> loom::sync::MutexGuard<'_, T> {
+        self.0.lock().unwrap()
+    }
+    fn try_lock(&self) -> Option<loom::sync::MutexGuard<'_, T>> {
+        self.0.try_lock().ok()
+    }
+}
 
 /// A wrapper around `Sink + Stream` that can be cloned and shared between tasks.
 pub struct LockedWebSocket<S>(Arc<Mutex<S>>);

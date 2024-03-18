@@ -10,7 +10,10 @@ use bytes::Bytes;
 use futures_util::task::AtomicWaker;
 use std::io;
 use std::pin::Pin;
+#[cfg(not(loom))]
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(loom)]
+use loom::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite};

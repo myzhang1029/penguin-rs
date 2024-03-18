@@ -12,7 +12,10 @@ use crate::ws::{Message, WebSocketStream};
 use bytes::{Buf, Bytes};
 use futures_util::task::AtomicWaker;
 use std::collections::HashMap;
+#[cfg(not(loom))]
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(loom)]
+use loom::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot, RwLock};

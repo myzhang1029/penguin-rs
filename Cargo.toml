@@ -41,7 +41,7 @@ rustls-native-certs = { version = "0.7", optional = true }
 rustls-pemfile = { version = "2", optional = true }
 sha1 = { version = "0.10", optional = true }
 thiserror = "1"
-tokio = { version = "^1, >=1.23.1", features = ["macros", "parking_lot", "rt", "sync", "time"] }
+tokio = { version = "^1, >=1.23.1", features = ["macros", "net", "parking_lot", "rt", "sync", "time"] }
 tokio-native-tls = { version = "0.3", optional = true }
 tokio-rustls = { version = "0.25", optional = true }
 tokio-tungstenite = { version = "0.21", default-features = false }
@@ -52,6 +52,7 @@ webpki-roots = { version = "0.26", optional = true }
 [dev-dependencies]
 ctor = "0.2"
 tempfile = "3"
+tracing-subscriber = "0.3"
 rcgen = "0.12"
 
 [features]
@@ -90,6 +91,10 @@ penguin-binary = [
 
 [profile.release]
 debug = true
+lto = true
+
+[target.'cfg(loom)'.dependencies]
+loom = { version = "0.7", features = ["futures"] }
 
 # Temporary fix for cross-rs/cross#1345, tracking
 [package.metadata.cross.target.x86_64-unknown-netbsd]
