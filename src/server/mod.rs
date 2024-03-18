@@ -67,7 +67,8 @@ pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
         register_signal_handler(tls_config.dupe(), tls_cert, tls_key, args.tls_ca.as_deref())?;
         for sockaddr in sockaddrs {
             let listener = TcpListener::bind(sockaddr).await?;
-            info!("Listening on wss://{sockaddr}/ws");
+            let actual_addr = listener.local_addr()?;
+            info!("Listening on wss://{actual_addr}/ws");
             listening_tasks.spawn(run_listener(
                 listener,
                 Some(tls_config.dupe()),
@@ -77,7 +78,8 @@ pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
     } else {
         for sockaddr in sockaddrs {
             let listener = TcpListener::bind(sockaddr).await?;
-            info!("Listening on ws://{sockaddr}/ws");
+            let actual_addr = listener.local_addr()?;
+            info!("Listening on ws://{actual_addr}/ws");
             listening_tasks.spawn(run_listener(listener, None, state.dupe()));
         }
     }
