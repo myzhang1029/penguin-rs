@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
-use tracing::{debug, trace, warn};
+use tracing::{debug, error, trace, warn};
 
 /// All parameters of a stream channel
 pub struct MuxStream<S> {
@@ -179,6 +179,11 @@ where
                 if original == 0 {
                     // We have reached the congestion window limit. Wait for an `Ack`
                     debug!("waiting for `Ack`");
+                    let last_waker = self.writer_waker.take();
+                    error!("Previous value was {last_waker:?}");
+                    if let Some(last_waker) = last_waker {
+                        last_waker.wake();
+                    }
                     self.writer_waker.register(cx.waker());
                     // Since all writes start with `poll_flush`, we don't need to
                     // flush here. There is actually no way to `poll_flush` without
