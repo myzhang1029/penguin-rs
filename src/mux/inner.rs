@@ -6,11 +6,10 @@ use super::config;
 use super::dupe::Dupe;
 use super::frame::{DatagramFrame, Frame, StreamFlag, StreamFrame};
 use super::locked_sink::LockedWebSocket;
-use super::stream::MuxStream;
+use super::stream::{MuxStream, WakerSet};
 use super::{Error, IntKey, Result, Role};
 use crate::ws::{Message, WebSocketStream};
 use bytes::{Buf, Bytes};
-use futures_util::task::AtomicWaker;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -33,9 +32,9 @@ pub struct MuxStreamData {
     can_write: Arc<AtomicBool>,
     /// Number of `Psh` frames we are allowed to send before waiting for a `Ack` frame.
     psh_send_remaining: Arc<AtomicU64>,
-    /// Waker to wake up the task that sends frames because their `psh_send_remaining`
+    /// Waker to wake up the tasks that send frames because their `psh_send_remaining`
     /// has increased.
-    writer_waker: Arc<AtomicWaker>,
+    writer_waker: WakerSet,
 }
 
 #[derive(Debug)]
@@ -363,7 +362,7 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
                     stream_data
                         .psh_send_remaining
                         .fetch_add(peer_processed, Ordering::Relaxed);
-                    stream_data.writer_waker.wake();
+                    stream_data.writer_waker.wake_all();
                 } else {
                     // the port does not exist
                     drop(streams);
@@ -422,7 +421,7 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
         let (frame_tx, frame_rx) = mpsc::channel(config::STREAM_FRAME_BUFFER_SIZE);
         let can_write = Arc::new(AtomicBool::new(true));
         let psh_send_remaining = Arc::new(AtomicU64::new(peer_rwnd));
-        let writer_waker = Arc::new(AtomicWaker::new());
+        let writer_waker = WakerSet::new();
         // Save the TX end of the stream so we can write to it when subsequent frames arrive
         let mut streams = self.streams.write().await;
         let our_port = if our_port == 0 {
@@ -494,7 +493,7 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
         let (frame_tx, frame_rx) = mpsc::channel(config::STREAM_FRAME_BUFFER_SIZE);
         let can_write = Arc::new(AtomicBool::new(true));
         let psh_send_remaining = Arc::new(AtomicU64::new(peer_rwnd));
-        let writer_waker = Arc::new(AtomicWaker::new());
+        let writer_waker = WakerSet::new();
         let stream_data = MuxStreamData {
             sender: frame_tx,
             can_write: can_write.dupe(),
@@ -560,7 +559,7 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
             }
             // If there is a writer waiting for `Ack`, wake it up because it will never receive one.
             // Waking it here and the user should receive a `BrokenPipe` error.
-            stream_data.writer_waker.wake();
+            stream_data.writer_waker.wake_all();
         }
         debug!("freed connection {our_port} -> {their_port}");
     }
@@ -580,7 +579,7 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
                 stream_data.can_write.store(false, Ordering::Relaxed);
                 // If there is a writer waiting for `Ack`, wake it up because it will never receive one.
                 // Waking it here and the user should receive a `BrokenPipe` error.
-                stream_data.writer_waker.wake();
+                stream_data.writer_waker.wake_all();
             }
             // else: just drop the sender
         }
