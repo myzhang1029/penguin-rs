@@ -5,17 +5,18 @@
 use super::frame::StreamFrame;
 use super::locked_sink::LockedWebSocket;
 use crate::config;
+use crate::dupe::Dupe;
 use crate::ws::WebSocketError;
 use bytes::Bytes;
-use futures_util::task::AtomicWaker;
+use parking_lot::Mutex;
 use std::io;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::task::{ready, Context, Poll};
+use std::task::{ready, Context, Poll, Waker};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, trace, warn};
 
 /// All parameters of a stream channel
 pub struct MuxStream<S> {
@@ -38,8 +39,8 @@ pub struct MuxStream<S> {
     pub(super) psh_recvd_since: AtomicU64,
     /// Channel to send `Ack` frames to the mux task (our port, their port, psh_recvd_since)
     pub(super) ack_tx: mpsc::UnboundedSender<(u16, u16, u64)>,
-    /// Waker to wake up the task that sends frames
-    pub(super) writer_waker: Arc<AtomicWaker>,
+    /// Wakers of the tasks that wanted to write
+    pub(super) writer_waker: WakerSet,
     /// Remaining bytes to be read
     pub(super) buf: Bytes,
     /// See `MultiplexorInner`.
@@ -179,12 +180,8 @@ where
                 if original == 0 {
                     // We have reached the congestion window limit. Wait for an `Ack`
                     debug!("waiting for `Ack`");
-                    let last_waker = self.writer_waker.take();
-                    error!("Previous value was {last_waker:?}");
-                    if let Some(last_waker) = last_waker {
-                        last_waker.wake();
-                    }
-                    self.writer_waker.register(cx.waker());
+                    // Register the waker
+                    self.writer_waker.add(cx.waker());
                     // Since all writes start with `poll_flush`, we don't need to
                     // flush here. There is actually no way to `poll_flush` without
                     // magic.
@@ -247,5 +244,55 @@ where
         // This line is allowed to fail, because the sink might have been closed altogether
         ready!(self.ws.poll_flush(cx)).ok();
         Poll::Ready(Ok(()))
+    }
+}
+
+/// A set of `Waker`s to be woken up all at once.
+/// Compare `tokio::runtime::io::scheduled_io::ScheduledIo` and
+/// `tokio::sync::batch_semaphore::Waiter`. Unlike `ScheduledIo`, the waiters
+/// here have the same interest: to write. Unlike `Waiter`, we do not know how
+/// much of the freed-up resources the waiters want, so we wake them all up.
+#[derive(Debug)]
+pub struct WakerSet {
+    /// The set of `Waker`s
+    pub wakers: Arc<Mutex<Vec<Waker>>>,
+}
+
+impl WakerSet {
+    /// Create a new `WakerSet`.
+    #[inline]
+    pub fn new() -> Self {
+        // Hardcoding 1 since this is probably the most common case
+        Self {
+            wakers: Arc::new(Mutex::new(Vec::with_capacity(1))),
+        }
+    }
+
+    /// Wake up all the `Waker`s in the set.
+    #[inline]
+    pub fn wake_all(&self) {
+        #[allow(clippy::significant_drop_in_scrutinee)]
+        for waker in self.wakers.lock().drain(..) {
+            waker.wake();
+        }
+    }
+
+    /// Add a `Waker` to the set. It takes a reference to the `Waker` to avoid
+    /// cloning it when it is already in the set.
+    #[inline]
+    pub fn add(&self, waker: &Waker) {
+        let mut wakers = self.wakers.lock();
+        if !wakers.iter().any(|w| w.will_wake(waker)) {
+            debug!("adding a waker, new count: {}", wakers.len() + 1);
+            wakers.push(waker.clone());
+        }
+    }
+}
+
+impl Dupe for WakerSet {
+    fn dupe(&self) -> Self {
+        Self {
+            wakers: self.wakers.dupe(),
+        }
     }
 }
