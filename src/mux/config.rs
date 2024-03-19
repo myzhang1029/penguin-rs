@@ -16,17 +16,20 @@ pub const RWND: u64 = STREAM_FRAME_BUFFER_SIZE as u64;
 /// Number of `StreamFrame`s to buffer in `MuxStream`'s channels before blocking
 #[cfg(not(test))]
 pub const STREAM_FRAME_BUFFER_SIZE: usize = 1 << 9;
-/// Number of `Psh` frames between `Ack`s:
+/// Number of received `Psh` frames before sending an `Ack` to peer.
 /// If too low, `Ack`s will consume too much bandwidth;
-/// If too high, writers may block.
+/// If too high, peer's writers will probably block.
 #[cfg(not(test))]
 pub const RWND_THRESHOLD: u64 = 1 << 8;
 
 /// Number of `StreamFrame`s to buffer in `MuxStream`'s channels before blocking
 #[cfg(test)]
 pub const STREAM_FRAME_BUFFER_SIZE: usize = 1 << 2;
-/// Number of `Psh` frames between `Ack`s. In tests, we want to be able to
-/// test the `Ack` mechanism, so we set this to be the same as the buffer size.
-/// The downside is that tests will be slower.
+/// Number of received `Psh` frames before sending an `Ack` to peer.
+/// If too low, `Ack`s will consume too much bandwidth;
+/// If too high, peer's writers will probably block.
+// In tests, we want to be able to test the `Ack` mechanism, so we set this
+// to be the same as the buffer size.
+// The downside is that tests will be slower.
 #[cfg(test)]
 pub const RWND_THRESHOLD: u64 = RWND;
