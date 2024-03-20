@@ -285,9 +285,10 @@ async fn udp_relay(
             .add_udp_client((src, sport).into(), socket.dupe(), true)
             .await;
         let datagram_frame = DatagramFrame {
-            host: dst,
-            port: dport,
-            sid: client_id,
+            target_host: dst,
+            target_port: dport,
+            sport: client_id,
+            dport: 0,
             data,
         };
         // This fails only if main has exited, which is a fatal error.

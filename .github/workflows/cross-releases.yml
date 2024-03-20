@@ -24,13 +24,13 @@ jobs:
         - rust_target: aarch64-linux-android
         - rust_target: aarch64-unknown-linux-gnu
         - rust_target: aarch64-unknown-linux-musl
-        # - rust_target: arm-linux-androideabi (AtomicU64)
+        - rust_target: arm-linux-androideabi
         - rust_target: arm-unknown-linux-gnueabi
         - rust_target: arm-unknown-linux-gnueabihf
         - rust_target: arm-unknown-linux-musleabi
         - rust_target: arm-unknown-linux-musleabihf
-        # - rust_target: armv5te-unknown-linux-gnueabi (AtomicU64)
-        # - rust_target: armv5te-unknown-linux-musleabi (AtomicU64)
+        - rust_target: armv5te-unknown-linux-gnueabi
+        - rust_target: armv5te-unknown-linux-musleabi
         - rust_target: armv7-linux-androideabi
         - rust_target: armv7-unknown-linux-gnueabi
         - rust_target: armv7-unknown-linux-gnueabihf
@@ -51,7 +51,7 @@ jobs:
         # - rust_target: mips64el-unknown-linux-muslabi64 (crate `core`)
         # - rust_target: mipsel-unknown-linux-gnu (crate `core`)
         # - rust_target: mipsel-unknown-linux-musl (crate `core`)
-        # - rust_target: powerpc-unknown-linux-gnu (AtomicU64)
+        - rust_target: powerpc-unknown-linux-gnu
         - rust_target: powerpc64-unknown-linux-gnu
         - rust_target: powerpc64le-unknown-linux-gnu
         # - rust_target: riscv64gc-unknown-linux-gnu (cross#1423, crate `aws-lc-sys`)

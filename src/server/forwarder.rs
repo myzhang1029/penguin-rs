@@ -73,11 +73,11 @@ pub(super) async fn udp_forward_to(
     datagram_tx: Sender<DatagramFrame>,
 ) -> Result<(), Error> {
     trace!("got datagram frame: {datagram_frame:?}");
-    let rhost = datagram_frame.host;
+    let rhost = datagram_frame.target_host;
     let rhost_str = std::str::from_utf8(&rhost)?;
-    let rport = datagram_frame.port;
+    let rport = datagram_frame.target_port;
     let data = datagram_frame.data;
-    let client_id = datagram_frame.sid;
+    let client_id = datagram_frame.sport;
     let (socket, target) = bind_and_send((rhost_str, rport), &data).await?;
     trace!("sent UDP packet to {target}");
     loop {
@@ -87,9 +87,10 @@ pub(super) async fn udp_forward_to(
                 trace!("got UDP response from {target}");
                 buf.truncate(len);
                 let datagram_frame = DatagramFrame {
-                    sid: client_id,
-                    host: rhost.dupe(),
-                    port: rport,
+                    dport: client_id,
+                    sport: 0,
+                    target_host: rhost.dupe(),
+                    target_port: rport,
                     data: Bytes::from(buf),
                 };
                 if datagram_tx.send(datagram_frame).await.is_err() {
@@ -181,9 +182,10 @@ mod tests {
         let target_addr = target_sock.local_addr().unwrap();
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
         let datagram_frame = DatagramFrame {
-            sid: 0,
-            host: Bytes::from_static(b"127.0.0.1"),
-            port: target_addr.port(),
+            sport: 0,
+            dport: 0,
+            target_host: Bytes::from_static(b"127.0.0.1"),
+            target_port: target_addr.port(),
             data: Bytes::from_static(b"hello"),
         };
         let forwarder = tokio::spawn(udp_forward_to(datagram_frame, tx));
@@ -210,9 +212,10 @@ mod tests {
         let target_addr = target_sock.local_addr().unwrap();
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
         let datagram_frame = DatagramFrame {
-            sid: 0,
-            host: Bytes::from_static(b"::1"),
-            port: target_addr.port(),
+            sport: 0,
+            dport: 0,
+            target_host: Bytes::from_static(b"::1"),
+            target_port: target_addr.port(),
             data: Bytes::from_static(b"hello"),
         };
         let forwarder = tokio::spawn(udp_forward_to(datagram_frame, tx));
