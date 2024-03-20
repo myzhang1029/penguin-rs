@@ -21,18 +21,18 @@ async fn connect_succeeds() {
     setup_logging();
     let (client, server) = crate::ws::mock::get_pair(None).await;
 
-    let client_mux = Multiplexor::new(client, Role::Client, OptionalDuration::NONE, None);
-    let server_mux = Multiplexor::new(server, Role::Server, OptionalDuration::NONE, None);
+    let client_mux = Multiplexor::new(client, OptionalDuration::NONE, None);
+    let server_mux = Multiplexor::new(server, OptionalDuration::NONE, None);
 
     let server_task = tokio::spawn(async move {
-        let stream = server_mux.server_new_stream_channel().await.unwrap();
+        let stream = server_mux.accept_stream_channel().await.unwrap();
         info!(
             "sport = {}, dport = {}, dest = {:?}:{}",
             stream.our_port, stream.their_port, stream.dest_host, stream.dest_port
         );
     });
 
-    let stream = client_mux.client_new_stream_channel(&[], 0).await.unwrap();
+    let stream = client_mux.new_stream_channel(&[], 0).await.unwrap();
     info!("sport = {}, dport = {}", stream.our_port, stream.their_port);
     debug!("Waiting for server task to finish");
     server_task.await.unwrap();
@@ -44,8 +44,8 @@ async fn datagram_channel_passes_data_tiny_mtu() {
     // 8 bytes is the IPv4 minimum segment size. Let's try that
     let (client, server) = crate::ws::mock::get_pair(Some(8)).await;
 
-    let client_mux = Multiplexor::new(client, Role::Client, OptionalDuration::NONE, None);
-    let server_mux = Multiplexor::new(server, Role::Server, OptionalDuration::NONE, None);
+    let client_mux = Multiplexor::new(client, OptionalDuration::NONE, None);
+    let server_mux = Multiplexor::new(server, OptionalDuration::NONE, None);
 
     let server_task = tokio::spawn(async move {
         for _ in 0..64 {
@@ -60,18 +60,20 @@ async fn datagram_channel_passes_data_tiny_mtu() {
         debug!("Client sending datagram");
         client_mux
             .send_datagram(DatagramFrame {
-                host: Bytes::from_static(b"example.com"),
-                port: 53,
-                sid: 1,
+                sport: 1,
+                dport: 0,
+                target_host: Bytes::from_static(b"example.com"),
+                target_port: 53,
                 data: payload.clone(),
             })
             .await
             .unwrap();
         debug!("Client awaiting datagram");
         let recvd = client_mux.get_datagram().await.unwrap();
-        assert_eq!(*recvd.host, *b"example.com");
-        assert_eq!(recvd.port, 53);
-        assert_eq!(recvd.sid, 1);
+        assert_eq!(recvd.sport, 1);
+        assert_eq!(recvd.dport, 0);
+        assert_eq!(*recvd.target_host, *b"example.com");
+        assert_eq!(recvd.target_port, 53);
         assert_eq!(recvd.data, payload);
     }
     debug!("Waiting for server task to finish");
@@ -83,8 +85,8 @@ async fn datagram_channel_passes_data() {
     setup_logging();
     let (client, server) = crate::ws::mock::get_pair(None).await;
 
-    let client_mux = Multiplexor::new(client, Role::Client, OptionalDuration::NONE, None);
-    let server_mux = Multiplexor::new(server, Role::Server, OptionalDuration::NONE, None);
+    let client_mux = Multiplexor::new(client, OptionalDuration::NONE, None);
+    let server_mux = Multiplexor::new(server, OptionalDuration::NONE, None);
 
     let server_task = tokio::spawn(async move {
         for _ in 0..64 {
@@ -99,18 +101,20 @@ async fn datagram_channel_passes_data() {
         debug!("Client sending datagram");
         client_mux
             .send_datagram(DatagramFrame {
-                host: Bytes::from_static(b"example.com"),
-                port: 53,
-                sid: 1,
+                sport: 1,
+                dport: 0,
+                target_host: Bytes::from_static(b"example.com"),
+                target_port: 53,
                 data: payload.clone(),
             })
             .await
             .unwrap();
         debug!("Client awaiting datagram");
         let recvd = client_mux.get_datagram().await.unwrap();
-        assert_eq!(*recvd.host, *b"example.com");
-        assert_eq!(recvd.port, 53);
-        assert_eq!(recvd.sid, 1);
+        assert_eq!(*recvd.target_host, *b"example.com");
+        assert_eq!(recvd.target_port, 53);
+        assert_eq!(recvd.sport, 1);
+        assert_eq!(recvd.dport, 0);
         assert_eq!(recvd.data, payload);
     }
     debug!("Waiting for server task to finish");
@@ -122,10 +126,8 @@ async fn connected_stream_passes_data_tiny_mtu_rwndminusone() {
     setup_logging();
     let (client, server) = crate::ws::mock::get_pair(Some(8)).await;
 
-    let (mut client_mux, taskdata_client) =
-        Multiplexor::new_no_task(Role::Client, OptionalDuration::NONE);
-    let (mut server_mux, taskdata_server) =
-        Multiplexor::new_no_task(Role::Server, OptionalDuration::NONE);
+    let (mut client_mux, taskdata_client) = Multiplexor::new_no_task(OptionalDuration::NONE);
+    let (mut server_mux, taskdata_server) = Multiplexor::new_no_task(OptionalDuration::NONE);
 
     client_mux.inner.default_rwnd_threshold = crate::config::RWND - 1;
     server_mux.inner.default_rwnd_threshold = crate::config::RWND - 1;
@@ -138,7 +140,7 @@ async fn connected_stream_passes_data_tiny_mtu_rwndminusone() {
     let input_bytes_clone = input_bytes.clone();
 
     let server_task = tokio::spawn(async move {
-        let mut conn = server_mux.server_new_stream_channel().await.unwrap();
+        let mut conn = server_mux.accept_stream_channel().await.unwrap();
         let mut i = 0;
         while i < input_bytes_clone.len() {
             conn.write_all(&input_bytes_clone[i..i + 1024])
@@ -152,7 +154,7 @@ async fn connected_stream_passes_data_tiny_mtu_rwndminusone() {
 
     let mut output_bytes: Vec<u8> = vec![];
 
-    let mut conn = client_mux.client_new_stream_channel(&[], 0).await.unwrap();
+    let mut conn = client_mux.new_stream_channel(&[], 0).await.unwrap();
     while output_bytes.len() < len {
         let mut buf = [0u8; 2048];
         let bytes = conn.read(&mut buf).await.unwrap();
@@ -173,8 +175,8 @@ async fn connected_stream_passes_data_tiny_mtu_with_keepalive() {
     setup_logging();
     let (client, server) = crate::ws::mock::get_pair(Some(1)).await;
 
-    let client_mux = Multiplexor::new(client, Role::Client, OptionalDuration::from_secs(1), None);
-    let server_mux = Multiplexor::new(server, Role::Server, OptionalDuration::NONE, None);
+    let client_mux = Multiplexor::new(client, OptionalDuration::from_secs(1), None);
+    let server_mux = Multiplexor::new(server, OptionalDuration::NONE, None);
 
     let input_bytes: Vec<u8> = (0..10).map(|_| rand::random::<u8>()).collect();
     let len = input_bytes.len();
@@ -182,7 +184,7 @@ async fn connected_stream_passes_data_tiny_mtu_with_keepalive() {
 
     let client_task = tokio::spawn(async move {
         let mut output_bytes: Vec<u8> = vec![];
-        let mut conn = client_mux.client_new_stream_channel(&[], 0).await.unwrap();
+        let mut conn = client_mux.new_stream_channel(&[], 0).await.unwrap();
         while output_bytes.len() < len {
             let mut buf = [0u8; 20];
             let bytes = conn.read(&mut buf).await.unwrap();
@@ -194,7 +196,7 @@ async fn connected_stream_passes_data_tiny_mtu_with_keepalive() {
         }
         assert_eq!(input_bytes, output_bytes);
     });
-    let mut conn = server_mux.server_new_stream_channel().await.unwrap();
+    let mut conn = server_mux.accept_stream_channel().await.unwrap();
     conn.write_all(&input_bytes_clone).await.unwrap();
     info!("Done send");
     conn.shutdown().await.unwrap();
@@ -207,15 +209,15 @@ async fn connected_stream_passes_data_tiny_mtu() {
     setup_logging();
     let (client, server) = crate::ws::mock::get_pair(Some(8)).await;
 
-    let client_mux = Multiplexor::new(client, Role::Client, OptionalDuration::NONE, None);
-    let server_mux = Multiplexor::new(server, Role::Server, OptionalDuration::NONE, None);
+    let client_mux = Multiplexor::new(client, OptionalDuration::NONE, None);
+    let server_mux = Multiplexor::new(server, OptionalDuration::NONE, None);
 
     let input_bytes: Vec<u8> = (0..(1024 * 1024)).map(|_| rand::random::<u8>()).collect();
     let len = input_bytes.len();
     let input_bytes_clone = input_bytes.clone();
 
     let server_task = tokio::spawn(async move {
-        let mut conn = server_mux.server_new_stream_channel().await.unwrap();
+        let mut conn = server_mux.accept_stream_channel().await.unwrap();
         let mut i = 0;
         while i < input_bytes_clone.len() {
             conn.write_all(&input_bytes_clone[i..i + 1024])
@@ -229,7 +231,7 @@ async fn connected_stream_passes_data_tiny_mtu() {
 
     let mut output_bytes: Vec<u8> = vec![];
 
-    let mut conn = client_mux.client_new_stream_channel(&[], 0).await.unwrap();
+    let mut conn = client_mux.new_stream_channel(&[], 0).await.unwrap();
     while output_bytes.len() < len {
         let mut buf = [0u8; 2048];
         let bytes = conn.read(&mut buf).await.unwrap();
@@ -250,15 +252,15 @@ async fn connected_stream_passes_data() {
     setup_logging();
     let (client, server) = crate::ws::mock::get_pair(None).await;
 
-    let client_mux = Multiplexor::new(client, Role::Client, OptionalDuration::NONE, None);
-    let server_mux = Multiplexor::new(server, Role::Server, OptionalDuration::NONE, None);
+    let client_mux = Multiplexor::new(client, OptionalDuration::NONE, None);
+    let server_mux = Multiplexor::new(server, OptionalDuration::NONE, None);
 
     let input_bytes: Vec<u8> = (0..(1024 * 1024)).map(|_| rand::random::<u8>()).collect();
     let len = input_bytes.len();
     let input_bytes_clone = input_bytes.clone();
 
     let server_task = tokio::spawn(async move {
-        let mut conn = server_mux.server_new_stream_channel().await.unwrap();
+        let mut conn = server_mux.accept_stream_channel().await.unwrap();
         let mut i = 0;
         while i < input_bytes_clone.len() {
             conn.write_all(&input_bytes_clone[i..i + 1024])
@@ -272,7 +274,7 @@ async fn connected_stream_passes_data() {
 
     let mut output_bytes: Vec<u8> = vec![];
 
-    let mut conn = client_mux.client_new_stream_channel(&[], 0).await.unwrap();
+    let mut conn = client_mux.new_stream_channel(&[], 0).await.unwrap();
     while output_bytes.len() < len {
         let mut buf = [0u8; 2048];
         let bytes = conn.read(&mut buf).await.unwrap();
@@ -299,22 +301,22 @@ async fn test_early_eof_detected() {
 async fn test_early_eof_detected_inner() {
     let (client, server) = crate::ws::mock::get_pair(None).await;
 
-    let client_mux = Multiplexor::new(client, Role::Client, OptionalDuration::NONE, None);
-    let server_mux = Multiplexor::new(server, Role::Server, OptionalDuration::NONE, None);
+    let client_mux = Multiplexor::new(client, OptionalDuration::NONE, None);
+    let server_mux = Multiplexor::new(server, OptionalDuration::NONE, None);
 
     let input_bytes: Vec<u8> = (0..1024).map(|_| rand::random::<u8>()).collect();
     let len = input_bytes.len();
     let input_bytes_clone = input_bytes.clone();
 
     let server_task = tokio::spawn(async move {
-        let mut conn = server_mux.server_new_stream_channel().await.unwrap();
+        let mut conn = server_mux.accept_stream_channel().await.unwrap();
         conn.write_all(&input_bytes_clone).await.unwrap();
         info!("Done send");
     });
 
     let mut output_bytes: Vec<u8> = vec![];
 
-    let mut conn = client_mux.client_new_stream_channel(&[], 0).await.unwrap();
+    let mut conn = client_mux.new_stream_channel(&[], 0).await.unwrap();
     while output_bytes.len() < len + 2 {
         let mut buf = [0u8; 2048];
         let bytes = conn.read(&mut buf).await.unwrap();
@@ -335,15 +337,15 @@ async fn test_several_channels() {
     setup_logging();
     let (client, server) = crate::ws::mock::get_pair(None).await;
 
-    let client_mux = Multiplexor::new(client, Role::Client, OptionalDuration::NONE, None);
-    let server_mux = Multiplexor::new(server, Role::Server, OptionalDuration::NONE, None);
+    let client_mux = Multiplexor::new(client, OptionalDuration::NONE, None);
+    let server_mux = Multiplexor::new(server, OptionalDuration::NONE, None);
 
     let server_task = tokio::spawn(async move {
-        let mut conn1 = server_mux.server_new_stream_channel().await.unwrap();
+        let mut conn1 = server_mux.accept_stream_channel().await.unwrap();
         info!("server conn1 = {:?}", conn1);
-        let mut conn2 = server_mux.server_new_stream_channel().await.unwrap();
+        let mut conn2 = server_mux.accept_stream_channel().await.unwrap();
         info!("server conn2 = {:?}", conn2);
-        let mut conn3 = server_mux.server_new_stream_channel().await.unwrap();
+        let mut conn3 = server_mux.accept_stream_channel().await.unwrap();
         info!("server conn3 = {:?}", conn3);
         let mut buf = [0u8; 32];
         let bytes = conn3.read(&mut buf).await.unwrap();
@@ -356,11 +358,11 @@ async fn test_several_channels() {
         assert_eq!(buf[..bytes], b"hello"[..]);
         info!("server conn1 read = {:?}", bytes);
     });
-    let mut conn1 = client_mux.client_new_stream_channel(&[], 0).await.unwrap();
+    let mut conn1 = client_mux.new_stream_channel(&[], 0).await.unwrap();
     info!("client conn1 = {:?}", conn1);
-    let mut conn2 = client_mux.client_new_stream_channel(&[], 0).await.unwrap();
+    let mut conn2 = client_mux.new_stream_channel(&[], 0).await.unwrap();
     info!("client conn2 = {:?}", conn2);
-    let mut conn3 = client_mux.client_new_stream_channel(&[], 0).await.unwrap();
+    let mut conn3 = client_mux.new_stream_channel(&[], 0).await.unwrap();
     info!("client conn3 = {:?}", conn3);
     conn1.write_all(b"hello").await.unwrap();
     conn1.shutdown().await.unwrap();

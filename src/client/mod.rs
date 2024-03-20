@@ -12,7 +12,7 @@ use crate::arg::ClientArgs;
 use crate::config;
 use bytes::Bytes;
 use penguin_mux::timing::{Backoff, OptionalDuration};
-use penguin_mux::{DatagramFrame, Dupe, IntKey, Multiplexor, Role};
+use penguin_mux::{DatagramFrame, Dupe, IntKey, Multiplexor};
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -88,7 +88,7 @@ impl HandlerResources {
         addr: SocketAddr,
         socket: Arc<UdpSocket>,
         socks5: bool,
-    ) -> u32 {
+    ) -> u16 {
         // `expect`: at this point `socket` should be bound. Otherwise, it's a bug.
         let our_addr = socket
             .local_addr()
@@ -106,7 +106,7 @@ impl HandlerResources {
             *client_id
         } else {
             // The client doesn't exist, add it to the maps
-            let client_id = u32::next_available_key(client_id_map);
+            let client_id = u16::next_available_key(client_id_map);
             client_id_map.insert(
                 client_id,
                 ClientIdMapEntry::new(addr, our_addr, socket, socks5),
@@ -144,11 +144,11 @@ impl HandlerResources {
 #[allow(clippy::module_name_repetitions)]
 pub struct ClientIdMaps {
     /// Client ID -> Client ID map entry
-    client_id_map: HashMap<u32, ClientIdMapEntry>,
+    client_id_map: HashMap<u16, ClientIdMapEntry>,
     /// (client address, our address) -> client ID
     /// We need our address to make sure we send replies with the correct source address
     /// because different remotes and socks5 associations use different listners
-    client_addr_map: HashMap<(SocketAddr, SocketAddr), u32>,
+    client_addr_map: HashMap<(SocketAddr, SocketAddr), u16>,
 }
 
 impl ClientIdMaps {
@@ -163,7 +163,7 @@ impl ClientIdMaps {
     /// Send a datagram to a client
     async fn send_datagram(
         lock_self: &RwLock<Self>,
-        client_id: u32,
+        client_id: u16,
         data: Bytes,
     ) -> Option<std::io::Result<()>> {
         if client_id == 0 {
@@ -345,12 +345,7 @@ async fn on_connected(
     channel_timeout: Duration,
 ) -> Result<Infallible, Error> {
     let mut mux_task_joinset = JoinSet::new();
-    let mut mux = Multiplexor::new(
-        ws_stream,
-        Role::Client,
-        keepalive,
-        Some(&mut mux_task_joinset),
-    );
+    let mut mux = Multiplexor::new(ws_stream, keepalive, Some(&mut mux_task_joinset));
     info!("Connected to server");
     // If we have a failed stream request, try it first
     if let Some(sender) = failed_stream_request.take() {
@@ -371,7 +366,7 @@ async fn on_connected(
                 }
             }
             Ok(dgram_frame) = mux.get_datagram() => {
-                let client_id = dgram_frame.sid;
+                let client_id = dgram_frame.dport;
                 let data = dgram_frame.data;
                 match ClientIdMaps::send_datagram(&udp_client_map, client_id, data).await {
                     Some(Ok(())) => {
@@ -406,7 +401,7 @@ async fn get_send_stream_chan(
     trace!("requesting a new TCP channel");
     match tokio::time::timeout(
         channel_timeout,
-        mux.client_new_stream_channel(&stream_command.host, stream_command.port),
+        mux.new_stream_channel(&stream_command.host, stream_command.port),
     )
     .await
     {

@@ -6,7 +6,7 @@ use super::WebSocket;
 use super::forwarder::tcp_forwarder_on_channel;
 use super::forwarder::udp_forward_to;
 use crate::config;
-use penguin_mux::{DatagramFrame, Dupe, Multiplexor, Role, timing::OptionalDuration};
+use penguin_mux::{DatagramFrame, Dupe, Multiplexor, timing::OptionalDuration};
 use tokio::{sync::mpsc, task::JoinSet};
 use tracing::{debug, error, trace, warn};
 
@@ -15,7 +15,7 @@ pub(super) type MuxStream = penguin_mux::MuxStream;
 /// Multiplex the `WebSocket` connection and handle the forwarding requests.
 #[tracing::instrument(skip(ws_stream), level = "debug")]
 pub async fn handle_websocket(ws_stream: WebSocket) {
-    let mux = Multiplexor::new(ws_stream, Role::Server, OptionalDuration::NONE, None);
+    let mux = Multiplexor::new(ws_stream, OptionalDuration::NONE, None);
     debug!("WebSocket connection established");
     let mut jobs = JoinSet::new();
     // Channel for listeners to send UDP datagrams to the main loop
@@ -37,7 +37,7 @@ pub async fn handle_websocket(ws_stream: WebSocket) {
                 }
             }
             // Check if the multiplexor has received a new stream request
-            Ok(result) = mux.server_new_stream_channel() => {
+            Ok(result) = mux.accept_stream_channel() => {
                 jobs.spawn(tcp_forwarder_on_channel(result));
             }
             // Check if the multiplexor has received a UDP datagram

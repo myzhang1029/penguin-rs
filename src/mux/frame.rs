@@ -4,52 +4,8 @@
 //! Architecture:
 //! The system is similar to a traditional SOCKS5 proxy, but the protocol
 //! allows for UDP to be transmitted over the same WebSocket connection.
-//! It is essentially a SOCKS5 forwarder over a WebSocket link.
 //!
-//! All `Message`s carry a complete frame:
-//! - 1 byte: type (1 for TCP, 3 for UDP)
-//! - variable: dependent on the type (see `StreamFrame` and `DatagramFrame`).
-//!
-//! `Stream` messages are connection-based.
-//! The frames are in the following format:
-//! - 2 bytes: source port in network byte order.
-//! - 2 bytes: destination port in network byte order.
-//! - 1 byte: type (see below)
-//! - variable: payload
-//!
-//! There are six types of frames:
-//! - `Syn`: the client sends this frame to request a connection to a target:
-//!   - 4 bytes: initial receive window size in network byte order.
-//!   - 2 bytes: forwarding destination port in network byte order.
-//!   - variable: (0..256) bytes: (forwarding destination domain name or IP).
-//! - `SynAck`: the server replies with this frame to confirm the connection.
-//!   It is in the same format as `Ack`. Using two types of frames is to
-//!   avoid having to implement a state machine.
-//! - `Ack`: the server replies with this frame to confirm the data reception:
-//!   - 4 bytes: number of `Psh` frames processed since the last `Ack` frame.
-//! - `Rst`: one side sends this frame to indicate that the connection should
-//!   be closed.
-//! - `Psh`: one side sends this frame to send data.
-//! - `Fin`: one side sends this frame to indicate that it has no more data to
-//!   send.
-//!
-//! The handshake is simpler than a TCP handshake:
-//! The client sends a `Syn` frame, then the server replies an `SynAck`.
-//! To reduce overhead, in `Syn`, the `dport` is 0, and the server replies
-//! with a usable port in the `sport` of the `SynAck` frame.
-//! The client asks for a target to `connect` in the `Syn` payload (see above).
-//!
-//! After a certain amount of `Psh` frames are received, the mux will send
-//! a `Ack` frame to confirm the data. The `Ack` frame carries the current
-//! remaining space in the receive buffer as a `u64`. (Similar to TCP receiving
-//! window). One side should never write more frames than the other side's
-//! receive window size before receiving the next `Ack` frame.
-//!
-//! `Datagram` messages are connectionless. On the client side,
-//! each forwarder client (i.e. (port, host) tuple) is assigned a unique
-//! Source ID, and the frame also carries its intended target.
-//! When the server receives datagrams from that target, it will
-//! send them back to the client with the same Source ID.
+//! For more details, see the `PROTOCOL.md` file in the project root.
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 #![allow(clippy::similar_names)]
@@ -70,22 +26,22 @@ pub enum Error {
     InvalidStreamFlag(u8),
 }
 
-/// Stream frame types
+/// Stream operation codes
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
-pub enum StreamFlag {
-    /// Initiating connection by the client.
-    Syn = 0,
-    /// Confirming connection by the server.
-    SynAck = 1,
-    /// Confirming data reception.
+pub enum StreamOpCode {
+    /// Initiating connection by the client
+    Con = 0,
+    /// Confirming data reception
     Ack = 2,
-    /// Aborting connection when `dport` does not exist.
+    /// Aborting connection
     Rst = 3,
-    /// Closing connection.
+    /// Closing connection
     Fin = 4,
-    /// Sending data.
+    /// Sending data
     Psh = 5,
+    /// Binding a port
+    Bnd = 6,
 }
 
 /// Stream frame.
@@ -94,12 +50,12 @@ pub enum StreamFlag {
 #[derive(Clone, PartialEq, Eq)]
 #[repr(C)]
 pub struct StreamFrame {
+    /// Operation code (1 byte)
+    pub opcode: StreamOpCode,
     /// Source port (2 bytes)
     pub sport: u16,
     /// Destination port (2 bytes)
     pub dport: u16,
-    /// Frame type (1 byte)
-    pub flag: StreamFlag,
     /// Data
     pub data: Bytes,
 }
@@ -107,53 +63,36 @@ pub struct StreamFrame {
 impl Debug for StreamFrame {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StreamFrame")
+            .field("opcode", &self.opcode)
             .field("sport", &self.sport)
             .field("dport", &self.dport)
-            .field("flag", &self.flag)
             .field("data.len", &self.data.len())
             .finish()
     }
 }
 
 impl StreamFrame {
-    /// Create a new [`StreamFlag::Syn`] frame.
+    /// Create a new [`StreamFlag::Con`] frame.
     ///
     /// # Arguments
-    /// * `dest_host`: The destination host to forward to.
-    /// * `dest_port`: The destination port to forward to.
+    /// * `target_host`: The destination host to forward to (client), or the local address (server).
+    /// * `target_port`: The destination port to forward to (client), or the local port (server).
     /// * `sport`: The source port of this stream.
     /// * `rwnd`: Number of frames buffered in the client receive buffer.
     #[must_use]
     #[inline]
-    pub fn new_syn(dest_host: &[u8], dest_port: u16, sport: u16, rwnd: u64) -> Self {
-        let host_len = dest_host.len();
-        let mut syn_payload =
-            Vec::with_capacity(std::mem::size_of::<u64>() + std::mem::size_of::<u16>() + host_len);
-        syn_payload.put_u64(rwnd);
-        syn_payload.put_u16(dest_port);
-        syn_payload.extend(dest_host);
+    pub fn new_con(target_host: &[u8], target_port: u16, sport: u16, rwnd: u32) -> Self {
+        let host_len = target_host.len();
+        let mut con_payload =
+            Vec::with_capacity(std::mem::size_of::<u32>() + std::mem::size_of::<u16>() + host_len);
+        con_payload.put_u32(rwnd);
+        con_payload.put_u16(target_port);
+        con_payload.extend(target_host);
         Self {
+            opcode: StreamOpCode::Con,
             sport,
             dport: 0,
-            flag: StreamFlag::Syn,
-            data: Bytes::from(syn_payload),
-        }
-    }
-    /// Create a new [`StreamFlag::SynAck`] frame.
-    ///
-    /// # Arguments
-    /// * `sport`: The source port of this stream.
-    /// * `dport`: The destination port of this stream (i.e. the source port
-    ///   of the `Syn` frame).
-    /// * `rwnd`: Number of frames buffered in the server receive buffer.
-    #[must_use]
-    #[inline]
-    pub fn new_synack(sport: u16, dport: u16, rwnd: u64) -> Self {
-        Self {
-            sport,
-            dport,
-            flag: StreamFlag::SynAck,
-            data: Bytes::copy_from_slice(&rwnd.to_be_bytes()),
+            data: Bytes::from(con_payload),
         }
     }
     /// Create a new [`StreamFlag::Ack`] frame.
@@ -165,26 +104,26 @@ impl StreamFrame {
     ///   previous `Ack` frame.
     #[must_use]
     #[inline]
-    pub fn new_ack(sport: u16, dport: u16, psh_recvd_since: u64) -> Self {
+    pub fn new_ack(sport: u16, dport: u16, psh_recvd_since: u32) -> Self {
         Self {
+            opcode: StreamOpCode::Ack,
             sport,
             dport,
-            flag: StreamFlag::Ack,
             data: Bytes::copy_from_slice(&psh_recvd_since.to_be_bytes()),
         }
     }
     /// Create a new [`StreamFlag::Rst`] frame.
     ///
     /// # Arguments
-    /// * `sport`: The destination port of the offending frame.
-    /// * `dport`: The source port of the offending frame.
+    /// * `sport`: The source port of the offending stream.
+    /// * `dport`: The destination port of offending stream.
     #[must_use]
     #[inline]
     pub const fn new_rst(sport: u16, dport: u16) -> Self {
         Self {
+            opcode: StreamOpCode::Rst,
             sport,
             dport,
-            flag: StreamFlag::Rst,
             data: Bytes::new(),
         }
     }
@@ -197,9 +136,9 @@ impl StreamFrame {
     #[inline]
     pub const fn new_fin(sport: u16, dport: u16) -> Self {
         Self {
+            opcode: StreamOpCode::Fin,
             sport,
             dport,
-            flag: StreamFlag::Fin,
             data: Bytes::new(),
         }
     }
@@ -213,10 +152,30 @@ impl StreamFrame {
     #[inline]
     pub const fn new_psh(sport: u16, dport: u16, data: Bytes) -> Self {
         Self {
+            opcode: StreamOpCode::Psh,
             sport,
             dport,
-            flag: StreamFlag::Psh,
             data,
+        }
+    }
+
+    /// Create a new [`StreamFlag::Bnd`] frame.
+    ///
+    /// # Arguments
+    /// * `sport`: An identifier for this Bind request.
+    /// * `target_host`: The local address to bind to.
+    /// * `target_port`: The port to bind to.
+    #[must_use]
+    #[inline]
+    pub fn new_bnd(sport: u16, target_host: &[u8], target_port: u16) -> Self {
+        let mut bnd_payload = Vec::with_capacity(std::mem::size_of::<u16>() + target_host.len());
+        bnd_payload.put_u16(target_port);
+        bnd_payload.extend(target_host);
+        Self {
+            opcode: StreamOpCode::Bnd,
+            sport,
+            dport: 0,
+            data: Bytes::from(bnd_payload),
         }
     }
 }
@@ -227,16 +186,18 @@ impl StreamFrame {
 #[derive(Clone, PartialEq, Eq)]
 #[repr(C)]
 pub struct DatagramFrame {
+    /// Source port (2 bytes)
+    pub sport: u16,
+    /// Destination port (2 bytes)
+    pub dport: u16,
     /// Target host:
     /// Host of the forwarding target
     /// host of the "remote" if sent from client;
     /// host of the "from" if sent from server.
-    pub host: Bytes,
+    pub target_host: Bytes,
     /// Target port:
     /// Port of the forwarding target
-    pub port: u16,
-    /// User ID (4 bytes)
-    pub sid: u32,
+    pub target_port: u16,
     /// Data
     pub data: Bytes,
 }
@@ -244,9 +205,10 @@ pub struct DatagramFrame {
 impl Debug for DatagramFrame {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DatagramFrame")
-            .field("host", &self.host)
-            .field("port", &self.port)
-            .field("sid", &self.sid)
+            .field("sport", &self.sport)
+            .field("dport", &self.dport)
+            .field("target_host", &self.target_host)
+            .field("target_port", &self.target_port)
             .field("data.len", &self.data.len())
             .finish()
     }
@@ -272,17 +234,16 @@ impl From<StreamFrame> for Vec<u8> {
     #[tracing::instrument(level = "trace")]
     #[inline]
     fn from(frame: StreamFrame) -> Self {
-        let size = 1
+        let size = std::mem::size_of::<u8>()
+            + std::mem::size_of::<StreamOpCode>()
             + std::mem::size_of::<u16>()
             + std::mem::size_of::<u16>()
-            + std::mem::size_of::<StreamFlag>()
-            + std::mem::size_of::<u32>()
             + frame.data.len();
         let mut encoded = Self::with_capacity(size);
         encoded.put_u8(1);
+        encoded.put_u8(frame.opcode as u8);
         encoded.put_u16(frame.sport);
         encoded.put_u16(frame.dport);
-        encoded.put_u8(frame.flag as u8);
         encoded.extend(&frame.data);
         encoded
     }
@@ -296,16 +257,18 @@ impl TryFrom<DatagramFrame> for Vec<u8> {
     #[inline]
     fn try_from(frame: DatagramFrame) -> Result<Self, Self::Error> {
         let size = 1
-            + frame.host.len()
+            + frame.target_host.len()
             + std::mem::size_of::<u16>()
-            + std::mem::size_of::<u32>()
+            + std::mem::size_of::<u16>()
+            + std::mem::size_of::<u16>()
             + frame.data.len();
         let mut encoded = Self::with_capacity(size);
         encoded.put_u8(3);
-        encoded.put_u8(u8::try_from(frame.host.len())?);
-        encoded.extend(&frame.host);
-        encoded.put_u16(frame.port);
-        encoded.put_u32(frame.sid);
+        encoded.put_u8(u8::try_from(frame.target_host.len())?);
+        encoded.put_u16(frame.sport);
+        encoded.put_u16(frame.dport);
+        encoded.put_u16(frame.target_port);
+        encoded.extend(&frame.target_host);
         encoded.extend(&frame.data);
         Ok(encoded)
     }
@@ -341,21 +304,22 @@ impl TryFrom<Bytes> for StreamFrame {
         if data.remaining() < 5 {
             return Err(Error::FrameTooShort);
         }
-        let sport = data.get_u16();
-        let dport = data.get_u16();
-        let flag = match data.get_u8() {
-            0 => StreamFlag::Syn,
-            1 => StreamFlag::SynAck,
-            2 => StreamFlag::Ack,
-            3 => StreamFlag::Rst,
-            4 => StreamFlag::Fin,
-            5 => StreamFlag::Psh,
+        let opcode = match data.get_u8() {
+            0 => StreamOpCode::Con,
+            // 0x01 is reserved
+            2 => StreamOpCode::Ack,
+            3 => StreamOpCode::Rst,
+            4 => StreamOpCode::Fin,
+            5 => StreamOpCode::Psh,
+            6 => StreamOpCode::Bnd,
             other => return Err(Error::InvalidStreamFlag(other)),
         };
+        let sport = data.get_u16();
+        let dport = data.get_u16();
         Ok(Self {
+            opcode,
             sport,
             dport,
-            flag,
             data,
         })
     }
@@ -374,13 +338,15 @@ impl TryFrom<Bytes> for DatagramFrame {
         if data.remaining() < host_len + 6 {
             return Err(Error::FrameTooShort);
         }
-        let host = data.split_to(host_len);
-        let port = data.get_u16();
-        let sid = data.get_u32();
+        let sport = data.get_u16();
+        let dport = data.get_u16();
+        let target_port = data.get_u16();
+        let target_host = data.split_to(host_len);
         Ok(Self {
-            host,
-            port,
-            sid,
+            sport,
+            dport,
+            target_host,
+            target_port,
             data,
         })
     }
@@ -445,16 +411,14 @@ mod tests {
     #[test]
     fn test_stream_frame() {
         crate::tests::setup_logging();
-        let frame = Frame::Stream(StreamFrame::new_syn(&[], 5678, 1234, 128));
+        let frame = Frame::Stream(StreamFrame::new_con(&[], 5678, 1234, 128));
         assert_eq!(
             frame,
             Frame::Stream(StreamFrame {
+                opcode: StreamOpCode::Con,
                 sport: 1234,
                 dport: 0,
-                flag: StreamFlag::Syn,
-                data: Bytes::from_static(&[
-                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x16, 0x2e
-                ]),
+                data: Bytes::from_static(&[0x00, 0x00, 0x00, 0x80, 0x16, 0x2e]),
             })
         );
         let bytes = Vec::try_from(frame.clone()).unwrap();
@@ -466,9 +430,10 @@ mod tests {
     fn test_datagram_frame() {
         crate::tests::setup_logging();
         let frame = Frame::Datagram(DatagramFrame {
-            host: Bytes::from_static(&[1, 2, 3, 4]),
-            port: 1234,
-            sid: 5678,
+            sport: 5678,
+            dport: 9443,
+            target_host: Bytes::from_static(&[1, 2, 3, 4]),
+            target_port: 1234,
             data: Bytes::from_static(&[1, 2, 3, 4]),
         });
         let bytes = Vec::try_from(frame.clone()).unwrap();
@@ -481,74 +446,61 @@ mod tests {
     #[test]
     fn test_frame_repr() {
         crate::tests::setup_logging();
-        let frame = Frame::Stream(StreamFrame::new_syn(&[0x01, 0x02, 0x03], 5678, 1234, 512));
+        let frame = Frame::Stream(StreamFrame::new_con(&[0x01, 0x02, 0x03], 5678, 1234, 512));
         let bytes = Vec::try_from(frame).unwrap();
         assert_eq!(
             bytes,
             vec![
                 0x01, // frame type (u8)
+                0x00, // opcode (u8)
                 0x04, 0xd2, // sport (u16)
                 0x00, 0x00, // dport (u16)
-                0x00, // flag (u8)
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, // rwnd (u64)
+                0x00, 0x00, 0x02, 0x00, // rwnd (u32)
                 0x16, 0x2e, // dest_port (u16)
-                0x01, 0x02, 0x03, // data (variable)
+                0x01, 0x02, 0x03, // host (variable)
             ]
         );
 
-        let frame = Frame::Stream(StreamFrame::new_synack(1234, 5678, 128));
+        let frame = Frame::Stream(StreamFrame::new_ack(1234, 5678, 128));
         let bytes = Vec::try_from(frame).unwrap();
         assert_eq!(
             bytes,
             vec![
                 0x01, // frame type (u8)
+                0x02, // opcode (u8)
                 0x04, 0xd2, // sport (u16)
                 0x16, 0x2e, // dport (u16)
-                0x01, // flag (u8)
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, // rwnd (u64)
+                0x00, 0x00, 0x00, 0x80, // psh_recvd_since (u32)
             ]
         );
 
-        let frame = Frame::Stream(StreamFrame::new_ack(5678, 1234, 128));
+        let frame = Frame::Stream(StreamFrame::new_rst(1242, 1291));
         let bytes = Vec::try_from(frame).unwrap();
         assert_eq!(
             bytes,
             vec![
                 0x01, // frame type (u8)
-                0x16, 0x2e, // sport (u16)
-                0x04, 0xd2, // dport (u16)
-                0x02, // flag (u8)
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, // psh_recvd_since (u64)
+                0x03, // opcode (u8)
+                0x04, 0xda, // sport (u16)
+                0x05, 0x0b, // dport (u32)
             ]
         );
 
-        let frame = Frame::Stream(StreamFrame::new_rst(1234, 5678));
+        let frame = Frame::Stream(StreamFrame::new_fin(5678, 21324));
         let bytes = Vec::try_from(frame).unwrap();
         assert_eq!(
             bytes,
             vec![
                 0x01, // frame type (u8)
-                0x04, 0xd2, // sport (u16)
-                0x16, 0x2e, // dport (u16)
-                0x03, // flag (u8)
-            ]
-        );
-
-        let frame = Frame::Stream(StreamFrame::new_fin(5678, 1234));
-        let bytes = Vec::try_from(frame).unwrap();
-        assert_eq!(
-            bytes,
-            vec![
-                0x01, // frame type (u8)
-                0x16, 0x2e, // sport (u16)
-                0x04, 0xd2, // dport (u16)
-                0x04  // flag (u8)
+                0x04, // opcode (u8)
+                0x16, 0x2e, // sport (u32)
+                0x53, 0x4c, // dport (u32)
             ]
         );
 
         let frame = Frame::Stream(StreamFrame::new_psh(
             1234,
-            5678,
+            43131,
             Bytes::from_static(&[1, 2, 3, 4]),
         ));
         let bytes = Vec::try_from(frame).unwrap();
@@ -556,17 +508,32 @@ mod tests {
             bytes,
             vec![
                 0x01, // frame type (u8)
-                0x04, 0xd2, // sport (u16)
-                0x16, 0x2e, // dport (u16)
-                0x05, // flag (u8)
+                0x05, // opcode (u8)
+                0x04, 0xd2, // sport (u32)
+                0xa8, 0x7b, // dport (u32)
                 0x01, 0x02, 0x03, 0x04 // data (variable)
             ]
         );
 
+        let frame = Frame::Stream(StreamFrame::new_bnd(42132, &[1, 2, 3, 4], 1234));
+        let bytes = Vec::try_from(frame).unwrap();
+        assert_eq!(
+            bytes,
+            vec![
+                0x01, // frame type (u8)
+                0x06, // opcode (u8)
+                0xa4, 0x94, // sport (u16)
+                0x00, 0x00, // dport (u16)
+                0x04, 0xd2, // target_port (u16)
+                0x01, 0x02, 0x03, 0x04 // target_host (variable)
+            ]
+        );
+
         let frame = Frame::Datagram(DatagramFrame {
-            host: Bytes::from_static(&[1, 2, 3, 4]),
-            port: 1234,
-            sid: 5678,
+            sport: 2134,
+            dport: 5678,
+            target_host: Bytes::from_static(&[1, 2, 3, 4]),
+            target_port: 1234,
             data: Bytes::from_static(&[1, 2, 3, 4]),
         });
         let bytes = Vec::try_from(frame).unwrap();
@@ -575,9 +542,10 @@ mod tests {
             vec![
                 0x03, // frame type (u8)
                 0x04, // host len (u8)
-                0x01, 0x02, 0x03, 0x04, // host (variable)
-                0x04, 0xd2, // port (u16)
-                0x00, 0x00, 0x16, 0x2e, // sid (u32)
+                0x08, 0x56, // sport (u16)
+                0x16, 0x2e, // dport (u16)
+                0x04, 0xd2, // target_port (u16)
+                0x01, 0x02, 0x03, 0x04, // target_host (variable)
                 0x01, 0x02, 0x03, 0x04 // data (variable)
             ]
         );

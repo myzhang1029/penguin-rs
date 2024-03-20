@@ -9,7 +9,7 @@ use std::io;
 use std::io::ErrorKind::BrokenPipe;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::task::{Context, Poll, ready};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
@@ -30,10 +30,10 @@ pub struct MuxStream {
     /// Whether writes should succeed.
     pub(super) can_write: Arc<AtomicBool>,
     /// Number of frames we can still send before we need to wait for an `Ack`
-    pub(super) psh_send_remaining: Arc<AtomicU64>,
+    pub(super) psh_send_remaining: Arc<AtomicU32>,
     /// Number of `Psh` frames received after sending the previous `Ack` frame
     /// `rwnd - psh_recvd_since` is approximately the peer's `psh_send_remaining`
-    pub(super) psh_recvd_since: AtomicU64,
+    pub(super) psh_recvd_since: AtomicU32,
     /// Waker to wake up the task that sends frames
     pub(super) writer_waker: Arc<AtomicWaker>,
     /// Remaining bytes to be read
@@ -45,7 +45,7 @@ pub struct MuxStream {
     /// Number of `Psh` frames between `Ack`s:
     /// If too low, `Ack`s will consume too much bandwidth;
     /// If too high, writers may block.
-    pub(super) rwnd_threshold: u64,
+    pub(super) rwnd_threshold: u32,
 }
 
 impl std::fmt::Debug for MuxStream {

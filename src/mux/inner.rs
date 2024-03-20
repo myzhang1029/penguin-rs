@@ -4,9 +4,9 @@
 
 use super::config;
 use super::dupe::Dupe;
-use super::frame::{DatagramFrame, Frame, StreamFlag, StreamFrame};
+use super::frame::{DatagramFrame, Frame, StreamFrame, StreamOpCode};
 use super::stream::MuxStream;
-use super::{Error, IntKey, Result, Role};
+use super::{Error, IntKey, Result};
 use crate::timing::{OptionalDuration, OptionalInterval};
 use crate::ws::{Message, WebSocketStream};
 use bytes::{Buf, Bytes};
@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::task::Poll;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot};
@@ -38,7 +38,7 @@ pub struct MuxStreamData {
     // frames we have sent and received.
     can_write: Arc<AtomicBool>,
     /// Number of `Psh` frames we are allowed to send before waiting for a `Ack` frame.
-    psh_send_remaining: Arc<AtomicU64>,
+    psh_send_remaining: Arc<AtomicU32>,
     /// Waker to wake up the task that sends frames because their `psh_send_remaining`
     /// has increased.
     writer_waker: Arc<AtomicWaker>,
@@ -70,8 +70,6 @@ impl MuxStreamSlot {
 
 /// Multiplexor inner
 pub struct MultiplexorInner {
-    /// The role of this multiplexor
-    pub role: Role,
     /// Where tasks queue frames to be sent
     pub frame_tx: mpsc::UnboundedSender<Frame>,
     /// Interval between keepalive `Ping`s
@@ -83,16 +81,15 @@ pub struct MultiplexorInner {
     /// Sending (0, _) means that the multiplexor is being dropped and the
     /// task should exit.
     /// The reason we need `their_port` is to ensure the connection is `Rst`ed
-    /// if the user did not call `poll_shutdown` on the [`MuxStream`].
+    /// if the user did not call `poll_shutdown` on the `MuxStream`.
     pub dropped_ports_tx: mpsc::UnboundedSender<(u16, u16)>,
     /// Default threshold for `Ack` replies. See [`MuxStream`] for more details.
-    pub default_rwnd_threshold: u64,
+    pub default_rwnd_threshold: u32,
 }
 
 impl std::fmt::Debug for MultiplexorInner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MultiplexorInner")
-            .field("role", &self.role)
             .field("keepalive_interval", &self.keepalive_interval)
             .finish_non_exhaustive()
     }
@@ -102,7 +99,6 @@ impl Dupe for MultiplexorInner {
     #[inline]
     fn dupe(&self) -> Self {
         Self {
-            role: self.role,
             frame_tx: self.frame_tx.dupe(),
             keepalive_interval: self.keepalive_interval,
             streams: self.streams.dupe(),
@@ -217,7 +213,7 @@ impl MultiplexorInner {
                 Some(frame) = frame_rx.recv() => {
                     // Buffer `Psh` frames, and flush everything else immediately
                     match frame {
-                        Frame::Stream(ref sf) if sf.flag == StreamFlag::Psh => {
+                        Frame::Stream(ref sf) if sf.opcode == StreamOpCode::Psh => {
                             ws_sink.feed(Message::Binary(frame.try_into()?)).await
                         }
                         Frame::Flush => ws_sink.flush().await,
@@ -277,7 +273,7 @@ impl MultiplexorInner {
         should_drain_frame_rx: bool,
         mut ws: S,
         datagram_tx: mpsc::Sender<DatagramFrame>,
-        server_stream_tx: mpsc::Sender<MuxStream>,
+        con_recv_stream_tx: mpsc::Sender<MuxStream>,
         mut frame_rx: mpsc::UnboundedReceiver<Frame>,
     ) -> Result<()> {
         debug!("closing all connections");
@@ -322,7 +318,7 @@ impl MultiplexorInner {
                 "processing remaining message after closure length = {}",
                 msg.len()
             );
-            self.process_message(msg, &datagram_tx, &server_stream_tx)
+            self.process_message(msg, &datagram_tx, &con_recv_stream_tx)
                 .await?;
         }
         // Finally, we send EOF to all established streams.
@@ -356,7 +352,7 @@ impl MultiplexorInner {
         &self,
         msg: Message,
         datagram_tx: &mpsc::Sender<DatagramFrame>,
-        server_stream_tx: &mpsc::Sender<MuxStream>,
+        con_recv_stream_tx: &mpsc::Sender<MuxStream>,
     ) -> Result<bool> {
         match msg {
             Message::Binary(data) => {
@@ -381,7 +377,7 @@ impl MultiplexorInner {
                     }
                     Frame::Stream(stream_frame) => {
                         trace!("received stream frame: {stream_frame:?}");
-                        self.process_stream_frame(stream_frame, server_stream_tx)
+                        self.process_stream_frame(stream_frame, con_recv_stream_tx)
                             .await?;
                     }
                     Frame::Flush => {
@@ -432,12 +428,12 @@ impl MultiplexorInner {
     async fn process_stream_frame(
         &self,
         stream_frame: StreamFrame,
-        server_stream_tx: &mpsc::Sender<MuxStream>,
+        con_recv_stream_tx: &mpsc::Sender<MuxStream>,
     ) -> Result<()> {
         let StreamFrame {
             dport: our_port,
             sport: their_port,
-            flag,
+            opcode,
             mut data,
         } = stream_frame;
         let send_rst = async {
@@ -447,77 +443,73 @@ impl MultiplexorInner {
             // Error only happens if the `frame_tx` channel is closed, at which point
             // we don't care about sending a `Rst` frame anymore
         };
-        match flag {
-            StreamFlag::Syn => {
-                if self.role == Role::Client {
-                    return Err(Error::ClientReceivedSyn);
+        match opcode {
+            StreamOpCode::Con => {
+                // Decode Con handshake
+                if our_port != 0 {
+                    error!("Received `Con` with non-zero dport {our_port}");
+                    // just bail because this is a protocol violation
+                    return Err(Error::ConWithDport(our_port));
                 }
-                // Decode Syn handshake
-                if data.remaining() < 10 {
+                if data.remaining() < 6 {
                     return Err(super::frame::Error::FrameTooShort.into());
                 }
-                let peer_rwnd = data.get_u64();
+                let peer_rwnd = data.get_u32();
                 let dest_port = data.get_u16();
                 let dest_host = data;
-                // "we" is `role == Server`
-                // "they" is `role == Client`
-                self.server_new_stream(
-                    our_port,
+                self.con_recv_new_stream(
                     their_port,
                     dest_host,
                     dest_port,
                     peer_rwnd,
-                    server_stream_tx,
+                    con_recv_stream_tx,
                 )
                 .await?;
             }
-            StreamFlag::SynAck => {
-                if self.role == Role::Server {
-                    return Err(Error::ServerReceivedSynAck);
-                }
-                if data.remaining() < 8 {
+            StreamOpCode::Ack => {
+                trace!("received `Ack` for {our_port}");
+                if data.remaining() < 4 {
                     return Err(super::frame::Error::FrameTooShort.into());
                 }
-                // Decode `SynAck` handshake
-                let peer_rwnd = data.get_u64();
-                // "we" is `role == Client`
-                // "they" is `role == Server`
-                self.client_new_stream(our_port, their_port, peer_rwnd)?;
-            }
-            StreamFlag::Ack => {
-                if data.remaining() < 8 {
-                    return Err(super::frame::Error::FrameTooShort.into());
-                }
-                let peer_processed = data.get_u64();
-                debug!("peer processed {peer_processed} frames");
-                let port_exists = {
+                let payload = data.get_u32();
+                // Two cases:
+                // 1. Peer acknowledged `Con`
+                // 2. Peer acknowledged some `Psh` frames
+                let should_send_rst = {
                     let streams = self.streams.read();
-                    if let Some(MuxStreamSlot::Established(stream_data)) = streams.get(&our_port) {
-                        // Atomic ordering: as long as the value is incremented atomically,
-                        // whether a writer sees the new value or the old value is not
-                        // important. If it sees the old value and decides to return
-                        // `Poll::Pending`, it will be woken up by the `Waker` anyway.
-                        stream_data
-                            .psh_send_remaining
-                            .fetch_add(peer_processed, Ordering::Relaxed);
-                        stream_data.writer_waker.wake();
-                        true
-                    } else {
-                        // the port does not exist
-                        false
+                    match streams.get(&our_port) {
+                        Some(MuxStreamSlot::Established(stream_data)) => {
+                            // We have an established stream, so process the `Ack`
+                            debug!("peer processed {payload} frames");
+                            // Atomic ordering: as long as the value is incremented atomically,
+                            // whether a writer sees the new value or the old value is not
+                            // important. If it sees the old value and decides to return
+                            // `Poll::Pending`, it will be woken up by the `Waker` anyway.
+                            stream_data
+                                .psh_send_remaining
+                                .fetch_add(payload, Ordering::Relaxed);
+                            stream_data.writer_waker.wake();
+                            false
+                        }
+                        Some(MuxStreamSlot::Requested(_)) => {
+                            debug!(
+                                "new stream {our_port} -> {their_port} with peer rwnd {payload}"
+                            );
+                            self.ack_recv_new_stream(our_port, their_port, payload)?;
+                            false
+                        }
+                        None => {
+                            // The port does not exist, send `Rst`
+                            trace!("port {our_port} does not exist, sending `Rst`");
+                            true
+                        }
                     }
                 };
-                // This part is refactored out so that we don't hold the lock across await
-                if !port_exists {
+                if should_send_rst {
                     send_rst.await;
                 }
             }
-            StreamFlag::Rst => {
-                debug!("`Rst` for {our_port}");
-                // `true` because we don't want to reply `Rst` with `Rst`.
-                self.close_port(our_port, their_port, true).await;
-            }
-            StreamFlag::Fin => {
+            StreamOpCode::Fin => {
                 let sender = if let Some(MuxStreamSlot::Established(stream_data)) =
                     self.streams.read().get(&our_port)
                 {
@@ -534,7 +526,12 @@ impl MultiplexorInner {
                 }
                 // And our end can still send
             }
-            StreamFlag::Psh => {
+            StreamOpCode::Rst => {
+                debug!("`Rst` for {our_port}");
+                // `true` because we don't want to reply `Rst` with `Rst`.
+                self.close_port(our_port, their_port, true).await;
+            }
+            StreamOpCode::Psh => {
                 let sender = if let Some(MuxStreamSlot::Established(stream_data)) =
                     self.streams.read().get(&our_port)
                 {
@@ -567,44 +564,37 @@ impl MultiplexorInner {
                     send_rst.await;
                 }
             }
+            StreamOpCode::Bnd => {
+                todo!()
+            }
         }
         Ok(())
     }
 
-    /// Create a new `MuxStream`, add it to the map, and send a `SynAck` frame.
+    /// Create a new stream because this end received a `Con` frame.
+    /// Create a new `MuxStream`, add it to the map, and send an `Ack` frame.
     /// If `our_port` is 0, a new port will be allocated.
     #[inline]
-    async fn server_new_stream(
+    async fn con_recv_new_stream(
         &self,
-        our_port: u16,
         their_port: u16,
         dest_host: Bytes,
         dest_port: u16,
-        peer_rwnd: u64,
-        server_stream_tx: &mpsc::Sender<MuxStream>,
+        peer_rwnd: u32,
+        con_recv_stream_tx: &mpsc::Sender<MuxStream>,
     ) -> Result<()> {
-        assert_eq!(self.role, Role::Server);
         // `tx` is our end, `rx` is the user's end
         let (frame_tx, frame_rx) = mpsc::channel(config::RWND_USIZE);
         let can_write = Arc::new(AtomicBool::new(true));
-        let psh_send_remaining = Arc::new(AtomicU64::new(peer_rwnd));
+        let psh_send_remaining = Arc::new(AtomicU32::new(peer_rwnd));
         let writer_waker = Arc::new(AtomicWaker::new());
         // Scope the following block to reduce locked time
         let our_port = {
             // Save the TX end of the stream so we can write to it when subsequent frames arrive
             let mut streams = self.streams.write();
-            let our_port = if our_port == 0 {
-                // Allocate a new port
-                let result = u16::next_available_key(&streams);
-                trace!("port {our_port} allocated");
-                result
-            } else {
-                // Check if the port is available
-                if streams.contains_key(&our_port) {
-                    return Err(Error::InvalidSynPort(our_port));
-                }
-                our_port
-            };
+            // Allocate a new port
+            let our_port = u16::next_available_key(&streams);
+            trace!("port {our_port} allocated");
             streams.insert(
                 our_port,
                 MuxStreamSlot::Established(MuxStreamData {
@@ -624,39 +614,39 @@ impl MultiplexorInner {
             dest_port,
             can_write,
             psh_send_remaining,
-            psh_recvd_since: AtomicU64::new(0),
+            psh_recvd_since: AtomicU32::new(0),
             writer_waker,
             buf: Bytes::new(),
             frame_tx: self.frame_tx.dupe(),
             dropped_ports_tx: self.dropped_ports_tx.dupe(),
             rwnd_threshold: self.default_rwnd_threshold.min(peer_rwnd),
         };
-        // Send a `SynAck`
-        // Make sure `SynAck` is sent before the stream is sent to the user
+        // Send a `Ack`
+        // Make sure `Ack` is sent before the stream is sent to the user
         // so that the stream is `Established` when the user uses it.
-        trace!("sending `SynAck`");
+        trace!("sending `Ack`");
         self.frame_tx
-            .send(StreamFrame::new_synack(our_port, their_port, config::RWND).into())
+            .send(StreamFrame::new_ack(our_port, their_port, config::RWND).into())
             .map_err(|_| Error::Closed)?;
-        // At the server side, we use `server_stream_tx` to send the new stream to the
+        // At the con_recv side, we use `con_recv_stream_tx` to send the new stream to the
         // user.
         trace!("sending stream to user");
         // This goes to the user
-        server_stream_tx
+        con_recv_stream_tx
             .send(stream)
             .await
             .map_err(|_| Error::SendStreamToClient)?;
         Ok(())
     }
 
-    /// Create a new `MuxStream` and change the state of the port to `Established`.
+    /// Create a new `MuxStream` by finalizing a Con/Ack handshsake and
+    /// change the state of the port to `Established`.
     #[inline]
-    fn client_new_stream(&self, our_port: u16, their_port: u16, peer_rwnd: u64) -> Result<()> {
-        assert_eq!(self.role, Role::Client);
+    fn ack_recv_new_stream(&self, our_port: u16, their_port: u16, peer_rwnd: u32) -> Result<()> {
         // `tx` is our end, `rx` is the user's end
         let (frame_tx, frame_rx) = mpsc::channel(config::RWND_USIZE);
         let can_write = Arc::new(AtomicBool::new(true));
-        let psh_send_remaining = Arc::new(AtomicU64::new(peer_rwnd));
+        let psh_send_remaining = Arc::new(AtomicU32::new(peer_rwnd));
         let writer_waker = Arc::new(AtomicWaker::new());
         let stream_data = MuxStreamData {
             sender: frame_tx,
@@ -672,7 +662,7 @@ impl MultiplexorInner {
             dest_port: 0,
             can_write,
             psh_send_remaining,
-            psh_recvd_since: AtomicU64::new(0),
+            psh_recvd_since: AtomicU32::new(0),
             writer_waker,
             buf: Bytes::new(),
             frame_tx: self.frame_tx.dupe(),

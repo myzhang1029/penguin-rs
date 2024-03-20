@@ -45,9 +45,10 @@ pub(super) async fn handle_udp(
             .add_udp_client(addr, socket.dupe(), false)
             .await;
         let frame = DatagramFrame {
-            host: Bytes::from_static(rhost.as_bytes()),
-            port: rport,
-            sid: client_id,
+            target_host: Bytes::from_static(rhost.as_bytes()),
+            target_port: rport,
+            sport: client_id,
+            dport: 0,
             data: Bytes::from(buf),
         };
         // This fails only if main has exited, which is a fatal error.
@@ -76,9 +77,10 @@ pub(super) async fn handle_udp_stdio(
             .await
             .map_err(FatalError::ClientIo)?;
         let frame = DatagramFrame {
-            host: Bytes::from_static(rhost.as_bytes()),
-            port: rport,
-            sid: 0,
+            target_host: Bytes::from_static(rhost.as_bytes()),
+            target_port: rport,
+            sport: 0,
+            dport: 0,
             data: line.into(),
         };
         // This fails only if main has exited, which is a fatal error.
@@ -118,8 +120,8 @@ mod tests {
         socket.connect("127.0.0.1:14196").await.unwrap();
         socket.send(b"hello").await.unwrap();
         let frame = datagram_rx.recv().await.unwrap();
-        assert_eq!(frame.host, Bytes::from_static(RHOST.as_bytes()));
-        assert_eq!(frame.port, 255);
+        assert_eq!(frame.target_host, Bytes::from_static(RHOST.as_bytes()));
+        assert_eq!(frame.target_port, 255);
         assert_eq!(frame.data, Bytes::from("hello"));
         let client_id = *udp_client_map
             .read()
@@ -127,7 +129,7 @@ mod tests {
             .client_addr_map
             .get(&(local_addr, ([127, 0, 0, 1], 14196).into()))
             .unwrap();
-        assert_eq!(frame.sid, client_id);
+        assert_eq!(frame.sport, client_id);
         forwarding_task.abort();
     }
 }

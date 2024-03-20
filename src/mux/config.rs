@@ -15,16 +15,16 @@ pub const RWND_USIZE: usize = RWND as usize;
 
 /// Number of `StreamFrame`s to buffer in `MuxStream`'s channels before blocking
 #[cfg(not(test))]
-pub const RWND: u64 = 1 << 8;
+pub const RWND: u32 = 1 << 8;
 #[cfg(test)]
-pub const RWND: u64 = 4;
+pub const RWND: u32 = 4;
 /// Number of `Psh` frames between `Ack`s:
 /// If too low, `Ack`s will consume too much bandwidth;
 /// If too high, writers may block.
 #[cfg(not(test))]
-pub const DEFAULT_RWND_THRESHOLD: u64 = 1 << 8;
+pub const DEFAULT_RWND_THRESHOLD: u32 = 1 << 8;
 /// Number of `Psh` frames between `Ack`s. In tests, we want to be able to
 /// test the `Ack` mechanism, so we set this to be the same as the buffer size.
 /// The downside is that tests will be slower.
 #[cfg(test)]
-pub const DEFAULT_RWND_THRESHOLD: u64 = RWND;
+pub const DEFAULT_RWND_THRESHOLD: u32 = RWND;
