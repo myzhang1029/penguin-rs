@@ -10,7 +10,7 @@ The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD",
 interpreted as described in RFC 2119.
 
 ## Protocol Version
-The current protocol version is `penguin-v6`.
+The current protocol version is `penguin-v7`.
 
 ## Function Specification
 ### Service Architecture
@@ -48,7 +48,7 @@ WebSocket close frame.
 
 ### Data Framing
 The client and server MAY send data to each other by sending WebSocket binary
-frames. The client and server MUST NOT use other WebSocket data frame types. 
+frames. The client and server MUST NOT use other WebSocket data frame types.
 WebSocket control frames MAY be used as specified in RFC 6455.
 
 The payload of a WebSocket binary frame MUST be a Penguin frame.
@@ -61,21 +61,20 @@ Stream Frame Format:
 0                   1                   2                   3
 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-| Type (1 byte) |     Source Port (2 bytes)     |  Destination
+| Type (1 byte) | Oper (1 byte) |                  Stream ID
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-   Port (2 bytes)   | Flag (1 byte) |      Data (variable)      |
+        (4 bytes)               |        Data (variable)        |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
 
 - Type: `0x01` for a stream frame.
 
-- Source Port and Destination Port: two 16-bit unsigned integers in network
-  byte order for identifying logical streams multiplexed over the same
-  connection.
+- Stream ID: a 32-bit unsigned integer in network byte order for identifying
+  logical streams multiplexed over the same connection.
 
-- Flag: `0x00` is a `Syn` frame, `0x01` is a `SynAck` frame, `0x02` is an `Ack`
-  frame, `0x03` is a `Rst` frame, `0x04` is a `Fin` frame, `0x05` is a `Psh`
-  frame.
+- Operation code: `0x00` is a `Syn` frame, `0x01` is reserved, `0x02` is an
+  `Ack` frame, `0x03` is a `Rst` frame, `0x04` is a `Fin` frame, `0x05` is a
+  `Psh` frame, `0x06` is a `Bnd` frame.
 
 - Data: the payload of the frame.
 
@@ -114,50 +113,45 @@ UDP datagrams.
 
 #### Logical TCP Stream Tunneling
 Logical TCP streams are initiated by the client. The client MUST send a stream
-frame with the `Syn` flag set and the destination port set to `0`. The source
-port MUST be a unique 16-bit unsigned integer. The data of the frame MUST be
-a 64-bit unsigned integer in network byte order (`rwnd`), a 16-bit unsigned
-integer in network byte order (`dest_port`), a variable-length UTF-8 string
-(`dest_host`). The `rwnd` is the maximum number of frames the client can
-buffer. The `dest_port` and `dest_host` are the target port and host of the
-TCP stream.
+frame with the `Syn` operation code and the stream ID set to a unique 32-bit
+unsigned integer in network byte order. The data of the frame MUST be a 32-bit
+unsigned integer in network byte order (`rwnd`), a 16-bit unsigned integer in
+network byte order (`dest_port`), a variable-length UTF-8 string (`dest_host`).
+`rwnd` is the maximum number of frames the client can buffer. `dest_port` and
+`dest_host` are the target port and host of the TCP stream.
 
 Upon receiving the `Syn` frame, the server MUST send a stream frame with the
-`SynAck` flag set, the destination port set to the source port of the `Syn`
-frame, and the source port set to a unique 16-bit unsigned integer. The data
-of the frame MUST be a 64-bit unsigned integer in network byte order
-representing the maximum number of frames the server can buffer. Both ends
-SHOULD save the `rwnd` value associated with that (source, destination) port
-pair for later use. Servers MUST NOT send `Syn` frames, and clients MUST NOT
-send `SynAck` frames.
+`Syn` operation code containing the same stream ID, The data of the frame MUST
+be a 32-bit unsigned integer in network byte order representing the maximum
+number of frames the server can buffer. Both ends SHOULD save the `rwnd` value
+associated with that stream for later use.
 
 After the logical stream is established, the client and server MAY send data
-in a frame with the `Psh` flag set. However, one end MUST NOT send more than
-the corresponding `rwnd` frames before receiving an `Ack` frame from the other
-end.
+in a frame with the `Psh` operation code. However, one end MUST NOT send more
+than the corresponding `rwnd` frames before receiving an `Ack` frame from the
+other end.
 
-Either end MAY send a frame with the `Ack` flag set, with which the sender
-acknowledges the receipt of a certain number of frames as a 64-bit unsigned
-integer in network byte order in the data of the frame. Upon receiving an
-`Ack` frame, the receiver MUST increase its corresponding `rwnd` by the value
-in the data of the frame. One end MUST send an `Ack` frame when it processes
-`rwnd` frames from the other end after sending the last `Ack` frame. However,
-implementations MAY send `Ack` frames more frequently to, for example, reduce
-blocking delay.
+Either end MAY send a frame with the `Ack` operation code, with which the
+sender acknowledges the receipt of a certain number of frames as a 32-bit
+unsigned integer in network byte order in the data of the frame. Upon
+receiving an `Ack` frame, the receiver MUST increase its corresponding `rwnd`
+by the value in the data of the frame. One end MUST send an `Ack` frame when
+it processes `rwnd` frames from the other end after sending the last `Ack`
+frame. However, implementations MAY send `Ack` frames more frequently to, for
+example, reduce blocking delay in anticipation of frequent writing.
 
-Either end MAY send a frame with the `Fin` flag set, with which the sender
-indicates that it will not send any more data. When both ends send a `Fin`
-frame, the logical stream is closed.
+Either end MAY send a frame with the `Fin` operation code, with which the
+sender indicates that it will not send any more data. When both ends send a
+`Fin` frame, the logical stream is closed.
 
-Either end MAY send a frame with the `Rst` flag set, with which the sender
-indicates that it either received a frame with an invalid destination port or
+Either end MAY send a frame with the `Rst` operation code, with which the
+sender indicates that it either received a frame with an invalid stream ID or
 an abrupt closure of that logical stream. When either end sends a `Rst` frame,
 the logical stream is closed.
 
 Since the underlying WebSocket connection is reliable, there is no need to
-acknowledge the receipt of a frame. Therefore, neither `SynAck` nor `Fin`
-should be acknowledged by an `Ack` frame. The use of the `Ack` frame is only
-for flow control of `Psh` frames.
+acknowledge the receipt of a frame. Therefore, the use of the `Ack` frame is
+only for flow control of `Psh` frames.
 
 #### UDP Datagram Forwarding
 The client MAY send a datagram frame to forward a UDP datagram. The client
