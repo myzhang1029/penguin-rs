@@ -54,10 +54,6 @@ pub(super) enum Error {
     #[error(transparent)]
     Http(#[from] http::Error),
     #[error(transparent)]
-    InvalidHeaderName(#[from] reqwest::header::InvalidHeaderName),
-    #[error(transparent)]
-    InvalidHeaderValue(#[from] reqwest::header::InvalidHeaderValue),
-    #[error(transparent)]
     Reqwest(#[from] reqwest::Error),
 }
 
@@ -108,43 +104,30 @@ impl<'a> State<'a> {
 
 impl State<'static> {
     /// Helper for sending a request to the backend
-    // XXX: Redo this bridging code when `reqwest` upgrades to `http = ^1`
+    /// XXX: Should we use `reqwest`, or should we construct something new with `tower`?
     async fn exec_request<B>(&self, req: Request<B>) -> Result<Response<FullBody<Bytes>>, Error>
     where
         B: hyper::body::Body,
         <B as hyper::body::Body>::Error: std::fmt::Debug,
     {
         let (parts, body) = req.into_parts();
-        // XXX: remove this `unwrap` when `reqwest` upgrades to `http = ^1`
-        let method = parts.method.as_str().try_into().unwrap();
+        let method = parts.method;
         let headers = parts.headers;
-        let mut new_headers = reqwest::header::HeaderMap::with_capacity(headers.len());
-        for (name, value) in &headers {
-            new_headers.insert(
-                reqwest::header::HeaderName::try_from(name.as_str())?,
-                value.as_bytes().try_into()?,
-            );
-        }
-        // XXX: remove this `unwrap` when `reqwest` upgrades to `http = ^1`
         let body = body.collect().await.unwrap().to_bytes();
         let req = self
             .client
             .request(method, parts.uri.to_string())
             .body(body)
-            .headers(new_headers)
+            .headers(headers)
             .build()?;
         let resp = self.client.execute(req).await?;
-        let status = resp.status().as_u16();
-        let mut resp_builder = Response::builder().status(status);
-        {
-            let headers = resp.headers();
-            for (name, value) in headers {
-                resp_builder = resp_builder.header(name.as_str(), value.as_bytes());
-            }
-        }
+        let status = resp.status();
+        let headers = resp.headers().clone();
         let body = resp.bytes().await?;
-        let resp = resp_builder.body(FullBody::new(body))?;
-        Ok(resp)
+        let mut http_resp = Response::new(FullBody::new(body));
+        *http_resp.status_mut() = status;
+        *http_resp.headers_mut() = headers;
+        Ok(http_resp)
     }
 
     /// Reverse proxy and 404
