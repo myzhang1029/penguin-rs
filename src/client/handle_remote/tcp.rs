@@ -78,11 +78,19 @@ pub(super) async fn handle_tcp(
                 .await
                 .map_err(|_| FatalError::MainLoopExitWithoutSendingStream)?;
         // Transient errors in the forwarder don't matter.
-        tokio::spawn(async move {
-            if let Err(error) = tokio::io::copy_bidirectional(&mut channel, &mut tcp_stream).await {
-                warn!("TCP forwarder failed: {error}");
-            }
-        });
+        tokio::task::Builder::new()
+            .name(&format!(
+                "TCP Forwarder using conn {}->{}",
+                channel.our_port, channel.their_port
+            ))
+            .spawn(async move {
+                if let Err(error) =
+                    tokio::io::copy_bidirectional(&mut channel, &mut tcp_stream).await
+                {
+                    warn!("TCP forwarder failed: {error}");
+                }
+            })
+            .unwrap();
     }
 }
 

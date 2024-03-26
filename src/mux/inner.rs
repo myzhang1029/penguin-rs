@@ -166,6 +166,7 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
                 debug!("mux dropped");
                 break;
             }
+            tracing::error!("Dropped {our_port} -> {their_port}");
             self.close_port(our_port, their_port, false).await;
         }
         // Only happens when the last sender (i.e. `dropped_ports_tx` in `MultiplexorInner`)
@@ -541,8 +542,6 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
         if let Some(MuxStreamSlot::Established(stream_data)) =
             self.streams.write().await.remove(&our_port)
         {
-            // Make sure the user receives `EOF`.
-            stream_data.sender.send(Bytes::new()).await.ok();
             // Atomic ordering:
             // Load part:
             // If the user calls `poll_shutdown`, but we see `true` here,
@@ -550,7 +549,7 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
             // Store part:
             // It does not matter whether the user calls `poll_shutdown` or not,
             // the stream is shut down and the final value of `can_write` is `false`.
-            let old = stream_data.can_write.swap(false, Ordering::Relaxed);
+            let old = stream_data.can_write.swap(false, Ordering::SeqCst);
             if old && !inhibit_rst {
                 // If the user did not call `poll_shutdown`, we need to send a `Rst` frame
                 self.ws
@@ -558,11 +557,20 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
                     .await
                     .ok();
             }
+            // Make sure the user receives `EOF`. This also wakes up the reader.
+            stream_data.sender.send(Bytes::new()).await.ok();
             // If there is a writer waiting for `Ack`, wake it up because it will never receive one.
             // Waking it here and the user should receive a `BrokenPipe` error.
-            stream_data.writer_waker.wake();
+            if let Some(waker) = stream_data.writer_waker.take() {
+                tracing::error!("Waking writer at port {our_port}");
+                waker.wake();
+            } else {
+                tracing::error!("No writer to wake at port {our_port}");
+            }
+            debug!("freed connection {our_port} -> {their_port}");
+        } else {
+            tracing::error!("Bogus free {our_port} -> {their_port}");
         }
-        debug!("freed connection {our_port} -> {their_port}");
     }
 
     /// Should really only be called when the mux is dropped.

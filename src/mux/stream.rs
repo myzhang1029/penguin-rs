@@ -22,9 +22,9 @@ pub struct MuxStream<S> {
     /// Receive stream frames
     pub(super) frame_rx: mpsc::Receiver<Bytes>,
     /// Our port
-    pub(super) our_port: u16,
+    pub our_port: u16,
     /// Port of the other end
-    pub(super) their_port: u16,
+    pub their_port: u16,
     /// Forwarding destination. Only used on `Role::Server`
     pub dest_host: Bytes,
     /// Forwarding destination port. Only used on `Role::Server`
@@ -69,6 +69,7 @@ impl<S> Drop for MuxStream<S> {
     /// Close the stream by instructing the mux task to send a `Rst` frame if
     /// the stream is still open. The associated port will be freed for reuse.
     fn drop(&mut self) {
+        tracing::error!("Port dropped: {} -> {}", self.our_port, self.their_port);
         // Notify the task that this port is no longer in use
         self.dropped_ports_tx
             .send((self.our_port, self.their_port))
@@ -90,9 +91,11 @@ impl<S> AsyncRead for MuxStream<S> {
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         let remaining = buf.remaining();
+        tracing::error!("Polling read {}", self.our_port);
         if self.buf.is_empty() {
             trace!("polling the stream");
             let next = ready!(self.frame_rx.poll_recv(cx));
+            tracing::error!("read Advanced to 1");
             if next.is_none() || next.as_ref().unwrap().is_empty() {
                 // See `tokio::sync::mpsc`#clean-shutdown
                 self.frame_rx.close();
@@ -159,7 +162,8 @@ where
         // Both `close_port` and `shutdown` in `inner.rs` set this flag with
         // `Relaxed` ordering because they are not releasing any access, but
         // instead acting based on the WebSocket or the stream's states.
-        if !self.can_write.load(Ordering::Relaxed) {
+        tracing::error!("Polling write {}", self.our_port);
+        if !self.can_write.load(Ordering::SeqCst) {
             // The stream has been closed. Return an error
             debug!("stream has been closed, returning `BrokenPipe`");
             return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
@@ -169,6 +173,7 @@ where
         // practical. XXX: performance penalty?
         // `ready`: nothing happens if return here
         ready!(self.ws.poll_flush(cx)).map_err(WebSocketError::into_io_error)?;
+        tracing::error!("{} write Advanced to 1", self.our_port);
         // `ready`: extra flushes are harmless although they are not necessary
         ready!(self.ws.poll_feed_with(cx, |cx| {
             loop {
@@ -178,7 +183,7 @@ where
                 trace!("congestion window: {}", original);
                 if original == 0 {
                     // We have reached the congestion window limit. Wait for an `Ack`
-                    debug!("waiting for `Ack`");
+                    tracing::error!("waiting for `Ack`");
                     self.writer_waker.register(cx.waker());
                     // Since all writes start with `poll_flush`, we don't need to
                     // flush here. There is actually no way to `poll_flush` without
@@ -203,6 +208,7 @@ where
             )
         }))
         .map_err(WebSocketError::into_io_error)?;
+        tracing::error!("{} write Advanced to 3", self.our_port);
         trace!("sent a frame");
         Poll::Ready(Ok(buf.len()))
     }
@@ -210,6 +216,7 @@ where
     #[tracing::instrument(skip(cx), level = "trace")]
     #[inline]
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        tracing::error!("Polling flush {}", self.our_port);
         ready!(self.ws.poll_flush(cx)).map_err(WebSocketError::into_io_error)?;
         Poll::Ready(Ok(()))
     }
@@ -220,6 +227,7 @@ where
     #[tracing::instrument(skip(cx), level = "trace")]
     #[inline]
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        tracing::error!("Polling shutdown {}", self.our_port);
         // There is no need to send a `Fin` frame if the mux task has already removed the stream
         // because either:
         // 1. `MuxStream` was dropped before `poll_shutdown` is completed and the mux task should
