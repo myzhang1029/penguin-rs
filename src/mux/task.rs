@@ -1,0 +1,158 @@
+//! Multiplexor task
+//
+// SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
+
+use super::{Error, Result};
+use crate::frame::{DatagramFrame, Frame};
+use crate::ws::WebSocketStream;
+use crate::MuxStream;
+use futures_util::SinkExt;
+use tokio::sync::mpsc;
+use tokio::time::MissedTickBehavior;
+use tracing::{debug, trace};
+
+/// Multiplexor inner
+pub struct TaskData<S> {
+    /// The underlying `Sink + Stream` of messages.
+    pub ws: S,
+    /// Interval between keepalive `Ping`s
+    pub keepalive_interval: Option<std::time::Duration>,
+    /// Incoming datagrams from the mux go to the user via this channel
+    pub incoming_datagram_tx: mpsc::Sender<DatagramFrame>,
+    /// New server-side streams from the mux go to the user via this channel
+    pub server_stream_tx: mpsc::Sender<MuxStream<S>>,
+    /// We get notified of dropped `MuxStream`s here
+    pub dropped_ports_rx: mpsc::UnboundedReceiver<(u16, u16)>,
+    /// Queued `Ack` frames from the mux
+    // This requires a `UnboundedReceiver` because called will be in a non-async
+    // method
+    pub outgoing_ack_rx: mpsc::UnboundedReceiver<(u16, u16, u64)>,
+    ///
+    pub outgoing_frame_rx: mpsc::Receiver<Frame>,
+}
+
+// Impl block for the task
+impl<S: WebSocketStream> TaskData<S> {
+    /// Processing task
+    /// Does the following:
+    /// - Receives messages from `WebSocket` and processes them
+    /// - Sends received datagrams to the `datagram_tx` channel
+    /// - Sends received streams to the appropriate handler
+    /// - Responds to ping/pong messages
+    // It doesn't make sense to return a `Result` here because we can't propagate
+    // the error to the user from a spawned task.
+    // Instead, the user will notice when `rx` channels return `None`.
+    #[tracing::instrument(skip_all, level = "trace")]
+    pub async fn task(&self) -> Result<()> {
+        let result = tokio::try_join!(
+            self.keepalive_task(),
+            self.process_messages_task(self.incoming_datagram_tx, self.server_stream_tx),
+            self.close_port_task(self.dropped_ports_rx),
+            self.send_ack_task(self.outgoing_ack_rx),
+        );
+        self.shutdown().await;
+        result.map(|_| ())
+    }
+
+    /// Keepalive subtask
+    async fn keepalive_task(&self) -> Result<()> {
+        if let Some(keepalive_interval) = self.keepalive_interval {
+            let mut interval = tokio::time::interval(keepalive_interval);
+            // If we missed a tick, it is probably doing networking, so we don't need to
+            // make up for it.
+            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                trace!("sending ping");
+                self.ws
+                    .send_with(|| Message::Ping(vec![]))
+                    .await
+                    .map_err(Error::PingPong)?;
+            }
+        } else {
+            futures_util::future::pending::<()>().await;
+            unreachable!("`futures_util::future::pending` never resolves")
+        }
+    }
+
+    /// Process closed ports subtask
+    async fn close_port_task(
+        &self,
+        mut dropped_ports_rx: mpsc::UnboundedReceiver<(u16, u16)>,
+    ) -> Result<()> {
+        while let Some((our_port, their_port)) = dropped_ports_rx.recv().await {
+            if our_port == 0 {
+                debug!("mux dropped");
+                break;
+            }
+            self.close_port(our_port, their_port, false).await;
+        }
+        // Only happens when the last sender (i.e. `dropped_ports_tx` in `MultiplexorInner`)
+        // is dropped or when the mux is dropped.
+        Ok(())
+    }
+    /// Send `Ack` subtask
+    async fn send_ack_task(
+        &self,
+        mut ack_rx: mpsc::UnboundedReceiver<(u16, u16, u64)>,
+    ) -> Result<()> {
+        while let Some((our_port, their_port, psh_recvd_since)) = ack_rx.recv().await {
+            trace!("sending `Ack` for port {}", our_port);
+            self.ws
+                .send_with(|| StreamFrame::new_ack(our_port, their_port, psh_recvd_since).into())
+                .await
+                .map_err(Error::SendStreamFrame)?;
+        }
+        // Only happens when the last sender (i.e. `ack_tx` in `MultiplexorInner`)
+        // is dropped.
+        Ok(())
+    }
+
+    /// Message processing subtask
+    async fn process_messages_task(
+        &self,
+        datagram_tx: mpsc::Sender<DatagramFrame>,
+        server_stream_tx: mpsc::Sender<MuxStream<S>>,
+    ) -> Result<()> {
+        while let Some(msg) = self.ws.next().await {
+            let msg = msg.map_err(Error::Next)?;
+            trace!("received message length = {}", msg.len());
+            // Messages cannot be processed concurrently
+            // because doing so will break stream ordering
+            if self
+                .process_message(msg, &datagram_tx, &server_stream_tx)
+                .await?
+            {
+                // `Close` message was received, so we can exit
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// Should really only be called when the mux is dropped.
+    #[tracing::instrument(skip_all, level = "trace")]
+    async fn shutdown(&mut self) {
+        debug!("closing all connections");
+        for (_, stream_data) in self.streams.write().await.drain() {
+            // Make sure `self.streams` is not locked in loop body
+            if let MuxStreamSlot::Established(stream_data) = stream_data {
+                // Make sure the user receives `EOF`.
+                stream_data.sender.send(Bytes::new()).await.ok();
+                // Prevent the user from writing
+                // Atomic ordering: It does not matter whether the user calls `poll_shutdown` or not,
+                // the stream is shut down and the final value of `can_write` is `false`.
+                stream_data.can_write.store(false, Ordering::Relaxed);
+                // If there is a writer waiting for `Ack`, wake it up because it will never receive one.
+                // Waking it here and the user should receive a `BrokenPipe` error.
+                stream_data.writer_waker.wake();
+            }
+            // else: just drop the sender
+        }
+        // This also effectively `Rst`s all streams on the other side
+        self.ws.close().await.ok();
+        self.ws.flush_ignore_closed().await.ok();
+        // Intentionally flushing twice: this time we should get a `ConnectionClosed` error
+        self.ws.flush_ignore_closed().await.ok();
+    }
+}

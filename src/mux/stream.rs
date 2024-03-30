@@ -3,9 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::frame::StreamFrame;
-use super::locked_sink::LockedWebSocket;
-use crate::config;
 use crate::ws::WebSocketError;
+use crate::{config, Frame};
 use bytes::Bytes;
 use futures_util::task::AtomicWaker;
 use std::io;
@@ -18,9 +17,10 @@ use tokio::sync::mpsc;
 use tracing::{debug, trace, warn};
 
 /// All parameters of a stream channel
-pub struct MuxStream<S> {
+#[derive(Debug)]
+pub struct MuxStream {
     /// Receive stream frames
-    pub(super) frame_rx: mpsc::Receiver<Bytes>,
+    pub(super) incoming_frame_rx: mpsc::Receiver<Bytes>,
     /// Our port
     pub(super) our_port: u16,
     /// Port of the other end
@@ -42,28 +42,13 @@ pub struct MuxStream<S> {
     pub(super) writer_waker: Arc<AtomicWaker>,
     /// Remaining bytes to be read
     pub(super) buf: Bytes,
-    /// See `MultiplexorInner`.
-    pub(super) ws: LockedWebSocket<S>,
+    /// Where to send frames
+    pub(super) outgoing_frame_tx: mpsc::Sender<Frame>,
     /// See `MultiplexorInner`.
     pub(super) dropped_ports_tx: mpsc::UnboundedSender<(u16, u16)>,
 }
 
-impl<S> std::fmt::Debug for MuxStream<S> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MuxStream")
-            .field("our_port", &self.our_port)
-            .field("their_port", &self.their_port)
-            .field("dest_host", &self.dest_host)
-            .field("dest_port", &self.dest_port)
-            .field("can_write", &self.can_write)
-            .field("psh_send_remaining", &self.psh_send_remaining)
-            .field("psh_recvd_since", &self.psh_recvd_since)
-            .field("buf.len", &self.buf.len())
-            .finish_non_exhaustive()
-    }
-}
-
-impl<S> Drop for MuxStream<S> {
+impl Drop for MuxStream {
     // Dropping the port should act like `close()` has been called.
     // Since `drop` is not async, this is handled by the mux task.
     /// Close the stream by instructing the mux task to send a `Rst` frame if
@@ -77,7 +62,7 @@ impl<S> Drop for MuxStream<S> {
     }
 }
 
-impl<S> AsyncRead for MuxStream<S> {
+impl AsyncRead for MuxStream {
     /// Read data from the stream.
     /// There are two cases where this function gives EOF:
     /// 1. One `Message` contains an empty payload.
@@ -92,10 +77,10 @@ impl<S> AsyncRead for MuxStream<S> {
         let remaining = buf.remaining();
         if self.buf.is_empty() {
             trace!("polling the stream");
-            let next = ready!(self.frame_rx.poll_recv(cx));
+            let next = ready!(self.incoming_frame_rx.poll_recv(cx));
             if next.is_none() || next.as_ref().unwrap().is_empty() {
                 // See `tokio::sync::mpsc`#clean-shutdown
-                self.frame_rx.close();
+                self.incoming_frame_rx.close();
                 // The stream has been closed, just return 0 bytes read
                 return Poll::Ready(Ok(()));
             }
@@ -139,10 +124,7 @@ impl<S> AsyncRead for MuxStream<S> {
     }
 }
 
-impl<S> AsyncWrite for MuxStream<S>
-where
-    S: crate::ws::WebSocketStream,
-{
+impl AsyncWrite for MuxStream {
     /// Write data to the stream. Each invocation of this method will send a
     /// separate frame in a new [`Message`](crate::ws::Message), so it may be
     /// beneficial to wrap it in a [`BufWriter`](tokio::io::BufWriter) where
