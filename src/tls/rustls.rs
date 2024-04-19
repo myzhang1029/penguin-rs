@@ -8,6 +8,7 @@ use rustls::{
     pki_types::{CertificateDer, PrivateKeyDer, ServerName},
     server::WebPkiClientVerifier,
     ClientConfig, RootCertStore, ServerConfig,
+    crypto::aws_lc_rs::default_provider,
 };
 use std::sync::Arc;
 
@@ -157,7 +158,7 @@ impl ServerCertVerifier for EmptyVerifier {
             message,
             cert,
             dss,
-            &rustls::crypto::ring::default_provider().signature_verification_algorithms,
+            &default_provider().signature_verification_algorithms,
         )
     }
 
@@ -171,12 +172,12 @@ impl ServerCertVerifier for EmptyVerifier {
             message,
             cert,
             dss,
-            &rustls::crypto::ring::default_provider().signature_verification_algorithms,
+            &default_provider().signature_verification_algorithms,
         )
     }
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        rustls::crypto::ring::default_provider()
+        default_provider()
             .signature_verification_algorithms
             .supported_schemes()
     }
