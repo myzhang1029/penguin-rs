@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::{Error, Result};
-use crate::frame::{DatagramFrame, Frame};
-use crate::ws::WebSocketStream;
+use crate::frame::{DatagramFrame, Frame, StreamFrame};
+use crate::ws::{Message, WebSocketStream};
 use crate::MuxStream;
+use bytes::Bytes;
 use futures_util::SinkExt;
 use tokio::sync::mpsc;
 use tokio::time::MissedTickBehavior;
@@ -20,7 +21,7 @@ pub struct TaskData<S> {
     /// Incoming datagrams from the mux go to the user via this channel
     pub incoming_datagram_tx: mpsc::Sender<DatagramFrame>,
     /// New server-side streams from the mux go to the user via this channel
-    pub server_stream_tx: mpsc::Sender<MuxStream<S>>,
+    pub server_stream_tx: mpsc::Sender<MuxStream>,
     /// We get notified of dropped `MuxStream`s here
     pub dropped_ports_rx: mpsc::UnboundedReceiver<(u16, u16)>,
     /// Queued `Ack` frames from the mux
@@ -112,7 +113,7 @@ impl<S: WebSocketStream> TaskData<S> {
     async fn process_messages_task(
         &self,
         datagram_tx: mpsc::Sender<DatagramFrame>,
-        server_stream_tx: mpsc::Sender<MuxStream<S>>,
+        server_stream_tx: mpsc::Sender<MuxStream>,
     ) -> Result<()> {
         while let Some(msg) = self.ws.next().await {
             let msg = msg.map_err(Error::Next)?;
