@@ -23,7 +23,7 @@ jobs:
 
     - name: Install Rust with aarch64 toolchain
       run:
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --target aarch64-apple-darwin
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --target aarch64-apple-darwin,x86_64-apple-darwin
 
     - name: Build release
       run: |
