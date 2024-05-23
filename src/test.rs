@@ -75,15 +75,15 @@ fn make_client_args(servhost: &str, servport: u16, remotes: Vec<Remote>) -> arg:
 /// Returns the path to the directory. The cert is named `cert.pem` and the key is named `privkey.pem`.
 #[cfg(not(all(feature = "nativetls", any(target_os = "macos", target_os = "windows"))))]
 async fn make_server_cert_ecdsa() -> TempDir {
-    let mut cert_params = rcgen::CertificateParams::new(vec!["localhost".to_string()]);
-    cert_params.alg = &rcgen::PKCS_ECDSA_P384_SHA384;
+    let cert_params = rcgen::CertificateParams::new(vec!["localhost".to_string()]).unwrap();
+    let keypair = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P384_SHA384).unwrap();
     let dir = tempfile::tempdir().unwrap();
     let dir_path = dir.path().to_str().unwrap();
     let cert_path = format!("{dir_path}/cert.pem");
     let key_path = format!("{dir_path}/privkey.pem");
-    let cert = rcgen::Certificate::from_params(cert_params).unwrap();
-    let key = cert.serialize_private_key_pem();
-    let cert = cert.serialize_pem().unwrap();
+    let cert = cert_params.self_signed(&keypair).unwrap();
+    let key = keypair.serialize_pem();
+    let cert = cert.pem();
     tokio::fs::write(&cert_path, cert).await.unwrap();
     tokio::fs::write(&key_path, key).await.unwrap();
     dir
