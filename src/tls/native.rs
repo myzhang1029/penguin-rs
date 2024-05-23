@@ -58,11 +58,11 @@ mod test {
         let tmpdir = tempdir().unwrap();
         let key_path = tmpdir.path().join("key.pem");
         let cert_path = tmpdir.path().join("cert.pem");
-        let mut cert_params = CertificateParams::new(vec!["example.com".into()]);
-        cert_params.alg = &rcgen::PKCS_ECDSA_P384_SHA384;
-        let custom_crt = rcgen::Certificate::from_params(cert_params).unwrap();
-        let crt = custom_crt.serialize_pem().unwrap();
-        let crt_key = custom_crt.serialize_private_key_pem();
+        let cert_params = CertificateParams::new(vec!["example.com".into()]).unwrap();
+        let keypair = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P384_SHA384).unwrap();
+        let custom_crt = cert_params.self_signed(&keypair).unwrap();
+        let crt = custom_crt.pem();
+        let crt_key = keypair.serialize_pem();
         tokio::fs::write(&cert_path, crt).await.unwrap();
         tokio::fs::write(&key_path, crt_key).await.unwrap();
         read_key_cert(key_path.to_str().unwrap(), cert_path.to_str().unwrap())
