@@ -76,8 +76,6 @@ fn spawn_deadlock_detection() {
 #[tokio::main]
 /// Entry point
 async fn main() -> Result<(), Error> {
-    #[cfg(feature = "__rustls")]
-    tls::install_rustls_provider();
     #[cfg(not(feature = "tokio-console"))]
     let reload_handle = {
         let fmt_layer = fmt::Layer::default()

@@ -16,9 +16,6 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio_tungstenite::Connector;
 
-#[cfg(feature = "__rustls")]
-pub use rustls::install_provider as install_rustls_provider;
-
 /// A hot-swappable container for a TLS key and certificate.
 #[allow(clippy::module_name_repetitions)]
 pub type TlsIdentity = Arc<ArcSwap<TlsIdentityInner>>;
