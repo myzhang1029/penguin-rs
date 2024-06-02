@@ -33,9 +33,9 @@ jobs:
       with:
         submodules: true
 
-    - name: Install nasm on Windows
+    - name: Install nasm on Windows for aws-lc-sys (Taken from rustls)
       if: matrix.config.name == 'Windows'
-      run: choco install nasm
+      uses: ilammy/setup-nasm@v1
 
     - name: Install Rust toolchain
       run:
