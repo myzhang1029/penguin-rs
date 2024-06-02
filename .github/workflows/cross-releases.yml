@@ -36,8 +36,8 @@ jobs:
         - rust_target: armv7-unknown-linux-gnueabihf
         - rust_target: armv7-unknown-linux-musleabi
         - rust_target: armv7-unknown-linux-musleabihf
-        - rust_target: i586-unknown-linux-gnu
-        - rust_target: i586-unknown-linux-musl
+        # - rust_target: i586-unknown-linux-gnu (ring v1.17.8 SSE)
+        # - rust_target: i586-unknown-linux-musl (ring v1.17.8 SSE)
         - rust_target: i686-unknown-freebsd
         - rust_target: i686-linux-android
         - rust_target: i686-pc-windows-gnu
@@ -56,8 +56,8 @@ jobs:
         - rust_target: powerpc64le-unknown-linux-gnu
         # - rust_target: riscv64gc-unknown-linux-gnu (cross#1423)
         - rust_target: s390x-unknown-linux-gnu
-        - rust_target: sparc64-unknown-linux-gnu
-        - rust_target: sparcv9-sun-solaris
+        # - rust_target: sparc64-unknown-linux-gnu (ring support)
+        # - rust_target: sparcv9-sun-solaris (ring support)
         # - rust_target: thumbv6m-none-eabi (crate `std`)
         # - rust_target: thumbv7em-none-eabi (crate `std`)
         # - rust_target: thumbv7em-none-eabihf (crate `std`)
@@ -83,9 +83,7 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Install dependencies
-      run: |
-        cargo install cross --git https://github.com/cross-rs/cross
-        cargo install --force --locked bindgen-cli
+      run: cargo install cross --git https://github.com/cross-rs/cross
 
     - name: Build release
       run: cross build --release --target ${{ matrix.config.rust_target }}

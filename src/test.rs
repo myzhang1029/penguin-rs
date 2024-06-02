@@ -15,7 +15,7 @@ use tokio::{
 };
 
 #[ctor::ctor]
-fn test_setup_log() {
+fn test_setup() {
     use tracing_subscriber::{filter, fmt, prelude::*};
     let fmt_layer = fmt::Layer::default()
         .compact()
@@ -26,6 +26,8 @@ fn test_setup_log() {
         .with(filter::LevelFilter::WARN)
         .with(fmt_layer)
         .init();
+    #[cfg(feature = "__rustls")]
+    tls::install_rustls_provider();
 }
 
 fn make_server_args(host: &str, port: u16) -> arg::ServerArgs {
