@@ -33,6 +33,10 @@ jobs:
       with:
         submodules: true
 
+    - name: Install nasm on Windows
+      if: matrix.config.name == 'Windows'
+      run: choco install nasm
+
     - name: Install Rust toolchain
       run:
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --component llvm-tools-preview
