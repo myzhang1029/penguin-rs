@@ -8,3 +8,20 @@ pre-build = [
     "rm base.tar.xz",
     "rm -rf /tmp/netbsd",
 ]
+
+# Install libclang for bindgen
+[target.aarch64-unknown-linux-gnu]
+pre-build = [
+    "dpkg --add-architecture $CROSS_DEB_ARCH",
+    "apt-get update && apt-get -y install libclang-dev:$CROSS_DEB_ARCH llvm-dev:$CROSS_DEB_ARCH",
+]
+[target.i686-unknown-linux-gnu]
+pre-build = [
+    "dpkg --add-architecture $CROSS_DEB_ARCH",
+    "apt-get update && apt-get -y install libclang-dev:$CROSS_DEB_ARCH llvm-dev:$CROSS_DEB_ARCH",
+]
+[target.x86_64-unknown-linux-gnu]
+pre-build = [
+    "dpkg --add-architecture $CROSS_DEB_ARCH",
+    "apt-get update && apt-get -y install libclang-dev:$CROSS_DEB_ARCH llvm-dev:$CROSS_DEB_ARCH",
+]
