@@ -63,7 +63,8 @@ default = ["rustls-native-roots", "tests-real-internet4", "penguin-binary"]
 # enabled.
 rustls-webpki-roots = ["webpki-roots", "tokio-tungstenite/rustls-tls-webpki-roots", "reqwest/rustls-tls-webpki-roots", "__rustls"]
 rustls-native-roots = ["rustls-native-certs", "tokio-tungstenite/rustls-tls-native-roots", "reqwest/rustls-tls-native-roots", "__rustls"]
-__rustls = ["aws-lc-rs", "rustls", "rustls-pemfile", "tokio-rustls"]
+__rustls = ["rustls", "rustls-pemfile", "tokio-rustls"]
+aws-lc-rs-bindgen = ["aws-lc-rs"]
 nativetls = ["tokio-native-tls", "tokio-tungstenite/native-tls", "reqwest/native-tls"]
 # Allow some tests that require real internet connection
 tests-real-internet4 = []
