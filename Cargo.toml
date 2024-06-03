@@ -23,6 +23,8 @@ path = "src/mux/lib.rs"
 
 [dependencies]
 arc-swap = { version = "1", optional = true }
+# For platforms where aws-lc-rs requires bindgen
+aws-lc-rs = { version = "1", features = ["bindgen"], optional = true }
 base64 = { version = "0.22", optional = true }
 bytes = "1"
 clap = { version = "4", features = ["cargo", "derive"], optional = true }
@@ -61,7 +63,7 @@ default = ["rustls-native-roots", "tests-real-internet4", "penguin-binary"]
 # enabled.
 rustls-webpki-roots = ["webpki-roots", "tokio-tungstenite/rustls-tls-webpki-roots", "reqwest/rustls-tls-webpki-roots", "__rustls"]
 rustls-native-roots = ["rustls-native-certs", "tokio-tungstenite/rustls-tls-native-roots", "reqwest/rustls-tls-native-roots", "__rustls"]
-__rustls = ["rustls", "rustls-pemfile", "tokio-rustls"]
+__rustls = ["aws-lc-rs", "rustls", "rustls-pemfile", "tokio-rustls"]
 nativetls = ["tokio-native-tls", "tokio-tungstenite/native-tls", "reqwest/native-tls"]
 # Allow some tests that require real internet connection
 tests-real-internet4 = []
@@ -90,14 +92,3 @@ penguin-binary = [
 
 [profile.release]
 debug = true
-
-# Temporary fix for cross-rs/cross#1345, tracking
-[package.metadata.cross.target.x86_64-unknown-netbsd]
-pre-build = [
-    "mkdir -p /tmp/netbsd",
-    "curl https://cdn.netbsd.org/pub/NetBSD/NetBSD-9.2/amd64/binary/sets/base.tar.xz -O",
-    "tar -C /tmp/netbsd -xJf base.tar.xz",
-    "cp /tmp/netbsd/usr/lib/libexecinfo.so /usr/local/x86_64-unknown-netbsd/lib",
-    "rm base.tar.xz",
-    "rm -rf /tmp/netbsd",
-]

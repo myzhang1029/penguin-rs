@@ -21,7 +21,7 @@ jobs:
       # 2. without `AtomicU64`.
       matrix:
         config:
-        # - rust_target: aarch64-linux-android (libunwind linking issue, crate `aws-lc-sys`)
+        # - rust_target: aarch64-linux-android (crate `aws-lc-sys`)
         # - rust_target: aarch64-unknown-linux-gnu (crate `aws-lc-sys`)
         - rust_target: aarch64-unknown-linux-musl
         # - rust_target: arm-linux-androideabi (AtomicU64)
@@ -39,7 +39,7 @@ jobs:
         # - rust_target: i586-unknown-linux-gnu (ring v1.17.8 SSE)
         # - rust_target: i586-unknown-linux-musl (ring v1.17.8 SSE)
         # - rust_target: i686-unknown-freebsd (crate `aws-lc-sys`)
-        # - rust_target: i686-linux-android (libunwind linking issue, crate `aws-lc-sys`)
+        # - rust_target: i686-linux-android (crate `aws-lc-sys`)
         # - rust_target: i686-pc-windows-gnu (crate `aws-lc-sys`)
         # - rust_target: i686-unknown-linux-gnu (crate `aws-lc-sys`)
         - rust_target: i686-unknown-linux-musl
@@ -68,7 +68,7 @@ jobs:
         # - rust_target: thumbv8m.main-none-eabi (crate `core`)
         # - rust_target: thumbv8m.main-none-eabihf (crate `core`)
         # - rust_target: wasm32-unknown-emscripten (mio support)
-        # - rust_target: x86_64-linux-android (libunwind linking issue, crate `aws-lc-sys`)
+        # - rust_target: x86_64-linux-android (crate `aws-lc-sys`)
         # - rust_target: x86_64-pc-windows-gnu (crate `aws-lc-sys`)
         # - rust_target: x86_64-sun-solaris (Rust support)
         # - rust_target: x86_64-unknown-freebsd (crate `aws-lc-sys`)
