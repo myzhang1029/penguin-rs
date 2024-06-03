@@ -54,7 +54,7 @@ jobs:
         # - rust_target: powerpc-unknown-linux-gnu (AtomicU64)
         - rust_target: powerpc64-unknown-linux-gnu
         - rust_target: powerpc64le-unknown-linux-gnu
-        - rust_target: riscv64gc-unknown-linux-gnu
+        # - rust_target: riscv64gc-unknown-linux-gnu (cross#1423)
         - rust_target: s390x-unknown-linux-gnu
         # - rust_target: sparc64-unknown-linux-gnu (ring support)
         # - rust_target: sparcv9-sun-solaris (ring support)
