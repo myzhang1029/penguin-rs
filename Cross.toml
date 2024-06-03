@@ -8,22 +8,3 @@ pre-build = [
     "rm base.tar.xz",
     "rm -rf /tmp/netbsd",
 ]
-
-# Fix libunwind linking on Android
-[target.aarch64-linux-android]
-pre-build = [
-    "dpkg --add-architecture $CROSS_DEB_ARCH",
-    "apt-get update && apt-get --assume-yes install libunwind-dev:$CROSS_DEB_ARCH",
-]
-
-[target.i686-linux-android]
-pre-build = [
-    "dpkg --add-architecture $CROSS_DEB_ARCH",
-    "apt-get update && apt-get --assume-yes install libunwind-dev:$CROSS_DEB_ARCH",
-]
-
-[target.x86_64-linux-android]
-pre-build = [
-    "dpkg --add-architecture $CROSS_DEB_ARCH",
-    "apt-get update && apt-get --assume-yes install libunwind-dev:$CROSS_DEB_ARCH",
-]
