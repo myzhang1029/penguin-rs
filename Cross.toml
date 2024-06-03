@@ -1,5 +1,5 @@
 # Temporary fix for cross-rs/cross#1345, tracking
-[package.metadata.cross.target.x86_64-unknown-netbsd]
+[target.x86_64-unknown-netbsd]
 pre-build = [
     "mkdir -p /tmp/netbsd",
     "curl https://cdn.netbsd.org/pub/NetBSD/NetBSD-9.2/amd64/binary/sets/base.tar.xz -O",
@@ -10,19 +10,19 @@ pre-build = [
 ]
 
 # Fix libunwind linking on Android
-[package.metadata.cross.target.aarch64-linux-android]
+[target.aarch64-linux-android]
 pre-build = [
     "dpkg --add-architecture $CROSS_DEB_ARCH",
     "apt-get update && apt-get --assume-yes install libunwind-dev:$CROSS_DEB_ARCH",
 ]
 
-[package.metadata.cross.target.i686-linux-android]
+[target.i686-linux-android]
 pre-build = [
     "dpkg --add-architecture $CROSS_DEB_ARCH",
     "apt-get update && apt-get --assume-yes install libunwind-dev:$CROSS_DEB_ARCH",
 ]
 
-[package.metadata.cross.target.x86_64-linux-android]
+[target.x86_64-linux-android]
 pre-build = [
     "dpkg --add-architecture $CROSS_DEB_ARCH",
     "apt-get update && apt-get --assume-yes install libunwind-dev:$CROSS_DEB_ARCH",
