@@ -188,7 +188,7 @@ dependencies = [
  "futures-util",
  "http 0.2.12",
  "http-body 0.4.6",
- "hyper 0.14.28",
+ "hyper 0.14.29",
  "itoa",
  "matchit",
  "memchr",
@@ -852,9 +852,9 @@ checksum = "9a3a5bfb195931eeb336b2a7b4d761daec841b97f947d34394601737a7bba5e4"
 
 [[package]]
 name = "hyper"
-version = "0.14.28"
+version = "0.14.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf96e135eb83a2a8ddf766e426a841d8ddd7449d5f00d34ea02b41d2f19eef80"
+checksum = "f361cde2f109281a220d4307746cdfd5ee3f410da58a70377762396775634b33"
 dependencies = [
  "bytes",
  "futures-channel",
@@ -918,7 +918,7 @@ version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbb958482e8c7be4bc3cf272a766a2b0bf1a6755e7a6ae777f017a31d11b13b1"
 dependencies = [
- "hyper 0.14.28",
+ "hyper 0.14.29",
  "pin-project-lite",
  "tokio",
  "tokio-io-timeout",
@@ -1636,9 +1636,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.8"
+version = "0.23.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79adb16721f56eb2d843e67676896a61ce7a0fa622dc18d3e372477a029d2740"
+checksum = "a218f0f6d05669de4eabfb24f31ce802035c952429d037507b4a4a39f0e60c5b"
 dependencies = [
  "aws-lc-rs",
  "log",
@@ -1698,7 +1698,7 @@ checksum = "955d28af4278de8121b7ebeb796b6a45735dc01436d898801014aced2773a3d6"
 
 [[package]]
 name = "rusty-penguin"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "arc-swap",
  "aws-lc-rs",
@@ -1717,7 +1717,7 @@ dependencies = [
  "rand",
  "rcgen",
  "reqwest",
- "rustls 0.23.8",
+ "rustls 0.23.9",
  "rustls-native-certs",
  "rustls-pemfile",
  "sha1",
@@ -2068,7 +2068,7 @@ version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c7bc40d0e5a97695bb96e27995cd3a08538541b0a846f65bba7a359f36700d4"
 dependencies = [
- "rustls 0.23.8",
+ "rustls 0.23.9",
  "rustls-pki-types",
  "tokio",
 ]
@@ -2093,7 +2093,7 @@ dependencies = [
  "futures-util",
  "log",
  "native-tls",
- "rustls 0.23.8",
+ "rustls 0.23.9",
  "rustls-native-certs",
  "rustls-pki-types",
  "tokio",
@@ -2130,7 +2130,7 @@ dependencies = [
  "h2 0.3.26",
  "http 0.2.12",
  "http-body 0.4.6",
- "hyper 0.14.28",
+ "hyper 0.14.29",
  "hyper-timeout",
  "percent-encoding",
  "pin-project",
@@ -2256,7 +2256,7 @@ dependencies = [
  "log",
  "native-tls",
  "rand",
- "rustls 0.23.8",
+ "rustls 0.23.9",
  "rustls-pki-types",
  "sha1",
  "thiserror",
