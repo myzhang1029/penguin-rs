@@ -5,10 +5,10 @@
 use super::Error;
 use rustls::{
     client::danger::{ServerCertVerified, ServerCertVerifier},
+    crypto::aws_lc_rs::default_provider,
     pki_types::{CertificateDer, PrivateKeyDer, ServerName},
     server::WebPkiClientVerifier,
     ClientConfig, RootCertStore, ServerConfig,
-    crypto::aws_lc_rs::default_provider,
 };
 use std::sync::Arc;
 
@@ -230,10 +230,7 @@ mod test {
         .unwrap();
         let (loaded_cert, loaded_key) = loaded_cert;
         assert_eq!(loaded_cert.len(), 1);
-        assert_eq!(
-            loaded_key.secret_der(),
-            custom_crt.key_pair.serialize_der(),
-        );
+        assert_eq!(loaded_key.secret_der(), custom_crt.key_pair.serialize_der(),);
         let cert_params = rcgen::CertificateParams::new(vec!["example.com".into()]).unwrap();
         let keypair = rcgen::KeyPair::generate_for(&rcgen::PKCS_ED25519).unwrap();
         let custom_crt = cert_params.self_signed(&keypair).unwrap();
@@ -250,10 +247,7 @@ mod test {
         .unwrap();
         let (loaded_cert, loaded_key) = loaded_cert;
         assert_eq!(loaded_cert.len(), 1);
-        assert_eq!(
-            loaded_key.secret_der(),
-            keypair.serialize_der()
-        );
+        assert_eq!(loaded_key.secret_der(), keypair.serialize_der());
     }
 
     #[tokio::test]

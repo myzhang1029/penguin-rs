@@ -6,18 +6,18 @@ mod forwarder;
 mod service;
 mod websocket;
 
-use std::net::SocketAddr;
-
 use self::service::State;
 use crate::arg::ServerArgs;
-use crate::tls::make_tls_identity;
 #[cfg(unix)]
 use crate::tls::reload_tls_identity;
+use crate::tls::{make_tls_identity, TlsIdentityInner};
 use crate::Dupe;
 use hyper::upgrade::Upgraded;
 use hyper_util::rt::tokio::TokioExecutor;
 use hyper_util::rt::TokioIo;
 use hyper_util::server::conn::auto;
+use std::net::SocketAddr;
+use std::sync::Arc;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
@@ -152,22 +152,39 @@ async fn run_listener(
         };
         debug!("accepted connection from {peer}");
         if let Some(tls_config) = &tls_config {
-            #[cfg(feature = "__rustls")]
-            let stream = tokio_rustls::TlsAcceptor::from(tls_config.load_full())
-                .accept(stream)
-                .await;
-            #[cfg(feature = "nativetls")]
-            let stream = tls_config.load().accept(stream).await;
-            match stream {
-                Ok(stream) => {
-                    tokio::spawn(serve_connection(stream, new_state));
-                }
-                Err(err) => {
-                    error!("TLS handshake error: {err}");
-                }
-            }
+            tokio::spawn(serve_connection_tls(
+                stream,
+                new_state,
+                tls_config.load_full(),
+            ));
         } else {
             tokio::spawn(serve_connection(stream, new_state));
+        }
+    }
+}
+
+/// Serves a single connection from a client with TLS, ignoring errors.
+async fn serve_connection_tls<S>(
+    stream: S,
+    state: State<'static>,
+    tls_config: Arc<TlsIdentityInner>,
+) where
+    S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+{
+    #[cfg(feature = "__rustls")]
+    let stream = tokio_rustls::TlsAcceptor::from(tls_config)
+        .accept(stream)
+        .await;
+
+    #[cfg(feature = "nativetls")]
+    let stream = tls_config.accept(stream).await;
+
+    match stream {
+        Ok(stream) => {
+            serve_connection(stream, state).await;
+        }
+        Err(err) => {
+            error!("TLS handshake error: {err}");
         }
     }
 }

@@ -8,13 +8,19 @@ mod native;
 mod rustls;
 
 #[cfg(feature = "__rustls")]
-use self::rustls::{make_client_config, make_server_config, TlsIdentityInner};
+use self::rustls::{make_client_config, make_server_config};
 use arc_swap::ArcSwap;
 #[cfg(feature = "nativetls")]
-use native::{make_client_config, make_server_config, TlsIdentityInner};
+use native::{make_client_config, make_server_config};
 use std::sync::Arc;
 use thiserror::Error;
 use tokio_tungstenite::Connector;
+
+#[allow(clippy::module_name_repetitions)]
+#[cfg(feature = "__rustls")]
+pub use self::rustls::TlsIdentityInner;
+#[cfg(feature = "nativetls")]
+pub use native::TlsIdentityInner;
 
 /// A hot-swappable container for a TLS key and certificate.
 #[allow(clippy::module_name_repetitions)]

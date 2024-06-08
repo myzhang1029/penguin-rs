@@ -5,6 +5,7 @@
 [![Crates.io](https://img.shields.io/crates/v/rusty-penguin.svg)](https://crates.io/crates/rusty-penguin)
 [![Dependency Status](https://deps.rs/repo/github/myzhang1029/penguin-rs/status.svg)](https://deps.rs/repo/github/myzhang1029/penguin-rs)
 [![Codecov](https://codecov.io/gh/myzhang1029/penguin-rs/branch/main/graph/badge.svg?token=L0TE5i23sn)](https://codecov.io/gh/myzhang1029/penguin-rs)
+[![wakatime](https://wakatime.com/badge/github/myzhang1029/penguin-rs.svg)](https://wakatime.com/badge/github/myzhang1029/penguin-rs)
 ![License](https://img.shields.io/crates/l/rusty-penguin.svg)
 
 ## About
