@@ -16,6 +16,7 @@
 //! - 2 bytes: destination port in network byte order.
 //! - 1 byte: type (see below)
 //! - variable: payload
+//!
 //! There are six types of frames:
 //! - `Syn`: the client sends this frame to request a connection to a target:
 //!         - 4 bytes: initial receive window size in network byte order.

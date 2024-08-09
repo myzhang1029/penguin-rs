@@ -5,7 +5,7 @@
 use super::Error;
 use rustls::{
     client::danger::{ServerCertVerified, ServerCertVerifier},
-    crypto::aws_lc_rs::default_provider,
+    crypto::CryptoProvider,
     pki_types::{CertificateDer, PrivateKeyDer, ServerName},
     server::WebPkiClientVerifier,
     ClientConfig, RootCertStore, ServerConfig,
@@ -158,7 +158,9 @@ impl ServerCertVerifier for EmptyVerifier {
             message,
             cert,
             dss,
-            &default_provider().signature_verification_algorithms,
+            &CryptoProvider::get_default()
+                .expect("no process-level CryptoProvider available (this is a bug)")
+                .signature_verification_algorithms,
         )
     }
 
@@ -172,12 +174,15 @@ impl ServerCertVerifier for EmptyVerifier {
             message,
             cert,
             dss,
-            &default_provider().signature_verification_algorithms,
+            &CryptoProvider::get_default()
+                .expect("no process-level CryptoProvider available (this is a bug)")
+                .signature_verification_algorithms,
         )
     }
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        default_provider()
+        CryptoProvider::get_default()
+            .expect("no process-level CryptoProvider available (this is a bug)")
             .signature_verification_algorithms
             .supported_schemes()
     }
