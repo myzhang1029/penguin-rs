@@ -22,39 +22,27 @@ jobs:
       matrix:
         config:
         - rust_target: aarch64-linux-android
-          rust_features: aws-lc-rs-bindgen
         - rust_target: aarch64-unknown-linux-gnu
         - rust_target: aarch64-unknown-linux-musl
         # - rust_target: arm-linux-androideabi (AtomicU64)
         - rust_target: arm-unknown-linux-gnueabi
-          rust_features: aws-lc-rs-bindgen
         - rust_target: arm-unknown-linux-gnueabihf
-          rust_features: aws-lc-rs-bindgen
         - rust_target: arm-unknown-linux-musleabi
-          rust_features: aws-lc-rs-bindgen
         - rust_target: arm-unknown-linux-musleabihf
-          rust_features: aws-lc-rs-bindgen
         # - rust_target: armv5te-unknown-linux-gnueabi (AtomicU64)
         # - rust_target: armv5te-unknown-linux-musleabi (AtomicU64)
         - rust_target: armv7-linux-androideabi
-          rust_features: aws-lc-rs-bindgen
         - rust_target: armv7-unknown-linux-gnueabi
-          rust_features: aws-lc-rs-bindgen
         - rust_target: armv7-unknown-linux-gnueabihf
-          rust_features: aws-lc-rs-bindgen
         - rust_target: armv7-unknown-linux-musleabi
-          rust_features: aws-lc-rs-bindgen
         - rust_target: armv7-unknown-linux-musleabihf
-          rust_features: aws-lc-rs-bindgen
         # - rust_target: i586-unknown-linux-gnu (ring v1.17.8 SSE)
         # - rust_target: i586-unknown-linux-musl (ring v1.17.8 SSE)
-        # - rust_target: i686-unknown-freebsd (crate `aws-lc-sys`)
+        - rust_target: i686-unknown-freebsd # (crate `aws-lc-sys`)
         - rust_target: i686-linux-android
-          rust_features: aws-lc-rs-bindgen
-        # - rust_target: i686-pc-windows-gnu (crate `aws-lc-sys`)
+        - rust_target: i686-pc-windows-gnu # (crate `aws-lc-sys`)
         - rust_target: i686-unknown-linux-gnu
         - rust_target: i686-unknown-linux-musl
-          rust_features: aws-lc-rs-bindgen
         # - rust_target: mips-unknown-linux-gnu (crate `core`)
         # - rust_target: mips-unknown-linux-musl (crate `core`)
         # - rust_target: mips64-unknown-linux-gnuabi64 (crate `core`)
@@ -65,12 +53,9 @@ jobs:
         # - rust_target: mipsel-unknown-linux-musl (crate `core`)
         # - rust_target: powerpc-unknown-linux-gnu (AtomicU64)
         - rust_target: powerpc64-unknown-linux-gnu
-          rust_features: aws-lc-rs-bindgen
         - rust_target: powerpc64le-unknown-linux-gnu
-          rust_features: aws-lc-rs-bindgen
         # - rust_target: riscv64gc-unknown-linux-gnu (cross#1423, crate `aws-lc-sys`)
         - rust_target: s390x-unknown-linux-gnu
-          rust_features: aws-lc-rs-bindgen
         # - rust_target: sparc64-unknown-linux-gnu (ring support)
         # - rust_target: sparcv9-sun-solaris (ring support)
         # - rust_target: thumbv6m-none-eabi (crate `std`)
@@ -78,23 +63,20 @@ jobs:
         # - rust_target: thumbv7em-none-eabihf (crate `std`)
         # - rust_target: thumbv7m-none-eabi (crate `std`)
         - rust_target: thumbv7neon-linux-androideabi
-          rust_features: aws-lc-rs-bindgen
         - rust_target: thumbv7neon-unknown-linux-gnueabihf
-          rust_features: aws-lc-rs-bindgen
         # - rust_target: thumbv8m.base-none-eabi (crate `core`)
         # - rust_target: thumbv8m.main-none-eabi (crate `core`)
         # - rust_target: thumbv8m.main-none-eabihf (crate `core`)
         # - rust_target: wasm32-unknown-emscripten (mio support)
         - rust_target: x86_64-linux-android
-          rust_features: aws-lc-rs-bindgen
-        # - rust_target: x86_64-pc-windows-gnu (crate `aws-lc-sys`)
+        - rust_target: x86_64-pc-windows-gnu # (crate `aws-lc-sys`)
         # - rust_target: x86_64-sun-solaris (Rust support)
-        # - rust_target: x86_64-unknown-freebsd (crate `aws-lc-sys`)
+        - rust_target: x86_64-unknown-freebsd # (crate `aws-lc-sys`)
         # - rust_target: x86_64-unknown-dragonfly (crate `core`)
-        # - rust_target: x86_64-unknown-illumos (bindgen)
+        - rust_target: x86_64-unknown-illumos # (bindgen)
         - rust_target: x86_64-unknown-linux-gnu
         - rust_target: x86_64-unknown-linux-musl
-        # - rust_target: x86_64-unknown-netbsd (crate `aws-lc-sys`)
+        - rust_target: x86_64-unknown-netbsd # (crate `aws-lc-sys`)
 
     steps:
     - name: Checkout source
