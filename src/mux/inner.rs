@@ -146,7 +146,7 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
                 interval.tick().await;
                 trace!("sending ping");
                 self.ws
-                    .send_with(|| Message::Ping(vec![]))
+                    .send_with(|| Message::Ping(Bytes::new()))
                     .await
                     .map_err(Error::PingPong)?;
             }

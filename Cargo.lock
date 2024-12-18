@@ -1534,7 +1534,7 @@ dependencies = [
  "rustc-hash 2.1.0",
  "rustls",
  "socket2",
- "thiserror 2.0.8",
+ "thiserror",
  "tokio",
  "tracing",
 ]
@@ -1553,7 +1553,7 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "slab",
- "thiserror 2.0.8",
+ "thiserror",
  "tinyvec",
  "tracing",
  "web-time",
@@ -1871,7 +1871,7 @@ dependencies = [
  "rustls-pemfile",
  "sha1",
  "tempfile",
- "thiserror 2.0.8",
+ "thiserror",
  "tokio",
  "tokio-native-tls",
  "tokio-rustls",
@@ -2112,31 +2112,11 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "1.0.69"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52"
-dependencies = [
- "thiserror-impl 1.0.69",
-]
-
-[[package]]
-name = "thiserror"
 version = "2.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "08f5383f3e0071702bf93ab5ee99b52d26936be9dedd9413067cbdcddcb6141a"
 dependencies = [
- "thiserror-impl 2.0.8",
-]
-
-[[package]]
-name = "thiserror-impl"
-version = "1.0.69"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
+ "thiserror-impl",
 ]
 
 [[package]]
@@ -2277,9 +2257,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-tungstenite"
-version = "0.24.0"
+version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "edc5f74e248dc973e0dbb7b74c7e0d6fcc301c694ff50049504004ef4d0cdcd9"
+checksum = "5c14b3e8ebea4eb2577de77903e6c008d9ac80b5aae1f9ae781c5229ae935a44"
 dependencies = [
  "futures-util",
  "log",
@@ -2452,9 +2432,9 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "tungstenite"
-version = "0.24.0"
+version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18e5b8366ee7a95b16d32197d0b2604b43a0be89dc5fac9f8e96ccafbaedda8a"
+checksum = "d4ab519cc9c1e57e6cab1087f262f9fc978a4e9d5f943b0e029567521d3525cb"
 dependencies = [
  "byteorder",
  "bytes",
@@ -2467,7 +2447,7 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "sha1",
- "thiserror 1.0.69",
+ "thiserror",
  "utf-8",
 ]
 
