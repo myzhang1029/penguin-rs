@@ -267,7 +267,7 @@ impl<S: WebSocketStream> Multiplexor<S> {
         // Always flush datagrams immediately
         self.inner
             .ws
-            .send_with(|| Message::Binary(payload.dupe().into()))
+            .send_with(|| Message::Binary(payload.dupe()))
             .await
             .map_err(Error::SendDatagram)?;
         Ok(())

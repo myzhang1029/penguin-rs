@@ -72,7 +72,7 @@ pub(super) struct State<'a> {
     pub client: reqwest::Client,
 }
 
-impl<'a> Dupe for State<'a> {
+impl Dupe for State<'_> {
     fn dupe(&self) -> Self {
         Self {
             backend: self.backend,
