@@ -73,7 +73,9 @@ pub async fn make_client_config(
 #[cfg(feature = "rustls-native-roots")]
 fn get_system_certs() -> Result<RootCertStore, Error> {
     let mut roots = RootCertStore::empty();
-    for cert in rustls_native_certs::load_native_certs()? {
+    for cert in rustls_native_certs::load_native_certs()
+        .expect("Could not load native certificates (this is a bug)")
+    {
         roots.add(cert)?;
     }
     Ok(roots)

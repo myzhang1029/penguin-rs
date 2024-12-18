@@ -39,7 +39,7 @@ parking_lot = "0.12"
 rand = "0.8"
 reqwest = { version = "0.12", optional = true, default-features = false }
 rustls = { version = "^0.23, >=0.23.18", features = ["logging", "ring", "tls12"], default-features = false, optional = true }
-rustls-native-certs = { version = "0.7", optional = true }
+rustls-native-certs = { version = "0.8", optional = true }
 rustls-pemfile = { version = "2", optional = true }
 sha1 = { version = "0.10", optional = true }
 thiserror = "2"
