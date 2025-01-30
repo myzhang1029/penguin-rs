@@ -22,8 +22,7 @@ use crate::dupe::Dupe;
 use crate::inner::MultiplexorInner;
 use crate::ws::{Message, WebSocketStream};
 use bytes::Bytes;
-use rand::distributions::uniform::SampleUniform;
-use rand::Rng;
+use rand::distr::uniform::SampleUniform;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -292,7 +291,7 @@ pub trait IntKey: Eq + Hash + Copy + SampleUniform + PartialOrd {
     #[must_use]
     fn next_available_key<V>(map: &HashMap<Self, V>) -> Self {
         loop {
-            let i = rand::thread_rng().gen_range(Self::MIN..Self::MAX);
+            let i = rand::random_range(Self::MIN..Self::MAX);
             if !map.contains_key(&i) {
                 break i;
             }
