@@ -248,7 +248,7 @@ impl State<'static> {
                 Err(err) => {
                     error!("Failed to upgrade to WebSocket: {err}");
                 }
-            };
+            }
         });
 
         Ok(Response::builder()

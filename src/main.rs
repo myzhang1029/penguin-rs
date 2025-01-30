@@ -104,7 +104,7 @@ async fn main() -> Result<(), Error> {
             _ => reload_handle
                 .reload(VERBOSE_VERBOSE_LOG_LEVEL)
                 .expect("Resetting log level failed (this is a bug)"),
-        };
+        }
         match cli_args.quiet {
             0 => {}
             1 => reload_handle
@@ -113,7 +113,7 @@ async fn main() -> Result<(), Error> {
             _ => reload_handle
                 .reload(QUIET_QUIET_LOG_LEVEL)
                 .expect("Resetting log level failed (this is a bug)"),
-        };
+        }
     }
     #[cfg(feature = "deadlock-detection")]
     spawn_deadlock_detection();
