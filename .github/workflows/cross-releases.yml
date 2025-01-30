@@ -87,6 +87,8 @@ jobs:
 
     - name: Build release
       run: cross build --release --target ${{ matrix.config.rust_target }} --features "${{ matrix.config.rust_features }}"
+      env:
+        CROSS_NO_WARNINGS: 0
 
     - name: Upload binary
       uses: actions/upload-artifact@v4
