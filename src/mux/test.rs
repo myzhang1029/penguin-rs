@@ -6,22 +6,6 @@ use super::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, info};
 
-// Looks like since `mux` is a separate target (i.e. lib vs bin), we need to
-// have a separate `test_setup_log` function here.
-#[ctor::ctor]
-fn test_setup_log() {
-    use tracing_subscriber::{filter, fmt, prelude::*};
-    let fmt_layer = fmt::Layer::default()
-        .compact()
-        .with_thread_ids(true)
-        .with_timer(fmt::time::time())
-        .with_writer(std::io::stderr);
-    tracing_subscriber::registry()
-        .with(filter::LevelFilter::INFO)
-        .with(fmt_layer)
-        .init();
-}
-
 #[tokio::test]
 async fn connect_succeeds() {
     let (client, server) = crate::ws::mock::get_pair().await;
