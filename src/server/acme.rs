@@ -19,8 +19,6 @@ pub enum Error {
     InstantAcme(#[from] instant_acme::Error),
     #[error("Failed to execute challenge helper command: {0}")]
     ChallengeHelperExecution(#[from] std::io::Error),
-    #[error("Invalid challenge key from server: {0}")]
-    InvalidChallengeKey(String),
     #[error("Failed to generate certificates: {0}")]
     CertificateGeneration(#[from] rcgen::Error),
     #[error("Order became invalid")]
@@ -123,22 +121,19 @@ impl Client {
 }
 
 fn create_challenge_file(
-    key: &str,
+    token: &str,
+    key_authorization: &str,
     server_args: &'static ServerArgs,
 ) -> Result<tokio::process::Child, Error> {
-    let token = key
-        .split('.')
-        .next()
-        .ok_or_else(|| Error::InvalidChallengeKey(format!("Invalid key format: {key}")))?;
     // `expect`: challenge helper verified by `clap`
     let helper = server_args
         .tls_acme_challenge_helper
         .as_ref()
         .expect("Challenge helper missing (this is a bug)");
-    debug!("Executing challenge helper: {helper} {token} {key}");
+    debug!("Executing challenge helper: {helper} {token} {key_authorization}");
     let cmd = tokio::process::Command::new(helper)
         .arg(token)
-        .arg(key)
+        .arg(key_authorization)
         .kill_on_drop(true)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -182,7 +177,12 @@ async fn issue(
             .ok_or(Error::NoHttp01ChallengeSupport)?;
 
         // Execute the challenge helper to create the file
-        let cmd = create_challenge_file(&http_challenge.token, server_args)?;
+        let key_auth = order.key_authorization(&http_challenge);
+        let cmd = create_challenge_file(
+            &http_challenge.token,
+            key_auth.as_str(),
+            server_args,
+        )?;
         cmds.push(cmd);
         // Tell the server we are ready for the challenges
         order.set_challenge_ready(&http_challenge.url).await.unwrap();
@@ -248,9 +248,14 @@ mod test {
             tls_acme_challenge_helper: Some("echo".to_string()),
             ..Default::default()
         });
-        let test_key = "f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY.tvg9X8xCoUuU_vK9qNR1d2RyGSGVfq3VYDJ-O81nnyY";
+        let test_token = "f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY";
+        let test_key_auth = "tvg9X8xCoUuU_vK9qNR1d2RyGSGVfq3VYDJ-O81nnyY";
         let expected_out = "f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY.tvg9X8xCoUuU_vK9qNR1d2RyGSGVfq3VYDJ-O81nnyY\n";
-        let result = create_challenge_file(test_key, &SERVER_ARGS);
+        let result = create_challenge_file(
+            test_token,
+            test_key_auth,
+            &SERVER_ARGS,
+        );
         let child = result.unwrap();
         let out = child.wait_with_output().await.unwrap();
         assert!(out.status.success());
