@@ -469,10 +469,13 @@ mod test {
     #[cfg(feature = "acme")]
     #[test]
     fn test_default_acme_cache_dir() {
-        std::env::set_var("HOME", "/tmp/penguin");
-        assert_eq!(default_acme_cache_dir(), "/tmp/penguin/.cache/penguin/acme");
-        std::env::remove_var("HOME");
-        assert_eq!(default_acme_cache_dir(), "/tmp/penguin/acme");
+        temp_env::with_var("HOME", Some("/tmp/penguin"), || {
+            assert_eq!(default_acme_cache_dir(), "/tmp/penguin/.cache/penguin/acme");
+        });
+        // If HOME is not set, we fall back to the default
+        temp_env::with_var("HOME", None::<&str>, || {
+            assert_eq!(default_acme_cache_dir(), "/tmp/penguin/acme");
+        });
     }
 
     #[test]
