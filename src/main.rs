@@ -75,7 +75,7 @@ fn spawn_deadlock_detection() {
 
 #[tokio::main]
 /// Entry point
-async fn main() -> Result<(), Error> {
+async fn main() -> Result<(), Box<Error>> {
     #[cfg(not(feature = "tokio-console"))]
     let reload_handle = {
         let fmt_layer = fmt::Layer::default()
@@ -118,8 +118,12 @@ async fn main() -> Result<(), Error> {
     #[cfg(feature = "deadlock-detection")]
     spawn_deadlock_detection();
     match &cli_args.subcommand {
-        arg::Commands::Client(args) => client::client_main(args).await?,
-        arg::Commands::Server(args) => server::server_main(args).await?,
+        arg::Commands::Client(args) => client::client_main(args)
+            .await
+            .map_err(|e| Box::new(e.into()))?,
+        arg::Commands::Server(args) => server::server_main(args)
+            .await
+            .map_err(|e| Box::new(e.into()))?,
     }
     Ok(())
 }

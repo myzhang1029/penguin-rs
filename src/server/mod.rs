@@ -263,7 +263,7 @@ mod test {
 
     /// Test `arg_to_sockaddrs` with no hosts and no ports.
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "port is empty (this is a bug)")]
     fn test_arg_to_sockaddrs_empty() {
         let args = get_server_args(vec![], vec![]);
         let _ = arg_to_sockaddrs(&args).unwrap();
@@ -271,7 +271,7 @@ mod test {
 
     /// Test `arg_to_sockaddrs` with no hosts and one port.
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "host is empty (this is a bug)")]
     fn test_arg_to_sockaddrs_empty_host() {
         let args = get_server_args(vec![], vec![1234]);
         let _ = arg_to_sockaddrs(&args).unwrap();
@@ -279,7 +279,7 @@ mod test {
 
     /// Test `arg_to_sockaddrs` with one host and no ports.
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "port is empty (this is a bug)")]
     fn test_arg_to_sockaddrs_empty_port() {
         let args = get_server_args(vec!["::".to_string()], vec![]);
         let _ = arg_to_sockaddrs(&args).unwrap();

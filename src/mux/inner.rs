@@ -538,9 +538,8 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
     #[inline]
     pub async fn close_port(&self, our_port: u16, their_port: u16, inhibit_rst: bool) {
         // Free the port for reuse
-        if let Some(MuxStreamSlot::Established(stream_data)) =
-            self.streams.write().await.remove(&our_port)
-        {
+        let removed = self.streams.write().await.remove(&our_port);
+        if let Some(MuxStreamSlot::Established(stream_data)) = removed {
             // Make sure the user receives `EOF`.
             stream_data.sender.send(Bytes::new()).await.ok();
             // Atomic ordering:

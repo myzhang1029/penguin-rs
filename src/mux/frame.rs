@@ -19,19 +19,19 @@
 //!
 //! There are six types of frames:
 //! - `Syn`: the client sends this frame to request a connection to a target:
-//!         - 4 bytes: initial receive window size in network byte order.
-//!         - 2 bytes: forwarding destination port in network byte order.
-//!         - variable: (0..256) bytes: (forwarding destination domain name or IP).
+//!   - 4 bytes: initial receive window size in network byte order.
+//!   - 2 bytes: forwarding destination port in network byte order.
+//!   - variable: (0..256) bytes: (forwarding destination domain name or IP).
 //! - `SynAck`: the server replies with this frame to confirm the connection.
-//!         It is in the same format as `Ack`. Using two types of frames is to
-//!         avoid having to implement a state machine.
+//!   It is in the same format as `Ack`. Using two types of frames is to
+//!   avoid having to implement a state machine.
 //! - `Ack`: the server replies with this frame to confirm the data reception:
-//!         - 4 bytes: number of `Psh` frames processed since the last `Ack` frame.
+//!   - 4 bytes: number of `Psh` frames processed since the last `Ack` frame.
 //! - `Rst`: one side sends this frame to indicate that the connection should
-//!          be closed.
+//!   be closed.
 //! - `Psh`: one side sends this frame to send data.
 //! - `Fin`: one side sends this frame to indicate that it has no more data to
-//!          send.
+//!   send.
 //!
 //! The handshake is simpler than a TCP handshake:
 //! The client sends a `Syn` frame, then the server replies an `SynAck`.

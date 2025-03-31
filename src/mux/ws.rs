@@ -48,7 +48,7 @@ impl WebSocketError for Error {
         match self {
             Self::Io(e) => e,
             Self::AlreadyClosed | Self::ConnectionClosed => std::io::ErrorKind::BrokenPipe.into(),
-            e => std::io::Error::new(std::io::ErrorKind::Other, e),
+            e => std::io::Error::other(e),
         }
     }
 }

@@ -284,6 +284,7 @@ mod test {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn test_parse_remote() {
         let tests: &[(&str, Remote)] = &[
             // jpillora's tests and an exhausive list of cases

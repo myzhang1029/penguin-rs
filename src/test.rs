@@ -1,3 +1,4 @@
+#![allow(clippy::match_on_vec_items)]
 use super::*;
 use crate::{arg::ServerUrl, parse_remote::Remote};
 #[allow(unused_imports)]
