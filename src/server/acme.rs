@@ -178,7 +178,7 @@ async fn issue(
             .ok_or(Error::NoHttp01ChallengeSupport)?;
 
         // Execute the challenge helper to create the file
-        let key_auth = order.key_authorization(&http_challenge);
+        let key_auth = order.key_authorization(http_challenge);
         let cmd = create_challenge_file(
             &http_challenge.token,
             key_auth.as_str(),
@@ -200,31 +200,30 @@ async fn issue(
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     };
     // Back off until the order becomes ready or invalid
-    let mut wait_time = 5;
-    let mut tries = 0;
-    while tries < 10 {
-        tries += 1;
-        info!("Waiting for order to be ready (attempt {tries}/10)...");
+    let mut backoff = crate::backoff::Backoff::new(
+        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(60),
+        2,
+        10,
+    );
+    while order.state().status != OrderStatus::Ready {
+        info!("Waiting for order to be ready...");
         order.refresh().await?;
-        match order.state().status {
-            OrderStatus::Ready => break,
-            OrderStatus::Invalid => {
-                error!("Order became invalid");
-                order_cleanup().await;
-                return Err(Error::OrderInvalid);
-            }
-            _ => {
-                info!("Order status: {:?}", order.state().status);
-                tokio::time::sleep(tokio::time::Duration::from_secs(wait_time)).await;
-                wait_time = std::cmp::min(wait_time * 2, 60); // Exponential backoff
-            }
+        if order.state().status == OrderStatus::Invalid {
+            error!("Order became invalid");
+            order_cleanup().await;
+            return Err(Error::OrderInvalid);
+        }
+        if let Some(sleep) = backoff.advance() {
+            info!("Order not ready, sleeping for {sleep:?}");
+            tokio::time::sleep(sleep).await;
+        } else {
+            error!("Order did not become ready after 10 attempts");
+            order_cleanup().await;
+            return Err(Error::OrderInvalid);
         }
     }
-    if order.state().status != OrderStatus::Ready {
-        error!("Order did not become ready after 10 attempts");
-        order_cleanup().await;
-        return Err(Error::OrderInvalid);
-    }
+    assert_eq!(order.state().status, OrderStatus::Ready);
     let names = server_args.tls_domain.clone();
     let mut params: CertificateParams = CertificateParams::new(names.clone())?;
     params.distinguished_name = DistinguishedName::new();

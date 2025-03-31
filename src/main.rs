@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 
 mod arg;
+mod backoff;
 mod client;
 mod config;
 mod parse_remote;

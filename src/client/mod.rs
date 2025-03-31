@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-mod backoff;
 mod handle_remote;
 mod maybe_retryable;
 pub mod ws_connect;
@@ -268,7 +267,7 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
     };
     let main_future = async move {
         // Initial retry interval is 200ms
-        let mut backoff = backoff::Backoff::new(
+        let mut backoff = crate::backoff::Backoff::new(
             Duration::from_millis(200),
             Duration::from_millis(args.max_retry_interval),
             2,
