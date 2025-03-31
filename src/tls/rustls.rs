@@ -215,8 +215,8 @@ impl ServerCertVerifier for EmptyVerifier {
 #[cfg(test)]
 mod test {
     use super::*;
-    use rcgen::generate_simple_self_signed;
     use rcgen::CertificateParams;
+    use rcgen::generate_simple_self_signed;
     use tempfile::tempdir;
 
     #[tokio::test]
