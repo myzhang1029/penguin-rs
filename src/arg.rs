@@ -447,7 +447,7 @@ impl OptionalDuration {
     #[allow(dead_code)]
     pub const NONE: Self = Self(None);
 
-    pub fn from_secs(duration: u64) -> Self {
+    pub const fn from_secs(duration: u64) -> Self {
         Self(Some(std::time::Duration::from_secs(duration)))
     }
 

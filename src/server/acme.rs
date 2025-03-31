@@ -3,7 +3,8 @@ use crate::{
     tls::{make_tls_identity_from_rcgen_pem, reload_tls_identity_from_rcgen_pem, TlsIdentity},
 };
 use instant_acme::{
-    Account, AuthorizationStatus, ChallengeType, Identifier, NewAccount, NewOrder, OrderStatus,
+    Account, Authorization, AuthorizationStatus, ChallengeType, Identifier, NewAccount, NewOrder,
+    OrderStatus,
 };
 use rcgen::{CertificateParams, DistinguishedName, KeyPair};
 use std::sync::OnceLock;
@@ -47,11 +48,10 @@ impl Client {
         if let Some(client) = ACME_CLIENT.get() {
             return Ok(client);
         }
-        let contact = if let Some(email) = &server_args.tls_acme_email {
-            vec![format!("mailto:{}", email)]
-        } else {
-            vec![]
-        };
+        let contact = server_args
+            .tls_acme_email
+            .as_ref()
+            .map_or_else(std::vec::Vec::new, |email| vec![format!("mailto:{email}")]);
 
         let (account, _cred) = Account::create(
             &NewAccount {
@@ -69,7 +69,7 @@ impl Client {
         .await?;
         let (keypair, cert) = issue(&account, server_args).await?;
 
-        let client = Client {
+        let client = Self {
             account,
             server_args,
             tls_config: make_tls_identity_from_rcgen_pem(
@@ -143,25 +143,15 @@ fn create_challenge_file(
     Ok(cmd)
 }
 
-/// Issues a new certificate using the ACME protocol.
-/// Returns (KeyPair, String) where KeyPair is the private key and String is the certificate chain in PEM format.
-async fn issue(
-    account: &Account,
+/// Process challenge files for the HTTP-01 challenge.
+async fn process_challenges(
+    authorizations: &[Authorization],
     server_args: &'static ServerArgs,
-) -> Result<(KeyPair, String), Error> {
-    let idents = server_args
-        .tls_domain
-        .iter()
-        .map(|domain| Identifier::Dns(domain.clone()))
-        .collect::<Vec<_>>();
-    let new_order = NewOrder {
-        identifiers: idents.as_slice(),
-    };
-    let mut order = account.new_order(&new_order).await?;
-    let authorizations = order.authorizations().await?;
+    order: &mut instant_acme::Order,
+) -> Result<Vec<Child>, Error> {
     // Save the commands to terminate them after we are done
     let mut cmds: Vec<Child> = Vec::with_capacity(authorizations.len());
-    for auth in &authorizations {
+    for auth in authorizations {
         match auth.status {
             AuthorizationStatus::Pending => {}
             AuthorizationStatus::Valid => continue,
@@ -179,21 +169,40 @@ async fn issue(
 
         // Execute the challenge helper to create the file
         let key_auth = order.key_authorization(http_challenge);
-        let cmd = create_challenge_file(
-            &http_challenge.token,
-            key_auth.as_str(),
-            server_args,
-        )?;
+        let cmd = create_challenge_file(&http_challenge.token, key_auth.as_str(), server_args)?;
         cmds.push(cmd);
         // Tell the server we are ready for the challenges
-        order.set_challenge_ready(&http_challenge.url).await.unwrap();
+        order
+            .set_challenge_ready(&http_challenge.url)
+            .await
+            .unwrap();
     }
-    let order_cleanup = || async {
+    Ok(cmds)
+}
+
+/// Issues a new certificate using the ACME protocol.
+/// Returns (KeyPair, String) where KeyPair is the private key and String is the certificate chain in PEM format.
+async fn issue(
+    account: &Account,
+    server_args: &'static ServerArgs,
+) -> Result<(KeyPair, String), Error> {
+    let idents = server_args
+        .tls_domain
+        .iter()
+        .map(|domain| Identifier::Dns(domain.clone()))
+        .collect::<Vec<_>>();
+    let new_order = NewOrder {
+        identifiers: idents.as_slice(),
+    };
+    let mut order = account.new_order(&new_order).await?;
+    let authorizations = order.authorizations().await?;
+    let cmds = process_challenges(&authorizations, server_args, &mut order).await?;
+    let order_cleanup = async {
         // Clean up the challenge files by sending a newline and closing stdin
         for mut cmd in cmds {
             let stdin = cmd.stdin.take();
             if let Some(mut stdin) = stdin {
-                stdin.write(b"\n").await.ok();
+                let _ = stdin.write(b"\n").await.ok();
                 stdin.flush().await.ok();
             }
         }
@@ -211,7 +220,7 @@ async fn issue(
         order.refresh().await?;
         if order.state().status == OrderStatus::Invalid {
             error!("Order became invalid");
-            order_cleanup().await;
+            order_cleanup.await;
             return Err(Error::OrderInvalid);
         }
         if let Some(sleep) = backoff.advance() {
@@ -219,11 +228,16 @@ async fn issue(
             tokio::time::sleep(sleep).await;
         } else {
             error!("Order did not become ready after 10 attempts");
-            order_cleanup().await;
+            order_cleanup.await;
             return Err(Error::OrderInvalid);
         }
     }
-    assert_eq!(order.state().status, OrderStatus::Ready);
+    // All code paths should result in Ready
+    assert_eq!(
+        order.state().status,
+        OrderStatus::Ready,
+        "Order not ready (this is a bug)"
+    );
     let names = server_args.tls_domain.clone();
     let mut params: CertificateParams = CertificateParams::new(names.clone())?;
     params.distinguished_name = DistinguishedName::new();
@@ -236,7 +250,7 @@ async fn issue(
             None => tokio::time::sleep(std::time::Duration::from_secs(1)).await,
         }
     };
-    order_cleanup().await;
+    order_cleanup.await;
     Ok((private_key, cert_chain_pem))
 }
 
@@ -255,11 +269,7 @@ mod test {
         let test_token = "f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY";
         let test_key_auth = "f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY.tvg9X8xCoUuU_vK9qNR1d2RyGSGVfq3VYDJ-O81nnyY";
         let expected_out = "f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY.tvg9X8xCoUuU_vK9qNR1d2RyGSGVfq3VYDJ-O81nnyY\n";
-        let result = create_challenge_file(
-            test_token,
-            test_key_auth,
-            &SERVER_ARGS,
-        );
+        let result = create_challenge_file(test_token, test_key_auth, &SERVER_ARGS);
         let child = result.unwrap();
         let out = child.wait_with_output().await.unwrap();
         assert!(out.status.success());
