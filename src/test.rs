@@ -25,7 +25,8 @@ fn make_server_args(host: &str, port: u16) -> arg::ServerArgs {
         tls_ca: None,
         tls_cert: None,
         tls_key: None,
-        timeout: 5,
+        // Very short timeout for testing purposes.
+        timeout: 2,
         _pid: false,
         _socks5: false,
         _reverse: false,
@@ -117,16 +118,51 @@ async fn test_server_timeout() {
     tokio::time::sleep(Duration::from_secs(2)).await;
     // Connect to the socket and do nothing. Make sure the socket is closed
     let mut sock = TcpStream::connect("[::1]:22183").await.unwrap();
-    // We expect the server to timeout after 5 seconds.
-    tokio::time::sleep(Duration::from_secs(7)).await;
-    // Test the socket really timed out
+    // We expect the server to timeout after 3 seconds, so we allow a longer time and
+    // test the socket really timed out
     let mut buf = [0u8; 1];
-    let result = sock.read(&mut buf).await;
-    assert!(
-        result.is_err() || result.unwrap() == 0,
-        "Expected peer to close the connection after timeout"
-    );
+    let result = tokio::time::timeout(Duration::from_secs(7), sock.read(&mut buf))
+        .await
+        .expect("This test should not time out");
+    if let Ok(len) = result {
+        assert_eq!(len, 0, "Expected to read EOF from timed-out socket");
+    }
     server_task.abort();
+}
+
+#[tokio::test]
+async fn test_server_timeout_does_not_interrupt_ws() {
+    static SERVER_ARGS: Lazy<arg::ServerArgs> = Lazy::new(|| make_server_args("::1", 23224));
+
+    static CLIENT_ARGS: Lazy<arg::ClientArgs> = Lazy::new(|| {
+        make_client_args(
+            "[::1]",
+            23224,
+            vec![Remote::from_str("[::1]:27848:[::1]:17787").unwrap()],
+        )
+    });
+
+    let input_bytes: Vec<u8> = (0..(1024 * 1024)).map(|_| rand::random::<u8>()).collect();
+    let input_len = input_bytes.len();
+    let second_task = tokio::spawn(async move {
+        let listener = TcpListener::bind("[::1]:17787").await.unwrap();
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut output_bytes = vec![0u8; input_len];
+        stream.read_exact(&mut output_bytes).await.unwrap();
+        output_bytes
+    });
+
+    let client_task = tokio::spawn(crate::client::client_main(&CLIENT_ARGS));
+    let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
+    // Wait much more than the timeout to ensure that any timeout would pop up.
+    tokio::time::sleep(Duration::from_secs(8)).await;
+    let mut sock = TcpStream::connect("[::1]:27848").await.unwrap();
+    sock.write_all(&input_bytes).await.unwrap();
+    sock.shutdown().await.unwrap();
+    let output_bytes = second_task.await.unwrap();
+    assert_eq!(input_bytes, output_bytes);
+    server_task.abort();
+    client_task.abort();
 }
 
 #[tokio::test]

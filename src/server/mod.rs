@@ -214,6 +214,10 @@ where
     let conn = exec.serve_connection_with_upgrades(hyper_io, state);
     let conn = assert_send(conn);
     if let Some(http_timeout) = http_timeout {
+        // This works because `ws_handler` spawns another task once the handshake is
+        // complete, and that task is unaffected by this timeout.
+        // This timeout only limits how much time we wait for the ws handshake to complete.
+        // TODO: fully test its interaction with the backend handler as well.
         match tokio::time::timeout(http_timeout, conn).await {
             Err(_) => error!("HTTP connection timed out after {http_timeout:?}"),
             Ok(Err(err)) => error!("HTTP connection error: {err}"),
