@@ -237,11 +237,6 @@ pub struct ServerArgs {
     #[arg(long, conflicts_with_all = ["tls_key", "tls_cert"], requires = "tls_acme_email", requires = "tls_acme_accept_tos")]
     pub tls_domain: Vec<String>,
     #[cfg(feature = "acme")]
-    /// Directory to store ACME account and certificate data. If not specified,
-    /// it will default to "$HOME/.cache/penguin/acme".
-    #[arg(long, default_value_t = default_acme_cache_dir())]
-    pub tls_acme_dir: String,
-    #[cfg(feature = "acme")]
     /// ACME directory URL to use for the ACME challenge.
     /// Defaults to the Let's Encrypt production URL.
     #[arg(long, default_value = LetsEncrypt::Production.url())]
@@ -469,30 +464,10 @@ impl FromStr for OptionalDuration {
     }
 }
 
-#[cfg(feature = "acme")]
-fn default_acme_cache_dir() -> String {
-    std::env::var("HOME").map_or_else(
-        |_| "/tmp/penguin/acme".to_string(),
-        |home| format!("{home}/.cache/penguin/acme"),
-    )
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
     use crate::parse_remote::{LocalSpec, Protocol, RemoteSpec};
-
-    #[cfg(feature = "acme")]
-    #[test]
-    fn test_default_acme_cache_dir() {
-        temp_env::with_var("HOME", Some("/tmp/penguin"), || {
-            assert_eq!(default_acme_cache_dir(), "/tmp/penguin/.cache/penguin/acme");
-        });
-        // If HOME is not set, we fall back to the default
-        temp_env::with_var("HOME", None::<&str>, || {
-            assert_eq!(default_acme_cache_dir(), "/tmp/penguin/acme");
-        });
-    }
 
     #[test]
     fn test_serverurl_fromstr() {
@@ -789,8 +764,6 @@ mod test {
             "example.com",
             "--tls-domain",
             "example.net",
-            "--tls-acme-dir",
-            "/tmp/penguin-acme",
             "--tls-acme-email",
             "test@example.com",
             "--tls-acme-accept-tos",
@@ -811,7 +784,6 @@ mod test {
             assert_eq!(args.tls_key, None);
             assert_eq!(args.tls_cert, None);
             assert_eq!(args.tls_domain, ["example.com", "example.net"]);
-            assert_eq!(args.tls_acme_dir, "/tmp/penguin-acme");
             assert_eq!(args.tls_ca, None);
             assert_eq!(args.timeout, OptionalDuration::from_secs(50));
         }
@@ -862,8 +834,6 @@ mod test {
             assert_eq!(args.tls_ca, Some("ca.pem".to_string()));
             #[cfg(feature = "acme")]
             assert_eq!(args.tls_domain, Vec::<String>::new());
-            #[cfg(feature = "acme")]
-            assert_eq!(args.tls_acme_dir, default_acme_cache_dir());
             assert_eq!(args.timeout, OptionalDuration::from_secs(50));
         }
     }
