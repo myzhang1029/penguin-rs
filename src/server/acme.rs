@@ -93,6 +93,8 @@ impl Client {
             let interval = std::time::Duration::from_secs(30 * 24 * 60 * 60); // 30 days
             let mut interval = tokio::time::interval(interval);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            // Skip the first tick so that we don't immediately renew
+            interval.tick().await;
             loop {
                 interval.tick().await;
                 info!("Renewing ACME certificate...");
@@ -156,7 +158,6 @@ async fn issue(
         identifiers: idents.as_slice(),
     };
     let mut order = account.new_order(&new_order).await?;
-    assert!(matches!(order.state().status, OrderStatus::Pending));
     let authorizations = order.authorizations().await?;
     // Save the commands to terminate them after we are done
     let mut cmds: Vec<Child> = Vec::with_capacity(authorizations.len());
