@@ -46,11 +46,18 @@ pub enum Error {
 
 #[tracing::instrument(level = "trace")]
 pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
+    let timeout = if args.timeout == 0 {
+        None
+    } else {
+        Some(std::time::Duration::from_secs(args.timeout))
+    };
     let state = State::new(
         args.backend.as_ref(),
         args.ws_psk.as_ref(),
         &args.not_found_resp,
         args.obfs,
+        timeout,
+        timeout,
     );
     let sockaddrs = arg_to_sockaddrs(args)?;
     let mut listening_tasks = JoinSet::new();
@@ -172,19 +179,25 @@ async fn serve_connection_tls<S>(
     S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
     #[cfg(feature = "__rustls")]
-    let stream = tokio_rustls::TlsAcceptor::from(tls_config)
-        .accept(stream)
-        .await;
-
+    let stream_future = tokio_rustls::TlsAcceptor::from(tls_config).accept(stream);
     #[cfg(feature = "nativetls")]
-    let stream = tls_config.accept(stream).await;
+    let stream_future = tls_config.accept(stream);
+
+    let stream = if let Some(tls_timeout) = state.tls_timeout {
+        tokio::time::timeout(tls_timeout, stream_future).await
+    } else {
+        Ok(stream_future.await)
+    };
 
     match stream {
-        Ok(stream) => {
+        Ok(Ok(stream)) => {
             serve_connection(stream, state).await;
         }
-        Err(err) => {
+        Ok(Err(err)) => {
             error!("TLS handshake error: {err}");
+        }
+        Err(_) => {
+            error!("TLS handshake timed out after {:?}", state.tls_timeout);
         }
     }
 }
@@ -195,11 +208,21 @@ async fn serve_connection<S>(stream: S, state: State<'static>)
 where
     S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
+    let http_timeout = state.http_timeout;
     let hyper_io = TokioIo::new(stream);
-    let conn = auto::Builder::new(TokioExecutor::new());
-    let conn = conn.serve_connection_with_upgrades(hyper_io, state);
+    let exec = auto::Builder::new(TokioExecutor::new());
+    let conn = exec.serve_connection_with_upgrades(hyper_io, state);
     let conn = assert_send(conn);
-    conn.await.unwrap_or_else(|err| error!("Error: {err}"));
+    if let Some(http_timeout) = http_timeout {
+        match tokio::time::timeout(http_timeout, conn).await {
+            Err(_) => error!("HTTP connection timed out after {http_timeout:?}"),
+            Ok(Err(err)) => error!("HTTP connection error: {err}"),
+            Ok(Ok(())) => {}
+        }
+    } else {
+        conn.await
+            .unwrap_or_else(|err| error!("HTTP connection error: {err}"));
+    }
 }
 
 /// Workaround at https://github.com/rust-lang/rust/issues/102211#issuecomment-1367900125
@@ -223,6 +246,7 @@ mod test {
             tls_key: None,
             tls_cert: None,
             tls_ca: None,
+            timeout: 0,
             _pid: false,
             _socks5: false,
             _reverse: false,

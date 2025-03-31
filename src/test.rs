@@ -25,6 +25,7 @@ fn make_server_args(host: &str, port: u16) -> arg::ServerArgs {
         tls_ca: None,
         tls_cert: None,
         tls_key: None,
+        timeout: 5,
         _pid: false,
         _socks5: false,
         _reverse: false,
@@ -107,6 +108,25 @@ async fn test_it_works() {
     assert_eq!(input_bytes, output_bytes);
     server_task.abort();
     client_task.abort();
+}
+
+#[tokio::test]
+async fn test_server_timeout() {
+    static SERVER_ARGS: Lazy<arg::ServerArgs> = Lazy::new(|| make_server_args("::1", 22183));
+    let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    // Connect to the socket and do nothing. Make sure the socket is closed
+    let mut sock = TcpStream::connect("[::1]:22183").await.unwrap();
+    // We expect the server to timeout after 5 seconds.
+    tokio::time::sleep(Duration::from_secs(7)).await;
+    // Test the socket really timed out
+    let mut buf = [0u8; 1];
+    let result = sock.read(&mut buf).await;
+    assert!(
+        result.is_err() || result.unwrap() == 0,
+        "Expected peer to close the connection after timeout"
+    );
+    server_task.abort();
 }
 
 #[tokio::test]

@@ -229,6 +229,10 @@ pub struct ServerArgs {
     /// instead of the system roots. This is commonly used to implement mutual-TLS.
     #[arg(long)]
     pub tls_ca: Option<String>,
+    /// Timeout for TLS handshake and HTTP data in seconds.
+    /// Setting to 0 disables timeouts.
+    #[arg(long, default_value_t = 10)]
+    pub timeout: u64,
     /// For compatibility with `chisel` only. This option is a no-op.
     #[arg(long = "pid")]
     pub _pid: bool,
@@ -674,6 +678,8 @@ mod test {
             "cert.pem",
             "--tls-ca",
             "ca.pem",
+            "--timeout",
+            "50",
         ]);
         assert!(matches!(args.subcommand, Commands::Server(_)));
         if let Commands::Server(args) = args.subcommand {
@@ -689,6 +695,7 @@ mod test {
             assert_eq!(args.tls_key, Some("key.pem".to_string()));
             assert_eq!(args.tls_cert, Some("cert.pem".to_string()));
             assert_eq!(args.tls_ca, Some("ca.pem".to_string()));
+            assert_eq!(args.timeout, 50);
         }
     }
 }
