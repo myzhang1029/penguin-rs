@@ -36,9 +36,9 @@ pub async fn make_server_config_from_rcgen_pem(
     client_ca_path: Option<&str>,
 ) -> Result<TlsIdentityInner, Error> {
     let certs: std::io::Result<Vec<CertificateDer<'_>>> =
-        rustls_pemfile::certs(&mut certs.as_ref()).collect();
+        rustls_pemfile::certs(&mut certs.as_bytes()).collect();
     let crt_key = keypair.serialize_pem();
-    let key = rustls_pemfile::private_key(&mut crt_key.as_ref())?
+    let key = rustls_pemfile::private_key(&mut crt_key.as_bytes())?
         .ok_or_else(|| Error::PrivateKeyNotSupported)?;
     make_server_config_from_mem(certs?, key, client_ca_path).await
 }
