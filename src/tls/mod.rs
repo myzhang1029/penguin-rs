@@ -7,11 +7,15 @@ mod native;
 #[cfg(feature = "__rustls")]
 mod rustls;
 
+#[cfg(all(feature = "__rustls", feature = "acme"))]
+use self::rustls::make_server_config_from_rcgen_pem;
 #[cfg(feature = "__rustls")]
-use self::rustls::{make_client_config, make_server_config, make_server_config_from_rcgen_pem};
+use self::rustls::{make_client_config, make_server_config};
 use arc_swap::ArcSwap;
+#[cfg(all(feature = "nativetls", feature = "acme"))]
+use native::make_server_config_from_rcgen_pem;
 #[cfg(feature = "nativetls")]
-use native::{make_client_config, make_server_config, make_server_config_from_rcgen_pem};
+use native::{make_client_config, make_server_config};
 use std::sync::Arc;
 use thiserror::Error;
 use tokio_tungstenite::Connector;
