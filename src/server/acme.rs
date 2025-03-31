@@ -226,8 +226,8 @@ async fn issue(
         }
     };
     // Clean up the challenge files by closing their stdin
-    for (cmd, _) in cmd_url {
-        cmd.stdin;
+    for (mut cmd, _) in cmd_url {
+        let _ = cmd.stdin.take();
     }
     Ok((private_key, cert_chain_pem))
 }
