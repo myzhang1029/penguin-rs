@@ -48,12 +48,12 @@ jobs:
       run: cargo run --verbose --features ${{ matrix.tls }},penguin-binary --no-default-features -- --help
 
     - name: Run cargo tests with more features on
-      run: cargo test --verbose --features ${{ matrix.tls }},tests-real-internet4,penguin-binary,default-is-ipv6,tokio-console,deadlock-detection --no-default-features
+      run: cargo test --verbose --features ${{ matrix.tls }},tests-real-internet4,penguin-binary,acme,default-is-ipv6,tokio-console,deadlock-detection --no-default-features
       env:
         RUSTFLAGS: -Cinstrument-coverage
 
     - name: Run cargo tests with default features
-      run: cargo test --verbose --features ${{ matrix.tls }},tests-real-internet4,penguin-binary --no-default-features
+      run: cargo test --verbose --features ${{ matrix.tls }},tests-real-internet4,acme,penguin-binary --no-default-features
       env:
         RUSTFLAGS: -Cinstrument-coverage
 

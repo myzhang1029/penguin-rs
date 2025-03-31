@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
+#[cfg(feature = "acme")]
+mod acme;
 mod forwarder;
 mod service;
 mod websocket;
@@ -10,7 +12,7 @@ use self::service::State;
 use crate::arg::ServerArgs;
 #[cfg(unix)]
 use crate::tls::reload_tls_identity;
-use crate::tls::{make_tls_identity, TlsIdentityInner};
+use crate::tls::{make_tls_identity, TlsIdentity, TlsIdentityInner};
 use crate::Dupe;
 use hyper::upgrade::Upgraded;
 use hyper_util::rt::tokio::TokioExecutor;
@@ -42,6 +44,37 @@ pub enum Error {
     #[error("TLS error: {0}")]
     #[cfg(feature = "nativetls")]
     NativeTls(#[from] tokio_native_tls::native_tls::Error),
+    #[cfg(feature = "acme")]
+    #[error(transparent)]
+    Acme(#[from] acme::Error),
+}
+
+/// Check if TLS is enabled.
+/// If so, create a TlsIdentity and start relevant tasks
+async fn check_start_tls(args: &'static ServerArgs) -> Result<Option<TlsIdentity>, Error> {
+    if let Some(tls_key) = &args.tls_key {
+        // `expect`: `clap` ensures that both `--tls-cert` and `--tls-key` are
+        // specified if either is specified.
+        let tls_cert = args
+            .tls_cert
+            .as_ref()
+            .expect("`tls_cert` is `None` (this is a bug)");
+        trace!("Enabling TLS");
+        let tls_config = make_tls_identity(tls_cert, tls_key, args.tls_ca.as_deref()).await?;
+        #[cfg(unix)]
+        register_signal_handler(tls_config.dupe(), tls_cert, tls_key, args.tls_ca.as_deref())?;
+        return Ok(Some(tls_config));
+    }
+    // `clap` ensures that tls-key or tls-domain are mutually exclusive.
+    #[cfg(feature = "acme")]
+    if !args.tls_domain.is_empty() {
+        trace!("Enabling TLS using ACME");
+        let acme_client = acme::Client::populate_or_get(args).await?;
+        let tls_config = acme_client.get_tls_config_spawn_renewal();
+        return Ok(Some(tls_config));
+    }
+    trace!("TLS is not enabled");
+    Ok(None)
 }
 
 #[tracing::instrument(level = "trace")]
@@ -56,17 +89,7 @@ pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
     );
     let sockaddrs = arg_to_sockaddrs(args)?;
     let mut listening_tasks = JoinSet::new();
-    if let Some(tls_key) = &args.tls_key {
-        // `expect`: `clap` ensures that both `--tls-cert` and `--tls-key` are
-        // specified if either is specified.
-        let tls_cert = args
-            .tls_cert
-            .as_ref()
-            .expect("`tls_cert` is `None` (this is a bug)");
-        trace!("Enabling TLS");
-        let tls_config = make_tls_identity(tls_cert, tls_key, args.tls_ca.as_deref()).await?;
-        #[cfg(unix)]
-        register_signal_handler(tls_config.dupe(), tls_cert, tls_key, args.tls_ca.as_deref())?;
+    if let Some(tls_config) = check_start_tls(args).await? {
         for sockaddr in sockaddrs {
             let listener = TcpListener::bind(sockaddr).await?;
             let actual_addr = listener.local_addr()?;
@@ -224,29 +247,13 @@ fn assert_send<'u, R>(
 
 #[cfg(test)]
 mod test {
-    use crate::arg::OptionalDuration;
-
     use super::*;
 
     fn get_server_args(host: Vec<String>, port: Vec<u16>) -> ServerArgs {
         ServerArgs {
             host,
             port,
-            backend: None,
-            obfs: false,
-            not_found_resp: String::new(),
-            ws_psk: None,
-            tls_key: None,
-            tls_cert: None,
-            tls_ca: None,
-            timeout: OptionalDuration::NONE,
-            _pid: false,
-            _socks5: false,
-            _reverse: false,
-            _keepalive: 0,
-            _auth: None,
-            _authfile: None,
-            _key: None,
+            ..Default::default()
         }
     }
 

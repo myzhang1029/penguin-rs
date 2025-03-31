@@ -7,9 +7,13 @@ mod native;
 #[cfg(feature = "__rustls")]
 mod rustls;
 
+#[cfg(all(feature = "__rustls", feature = "acme"))]
+use self::rustls::make_server_config_from_rcgen_pem;
 #[cfg(feature = "__rustls")]
 use self::rustls::{make_client_config, make_server_config};
 use arc_swap::ArcSwap;
+#[cfg(all(feature = "nativetls", feature = "acme"))]
+use native::make_server_config_from_rcgen_pem;
 #[cfg(feature = "nativetls")]
 use native::{make_client_config, make_server_config};
 use std::sync::Arc;
@@ -72,6 +76,16 @@ pub async fn make_tls_identity(
     Ok(Arc::new(ArcSwap::from_pointee(identity)))
 }
 
+#[cfg(feature = "acme")]
+pub async fn make_tls_identity_from_rcgen_pem(
+    certs: String,
+    keypair: rcgen::KeyPair,
+    client_ca_path: Option<&str>,
+) -> Result<TlsIdentity, Error> {
+    let identity = make_server_config_from_rcgen_pem(certs, keypair, client_ca_path).await?;
+    Ok(Arc::new(ArcSwap::from_pointee(identity)))
+}
+
 #[cfg(unix)]
 pub async fn reload_tls_identity(
     identity: &TlsIdentity,
@@ -80,6 +94,18 @@ pub async fn reload_tls_identity(
     client_ca_path: Option<&str>,
 ) -> Result<(), Error> {
     let new = make_server_config(cert_path, key_path, client_ca_path).await?;
+    identity.store(Arc::new(new));
+    Ok(())
+}
+
+#[cfg(feature = "acme")]
+pub async fn reload_tls_identity_from_rcgen_pem(
+    identity: &TlsIdentity,
+    certs: String,
+    keypair: rcgen::KeyPair,
+    client_ca_path: Option<&str>,
+) -> Result<(), Error> {
+    let new = make_server_config_from_rcgen_pem(certs, keypair, client_ca_path).await?;
     identity.store(Arc::new(new));
     Ok(())
 }

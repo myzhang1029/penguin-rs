@@ -9,6 +9,8 @@ use http::{
     uri::{Authority, PathAndQuery, Scheme},
     HeaderValue, Uri,
 };
+#[cfg(feature = "acme")]
+use instant_acme::LetsEncrypt;
 use std::{ops::Deref, str::FromStr, sync::OnceLock};
 use thiserror::Error;
 
@@ -50,7 +52,7 @@ pub enum Commands {
 
 // Descriptions are mainly directly stripped from myzhang1029/penguin
 /// Penguin client arguments.
-#[derive(Args, Debug)]
+#[derive(Args, Debug, Default)]
 pub struct ClientArgs {
     /// URL to the penguin server.
     pub server: ServerUrl,
@@ -178,7 +180,7 @@ pub struct ClientArgs {
 }
 
 /// Penguin server arguments.
-#[derive(Args, Debug)]
+#[derive(Args, Debug, Default)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct ServerArgs {
     /// Defines the HTTP listening host - the network interface.
@@ -228,6 +230,37 @@ pub struct ServerArgs {
     /// instead of the system roots. This is commonly used to implement mutual-TLS.
     #[arg(long)]
     pub tls_ca: Option<String>,
+    #[cfg(feature = "acme")]
+    /// Automatically obtain a TLS certificate for the specified domain using
+    /// ACME. We only support the HTTP-01 challenge type and requires a helper
+    /// command specified in --tls-acme-challenge-helper.
+    #[arg(long, conflicts_with_all = ["tls_key", "tls_cert"], requires = "tls_acme_accept_tos", requires = "tls_acme_challenge_helper")]
+    pub tls_domain: Vec<String>,
+    #[cfg(feature = "acme")]
+    /// ACME directory URL to use for the ACME challenge.
+    /// Defaults to the Let's Encrypt production URL.
+    #[arg(long, default_value = LetsEncrypt::Production.url())]
+    pub tls_acme_url: String,
+    #[cfg(feature = "acme")]
+    /// Email address to use for ACME account registration.
+    #[arg(long)]
+    pub tls_acme_email: Option<String>,
+    #[cfg(feature = "acme")]
+    /// Accept the ACME terms of service. You must expressly accept the terms of
+    /// service by setting this flag to true.
+    #[arg(long)]
+    pub tls_acme_accept_tos: bool,
+    #[cfg(feature = "acme")]
+    /// Command to run for the ACME HTTP-01 challenge. The arguments will be in
+    /// the form of:
+    /// <cmd> <token> <key>
+    /// Once the challenge is completed, stdin will be closed, and the command
+    /// should exit with 0 when this is detected.
+    /// The command should create a file at
+    /// /.well-known/acme-challenge/<token>
+    /// containing only <key>.
+    #[arg(long)]
+    pub tls_acme_challenge_helper: Option<String>,
     /// Timeout for TLS handshake and HTTP data in seconds.
     /// Setting to 0 disables timeouts.
     #[arg(long, default_value = "60")]
@@ -269,7 +302,7 @@ pub enum ServerUrlError {
 }
 
 /// Server URL
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
 pub struct ServerUrl(pub Uri);
 
 impl FromStr for ServerUrl {
@@ -406,7 +439,7 @@ impl FromStr for Header {
 }
 
 /// An optional duration
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct OptionalDuration(Option<std::time::Duration>);
 
 impl OptionalDuration {
@@ -414,7 +447,7 @@ impl OptionalDuration {
     #[allow(dead_code)]
     pub const NONE: Self = Self(None);
 
-    pub fn from_secs(duration: u64) -> Self {
+    pub const fn from_secs(duration: u64) -> Self {
         Self(Some(std::time::Duration::from_secs(duration)))
     }
 
@@ -690,6 +723,85 @@ mod test {
         }
     }
 
+    #[cfg(feature = "acme")]
+    #[test]
+    fn test_server_args_must_agree_tos() {
+        let result = PenguinCli::try_parse_from([
+            "penguin",
+            "server",
+            "--host",
+            "example.com",
+            "--port",
+            "1234",
+            "--host",
+            "2.example.com",
+            "--tls-domain",
+            "example.com",
+            "--tls-domain",
+            "example.net",
+            "--tls-acme-email",
+            "test@example.com",
+            "--timeout",
+            "50",
+        ]);
+        assert!(
+            result.is_err(),
+            "Expected an error due to missing --tls-acme-accept-tos"
+        );
+    }
+
+    #[cfg(feature = "acme")]
+    #[test]
+    fn test_server_args_acme_full() {
+        let args = PenguinCli::parse_from([
+            "penguin",
+            "server",
+            "--host",
+            "example.com",
+            "--port",
+            "1234",
+            "--host",
+            "2.example.com",
+            "--port",
+            "5678",
+            "--backend",
+            "https://example.com",
+            "--obfs",
+            "--404-resp",
+            "404",
+            "--ws-psk",
+            "avocado",
+            "--tls-domain",
+            "example.com",
+            "--tls-domain",
+            "example.net",
+            "--tls-acme-email",
+            "test@example.com",
+            "--tls-acme-accept-tos",
+            "--tls-acme-challenge-helper",
+            "echo",
+            "--timeout",
+            "50",
+        ]);
+        assert!(matches!(args.subcommand, Commands::Server(_)));
+        if let Commands::Server(args) = args.subcommand {
+            assert_eq!(args.host, ["example.com", "2.example.com"]);
+            assert_eq!(args.port, [1234, 5678]);
+            assert_eq!(
+                args.backend,
+                Some(BackendUrl::from_str("https://example.com").unwrap())
+            );
+            assert!(args.obfs);
+            assert_eq!(args.not_found_resp, "404");
+            assert_eq!(args.ws_psk, Some(HeaderValue::from_static("avocado")));
+            assert_eq!(args.tls_key, None);
+            assert_eq!(args.tls_cert, None);
+            assert_eq!(args.tls_domain, ["example.com", "example.net"]);
+            assert_eq!(args.tls_ca, None);
+            assert_eq!(args.timeout, OptionalDuration::from_secs(50));
+        }
+    }
+
     #[test]
     fn test_server_args_full() {
         let args = PenguinCli::parse_from([
@@ -733,6 +845,8 @@ mod test {
             assert_eq!(args.tls_key, Some("key.pem".to_string()));
             assert_eq!(args.tls_cert, Some("cert.pem".to_string()));
             assert_eq!(args.tls_ca, Some("ca.pem".to_string()));
+            #[cfg(feature = "acme")]
+            assert_eq!(args.tls_domain, Vec::<String>::new());
             assert_eq!(args.timeout, OptionalDuration::from_secs(50));
         }
     }

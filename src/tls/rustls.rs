@@ -26,6 +26,28 @@ pub async fn make_server_config(
     let (certs, key) = try_load_certificate(Some(key_path), Some(cert_path))
         .await?
         .expect("`try_load_certificate` returned `None` (this is a bug)");
+    make_server_config_from_mem(certs, key, client_ca_path).await
+}
+
+#[cfg(feature = "acme")]
+pub async fn make_server_config_from_rcgen_pem(
+    certs: String,
+    keypair: rcgen::KeyPair,
+    client_ca_path: Option<&str>,
+) -> Result<TlsIdentityInner, Error> {
+    let certs: std::io::Result<Vec<CertificateDer<'_>>> =
+        rustls_pemfile::certs(&mut certs.as_bytes()).collect();
+    let crt_key = keypair.serialize_pem();
+    let key = rustls_pemfile::private_key(&mut crt_key.as_bytes())?
+        .ok_or_else(|| Error::PrivateKeyNotSupported)?;
+    make_server_config_from_mem(certs?, key, client_ca_path).await
+}
+
+async fn make_server_config_from_mem(
+    certs: Vec<CertificateDer<'static>>,
+    key: PrivateKeyDer<'static>,
+    client_ca_path: Option<&str>,
+) -> Result<TlsIdentityInner, Error> {
     // Build config
     let config = ServerConfig::builder();
     let mut config = if let Some(client_ca_path) = client_ca_path {
@@ -194,6 +216,7 @@ impl ServerCertVerifier for EmptyVerifier {
 mod test {
     use super::*;
     use rcgen::generate_simple_self_signed;
+    use rcgen::CertificateParams;
     use tempfile::tempdir;
 
     #[tokio::test]
@@ -295,5 +318,18 @@ mod test {
             config.alpn_protocols,
             vec![b"h2".to_vec(), b"http/1.1".to_vec()]
         );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "acme")]
+    async fn test_make_server_config_from_rcgen_pem() {
+        let cert_params = CertificateParams::new(vec!["example.com".into()]).unwrap();
+        let keypair = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P384_SHA384).unwrap();
+        let custom_crt = cert_params.self_signed(&keypair).unwrap();
+        let crt = custom_crt.pem();
+
+        let result = make_server_config_from_rcgen_pem(crt, keypair, None).await;
+
+        assert!(result.is_ok());
     }
 }

@@ -42,7 +42,7 @@ some functionalities:
 
 - There is no server keep-alive because client keep-alive is enough.
 
-- There is no support to acquire an ACME certificate on-the-fly.
+- ~~There is no support to acquire an ACME certificate on-the-fly.~~ (Implemented)
 
 - There is no reverse port forwarding because I am too lazy. (TODO!)
 

@@ -22,22 +22,10 @@ fn make_server_args(host: &str, port: u16) -> arg::ServerArgs {
     arg::ServerArgs {
         host: vec![host.to_string()],
         port: vec![port],
-        backend: None,
-        obfs: false,
         not_found_resp: "404".to_string(),
-        ws_psk: None,
-        tls_ca: None,
-        tls_cert: None,
-        tls_key: None,
         // Very short timeout for testing purposes.
         timeout: OptionalDuration::from_secs(2),
-        _pid: false,
-        _socks5: false,
-        _reverse: false,
-        _auth: None,
-        _authfile: None,
-        _keepalive: 0,
-        _key: None,
+        ..Default::default()
     }
 }
 

@@ -11,9 +11,27 @@ pub type TlsIdentityInner = tokio_native_tls::TlsAcceptor;
 pub async fn make_server_config(
     cert_path: &str,
     key_path: &str,
-    _client_ca_path: Option<&str>,
+    client_ca_path: Option<&str>,
 ) -> Result<TlsIdentityInner, Error> {
     let identity = read_key_cert(key_path, cert_path).await?;
+    make_server_config_from_mem(identity, client_ca_path)
+}
+
+#[cfg(feature = "acme")]
+#[allow(clippy::unused_async)]
+pub async fn make_server_config_from_rcgen_pem(
+    certs: String,
+    keypair: rcgen::KeyPair,
+    client_ca_path: Option<&str>,
+) -> Result<TlsIdentityInner, Error> {
+    let identity = Identity::from_pkcs8(certs.as_bytes(), keypair.serialize_pem().as_bytes())?;
+    make_server_config_from_mem(identity, client_ca_path)
+}
+
+fn make_server_config_from_mem(
+    identity: Identity,
+    _client_ca_path: Option<&str>,
+) -> Result<TlsIdentityInner, Error> {
     // TODO: support client CA (sfackler/rust-native-tls#161)
     let raw_acceptor = TlsAcceptor::builder(identity).build()?;
     Ok(raw_acceptor.into())
@@ -48,13 +66,14 @@ async fn read_key_cert(key_path: &str, cert_path: &str) -> Result<Identity, Erro
 
 #[cfg(test)]
 mod test {
+    use super::*;
+    use rcgen::CertificateParams;
+    use tempfile::tempdir;
+
     // `native_tls` on macOS and Windows doesn't support reading Ed25519 nor ECDSA-based certificates.
     #[tokio::test]
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     async fn test_read_key_cert() {
-        use super::*;
-        use rcgen::CertificateParams;
-        use tempfile::tempdir;
         let tmpdir = tempdir().unwrap();
         let key_path = tmpdir.path().join("key.pem");
         let cert_path = tmpdir.path().join("cert.pem");
@@ -68,5 +87,18 @@ mod test {
         read_key_cert(key_path.to_str().unwrap(), cert_path.to_str().unwrap())
             .await
             .unwrap();
+    }
+    #[tokio::test]
+    #[cfg(feature = "acme")]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    async fn test_make_server_config_from_rcgen_pem() {
+        let cert_params = CertificateParams::new(vec!["example.com".into()]).unwrap();
+        let keypair = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P384_SHA384).unwrap();
+        let custom_crt = cert_params.self_signed(&keypair).unwrap();
+        let crt = custom_crt.pem();
+
+        let result = make_server_config_from_rcgen_pem(crt, keypair, None).await;
+
+        assert!(result.is_ok());
     }
 }
