@@ -231,7 +231,7 @@ pub struct ServerArgs {
     pub tls_ca: Option<String>,
     /// Timeout for TLS handshake and HTTP data in seconds.
     /// Setting to 0 disables timeouts.
-    #[arg(long, default_value_t = 10)]
+    #[arg(long, default_value_t = 60)]
     pub timeout: u64,
     /// For compatibility with `chisel` only. This option is a no-op.
     #[arg(long = "pid")]
