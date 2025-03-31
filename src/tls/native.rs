@@ -67,14 +67,13 @@ async fn read_key_cert(key_path: &str, cert_path: &str) -> Result<Identity, Erro
 #[cfg(test)]
 mod test {
     use super::*;
+    use rcgen::CertificateParams;
+    use tempfile::tempdir;
 
     // `native_tls` on macOS and Windows doesn't support reading Ed25519 nor ECDSA-based certificates.
     #[tokio::test]
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     async fn test_read_key_cert() {
-        use super::*;
-        use rcgen::CertificateParams;
-        use tempfile::tempdir;
         let tmpdir = tempdir().unwrap();
         let key_path = tmpdir.path().join("key.pem");
         let cert_path = tmpdir.path().join("cert.pem");
