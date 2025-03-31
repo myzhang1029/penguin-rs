@@ -10,6 +10,10 @@
 
 pub(super) mod socks;
 mod tcp;
+#[cfg(target_os = "linux")]
+mod tproxy;
+#[cfg(not(target_os = "linux"))]
+mod tproxy_stub;
 mod udp;
 
 use self::socks::{handle_socks, handle_socks_stdio};
@@ -20,6 +24,9 @@ use crate::parse_remote::{LocalSpec, RemoteSpec};
 use crate::parse_remote::{Protocol, Remote};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
+use tproxy::{handle_tproxy_tcp, handle_tproxy_udp};
+#[cfg(not(target_os = "linux"))]
+use tproxy_stub as tproxy;
 use tracing::{debug, error};
 
 /// Handler errors
@@ -43,6 +50,10 @@ pub enum FatalError {
     /// while waiting for a straem to be established.
     #[error("Main loop exited without sending stream")]
     MainLoopExitWithoutSendingStream,
+    /// Happens when the user is trying to open a "tproxy" remote
+    /// on a non-Linux system.
+    #[error("Transparent Proxy only works on Linux")]
+    TproxyNotLinux,
 }
 
 /// Construct a TCP remote based on the description. These are simple because
@@ -76,6 +87,15 @@ pub(super) async fn handle_remote(
         (LocalSpec::Stdio, RemoteSpec::Socks, _) => {
             // The parser guarantees that the protocol is TCP
             handle_socks_stdio(&handler_resources).await
+        }
+        (LocalSpec::Inet((lhost, lport)), RemoteSpec::Tproxy, Protocol::Tcp) => {
+            handle_tproxy_tcp(lhost, *lport, &handler_resources).await
+        }
+        (LocalSpec::Inet((lhost, lport)), RemoteSpec::Tproxy, Protocol::Udp) => {
+            handle_tproxy_udp(lhost, *lport, &handler_resources).await
+        }
+        (LocalSpec::Stdio, RemoteSpec::Tproxy, _) => {
+            unreachable!("`clap` should have rejected this combination (this is a bug)")
         }
     }
 }
