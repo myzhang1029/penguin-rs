@@ -7,7 +7,7 @@ use instant_acme::{
 };
 use rcgen::{CertificateParams, DistinguishedName, KeyPair};
 use std::sync::OnceLock;
-use tokio::process::Child;
+use tokio::{io::AsyncWriteExt, process::Child};
 use tracing::{debug, error, info};
 
 pub static ACME_CLIENT: OnceLock<Client> = OnceLock::new();
@@ -188,9 +188,13 @@ async fn issue(
         order.set_challenge_ready(&http_challenge.url).await.unwrap();
     }
     let order_cleanup = || async {
-        // Clean up the challenge files by closing their stdin
+        // Clean up the challenge files by sending a newline and closing stdin
         for mut cmd in cmds {
-            let _ = cmd.stdin.take();
+            let stdin = cmd.stdin.take();
+            if let Some(mut stdin) = stdin {
+                stdin.write(b"\n").await.ok();
+                stdin.flush().await.ok();
+            }
         }
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     };
