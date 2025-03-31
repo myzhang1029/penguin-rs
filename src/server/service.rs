@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::websocket::handle_websocket;
-use crate::arg::BackendUrl;
+use crate::arg::{BackendUrl, OptionalDuration};
 use crate::proto_version::PROTOCOL_VERSION;
 use crate::Dupe;
 use base64::engine::general_purpose::STANDARD as B64_STANDARD_ENGINE;
@@ -71,9 +71,9 @@ pub(super) struct State<'a> {
     /// Reqwest client
     pub client: reqwest::Client,
     /// TLS handshake timeout
-    pub tls_timeout: Option<std::time::Duration>,
+    pub tls_timeout: OptionalDuration,
     /// HTTP timeout
-    pub http_timeout: Option<std::time::Duration>,
+    pub http_timeout: OptionalDuration,
 }
 
 impl Dupe for State<'_> {
@@ -97,8 +97,8 @@ impl<'a> State<'a> {
         ws_psk: Option<&'a HeaderValue>,
         not_found_resp: &'a str,
         obfs: bool,
-        tls_timeout: Option<std::time::Duration>,
-        http_timeout: Option<std::time::Duration>,
+        tls_timeout: OptionalDuration,
+        http_timeout: OptionalDuration,
     ) -> Self {
         Self {
             backend,
@@ -326,7 +326,14 @@ mod test {
     #[tokio::test]
     async fn test_obfs_or_not() {
         // Test `/health` without obfuscation
-        let state = State::new(None, None, "not found in the test", false, None, None);
+        let state = State::new(
+            None,
+            None,
+            "not found in the test",
+            false,
+            OptionalDuration::NONE,
+            OptionalDuration::NONE,
+        );
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/health")
@@ -337,7 +344,14 @@ mod test {
         let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(body_bytes, "OK");
         // Test `/health` with obfuscation
-        let state = State::new(None, None, "not found in the test", true, None, None);
+        let state = State::new(
+            None,
+            None,
+            "not found in the test",
+            true,
+            OptionalDuration::NONE,
+            OptionalDuration::NONE,
+        );
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/health")
@@ -348,7 +362,14 @@ mod test {
         let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(body_bytes, "not found in the test");
         // Test `/version` without obfuscation
-        let state = State::new(None, None, "not found in the test", false, None, None);
+        let state = State::new(
+            None,
+            None,
+            "not found in the test",
+            false,
+            OptionalDuration::NONE,
+            OptionalDuration::NONE,
+        );
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/version")
@@ -359,7 +380,14 @@ mod test {
         let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(body_bytes, env!("CARGO_PKG_VERSION"));
         // Test `/version` with obfuscation
-        let state = State::new(None, None, "not found in the test", true, None, None);
+        let state = State::new(
+            None,
+            None,
+            "not found in the test",
+            true,
+            OptionalDuration::NONE,
+            OptionalDuration::NONE,
+        );
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/health")
@@ -382,8 +410,8 @@ mod test {
             None,
             "not found in the test",
             false,
-            None,
-            None,
+            OptionalDuration::NONE,
+            OptionalDuration::NONE,
         );
         let req = Request::builder()
             .method(Method::GET)
@@ -397,8 +425,8 @@ mod test {
             None,
             "not found in the test",
             false,
-            None,
-            None,
+            OptionalDuration::NONE,
+            OptionalDuration::NONE,
         );
         let req = Request::builder()
             .method(Method::GET)
@@ -421,8 +449,8 @@ mod test {
             None,
             "not found in the test",
             false,
-            None,
-            None,
+            OptionalDuration::NONE,
+            OptionalDuration::NONE,
         );
         let req = Request::builder()
             .method(Method::GET)
@@ -436,8 +464,8 @@ mod test {
             None,
             "not found in the test",
             false,
-            None,
-            None,
+            OptionalDuration::NONE,
+            OptionalDuration::NONE,
         );
         let req = Request::builder()
             .method(Method::GET)
@@ -451,7 +479,14 @@ mod test {
     #[tokio::test]
     async fn test_stealth_websocket_upgrade_method() {
         // Test non-GET request
-        let state = State::new(None, None, "not found in the test", false, None, None);
+        let state = State::new(
+            None,
+            None,
+            "not found in the test",
+            false,
+            OptionalDuration::NONE,
+            OptionalDuration::NONE,
+        );
         let req = Request::builder()
             .method(Method::POST)
             .header("connection", "UpGrAdE")
@@ -470,7 +505,14 @@ mod test {
     #[tokio::test]
     async fn test_stealth_websocket_upgrade_missing_key_header() {
         // Test missing upgrade header
-        let state = State::new(None, None, "not found in the test", false, None, None);
+        let state = State::new(
+            None,
+            None,
+            "not found in the test",
+            false,
+            OptionalDuration::NONE,
+            OptionalDuration::NONE,
+        );
         let req = Request::builder()
             .method(Method::GET)
             .header("connection", "UpGrAdE")
@@ -489,7 +531,14 @@ mod test {
     async fn test_stealth_websocket_upgrade_wrong_psk() {
         // Test wrong PSK
         static PSK: HeaderValue = HeaderValue::from_static("correct PSK");
-        let state = State::new(None, Some(&PSK), "not found in the test", false, None, None);
+        let state = State::new(
+            None,
+            Some(&PSK),
+            "not found in the test",
+            false,
+            OptionalDuration::NONE,
+            OptionalDuration::NONE,
+        );
         let req = Request::builder()
             .method(Method::GET)
             .header("connection", "UpGrAdE")

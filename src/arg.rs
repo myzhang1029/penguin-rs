@@ -230,8 +230,8 @@ pub struct ServerArgs {
     pub tls_ca: Option<String>,
     /// Timeout for TLS handshake and HTTP data in seconds.
     /// Setting to 0 disables timeouts.
-    #[arg(long, default_value_t = 60)]
-    pub timeout: u64,
+    #[arg(long, default_value = "60")]
+    pub timeout: OptionalDuration,
     /// For compatibility with `chisel` only. This option is a no-op.
     #[arg(long = "pid")]
     pub _pid: bool,
@@ -402,6 +402,43 @@ impl FromStr for Header {
         let name = HeaderName::from_str(name)?;
         let value = HeaderValue::from_str(value.trim())?;
         Ok(Self { name, value })
+    }
+}
+
+/// An optional duration
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OptionalDuration(Option<std::time::Duration>);
+
+impl OptionalDuration {
+    // Possibly only used in tests
+    #[allow(dead_code)]
+    pub const NONE: Self = Self(None);
+
+    pub fn from_secs(duration: u64) -> Self {
+        Self(Some(std::time::Duration::from_secs(duration)))
+    }
+
+    pub async fn timeout<T>(&self, future: T) -> Result<T::Output, tokio::time::error::Elapsed>
+    where
+        T: std::future::Future,
+    {
+        match self.0 {
+            Some(duration) => tokio::time::timeout(duration, future).await,
+            None => Ok(future.await),
+        }
+    }
+}
+
+impl FromStr for OptionalDuration {
+    type Err = std::num::ParseIntError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let value = s.parse::<u64>()?;
+        if value == 0 {
+            Ok(Self(None))
+        } else {
+            Ok(Self::from_secs(value))
+        }
     }
 }
 
@@ -590,6 +627,8 @@ mod test {
             assert_eq!(args.tls_key, None);
             assert_eq!(args.tls_cert, None);
             assert_eq!(args.tls_ca, None);
+            // default timeout; make sure is not None
+            assert_eq!(args.timeout, OptionalDuration::from_secs(60));
         }
     }
 
@@ -694,7 +733,7 @@ mod test {
             assert_eq!(args.tls_key, Some("key.pem".to_string()));
             assert_eq!(args.tls_cert, Some("cert.pem".to_string()));
             assert_eq!(args.tls_ca, Some("ca.pem".to_string()));
-            assert_eq!(args.timeout, 50);
+            assert_eq!(args.timeout, OptionalDuration::from_secs(50));
         }
     }
 }

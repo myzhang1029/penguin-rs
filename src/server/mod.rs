@@ -46,18 +46,13 @@ pub enum Error {
 
 #[tracing::instrument(level = "trace")]
 pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
-    let timeout = if args.timeout == 0 {
-        None
-    } else {
-        Some(std::time::Duration::from_secs(args.timeout))
-    };
     let state = State::new(
         args.backend.as_ref(),
         args.ws_psk.as_ref(),
         &args.not_found_resp,
         args.obfs,
-        timeout,
-        timeout,
+        args.timeout,
+        args.timeout,
     );
     let sockaddrs = arg_to_sockaddrs(args)?;
     let mut listening_tasks = JoinSet::new();
@@ -183,11 +178,7 @@ async fn serve_connection_tls<S>(
     #[cfg(feature = "nativetls")]
     let stream_future = tls_config.accept(stream);
 
-    let stream = if let Some(tls_timeout) = state.tls_timeout {
-        tokio::time::timeout(tls_timeout, stream_future).await
-    } else {
-        Ok(stream_future.await)
-    };
+    let stream = state.tls_timeout.timeout(stream_future).await;
 
     match stream {
         Ok(Ok(stream)) => {
@@ -213,19 +204,14 @@ where
     let exec = auto::Builder::new(TokioExecutor::new());
     let conn = exec.serve_connection_with_upgrades(hyper_io, state);
     let conn = assert_send(conn);
-    if let Some(http_timeout) = http_timeout {
-        // This works because `ws_handler` spawns another task once the handshake is
-        // complete, and that task is unaffected by this timeout.
-        // This timeout only limits how much time we wait for the ws handshake to complete.
-        // TODO: fully test its interaction with the backend handler as well.
-        match tokio::time::timeout(http_timeout, conn).await {
-            Err(_) => error!("HTTP connection timed out after {http_timeout:?}"),
-            Ok(Err(err)) => error!("HTTP connection error: {err}"),
-            Ok(Ok(())) => {}
-        }
-    } else {
-        conn.await
-            .unwrap_or_else(|err| error!("HTTP connection error: {err}"));
+    // This works because `ws_handler` spawns another task once the handshake is
+    // complete, and that task is unaffected by this timeout.
+    // This timeout only limits how much time we wait for the ws handshake to complete.
+    // TODO: fully test its interaction with the backend handler as well.
+    match http_timeout.timeout(conn).await {
+        Err(_) => error!("HTTP connection timed out after {http_timeout:?}"),
+        Ok(Err(err)) => error!("HTTP connection error: {err}"),
+        Ok(Ok(())) => {}
     }
 }
 
@@ -238,7 +224,10 @@ fn assert_send<'u, R>(
 
 #[cfg(test)]
 mod test {
+    use crate::arg::OptionalDuration;
+
     use super::*;
+
     fn get_server_args(host: Vec<String>, port: Vec<u16>) -> ServerArgs {
         ServerArgs {
             host,
@@ -250,7 +239,7 @@ mod test {
             tls_key: None,
             tls_cert: None,
             tls_ca: None,
-            timeout: 0,
+            timeout: OptionalDuration::NONE,
             _pid: false,
             _socks5: false,
             _reverse: false,

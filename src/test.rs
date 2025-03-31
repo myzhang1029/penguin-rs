@@ -1,6 +1,9 @@
 #![allow(clippy::match_on_vec_items)]
 use super::*;
-use crate::{arg::ServerUrl, parse_remote::Remote};
+use crate::{
+    arg::{OptionalDuration, ServerUrl},
+    parse_remote::Remote,
+};
 #[allow(unused_imports)]
 use std::sync::{LazyLock, OnceLock};
 use std::{
@@ -27,7 +30,7 @@ fn make_server_args(host: &str, port: u16) -> arg::ServerArgs {
         tls_cert: None,
         tls_key: None,
         // Very short timeout for testing purposes.
-        timeout: 2,
+        timeout: OptionalDuration::from_secs(2),
         _pid: false,
         _socks5: false,
         _reverse: false,
