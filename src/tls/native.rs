@@ -11,23 +11,24 @@ pub type TlsIdentityInner = tokio_native_tls::TlsAcceptor;
 pub async fn make_server_config(
     cert_path: &str,
     key_path: &str,
-    _client_ca_path: Option<&str>,
+    client_ca_path: Option<&str>,
 ) -> Result<TlsIdentityInner, Error> {
     let identity = read_key_cert(key_path, cert_path).await?;
-    make_server_config_from_mem(identity, _client_ca_path).await
+    make_server_config_from_mem(identity, client_ca_path)
 }
 
 #[cfg(feature = "acme")]
+#[allow(clippy::unused_async)]
 pub async fn make_server_config_from_rcgen_pem(
     certs: String,
     keypair: rcgen::KeyPair,
     client_ca_path: Option<&str>,
 ) -> Result<TlsIdentityInner, Error> {
-    let identity = Identity::from_pkcs8(certs.as_bytes(), &keypair.serialize_pem().as_bytes())?;
-    make_server_config_from_mem(identity, client_ca_path).await
+    let identity = Identity::from_pkcs8(certs.as_bytes(), keypair.serialize_pem().as_bytes())?;
+    make_server_config_from_mem(identity, client_ca_path)
 }
 
-async fn make_server_config_from_mem(
+fn make_server_config_from_mem(
     identity: Identity,
     _client_ca_path: Option<&str>,
 ) -> Result<TlsIdentityInner, Error> {

@@ -84,12 +84,12 @@ impl Client {
         ACME_CLIENT
             .set(client)
             .expect("Failed to set ACME_CLIENT (this is a bug)");
-        return Ok(ACME_CLIENT
+        Ok(ACME_CLIENT
             .get()
-            .expect("ACME_CLIENT should be set (this is a bug)"));
+            .expect("ACME_CLIENT should be set (this is a bug)"))
     }
 
-    pub async fn get_tls_config_spawn_renewal(&'static self) -> Result<TlsIdentity, Error> {
+    pub fn get_tls_config_spawn_renewal(&'static self) -> TlsIdentity {
         tokio::spawn(async move {
             // Hard-coding a renewal interval of 30 days
             let interval = std::time::Duration::from_secs(30 * 24 * 60 * 60); // 30 days
@@ -118,11 +118,11 @@ impl Client {
                 }
             }
         });
-        Ok(self.tls_config.clone())
+        self.tls_config.clone()
     }
 }
 
-async fn create_challenge_file(
+fn create_challenge_file(
     key: &str,
     server_args: &'static ServerArgs,
 ) -> Result<tokio::process::Child, Error> {
@@ -178,7 +178,7 @@ async fn issue(
             .ok_or(Error::NoHttp01ChallengeSupport)?;
 
         // Execute the challenge helper to create the file
-        let cmd = create_challenge_file(&http_challenge.token, server_args).await?;
+        let cmd = create_challenge_file(&http_challenge.token, server_args)?;
         cmd_url.push((cmd, &http_challenge.url));
     }
     // Tell the server we are ready for the challenges
@@ -209,11 +209,7 @@ async fn issue(
         error!("Order did not become ready after 10 attempts");
         return Err(Error::OrderInvalid);
     }
-    let names = server_args
-        .tls_domain
-        .iter()
-        .map(|domain| domain.clone())
-        .collect::<Vec<_>>();
+    let names = server_args.tls_domain.clone();
     let mut params: CertificateParams = CertificateParams::new(names.clone())?;
     params.distinguished_name = DistinguishedName::new();
     let private_key = KeyPair::generate()?;
@@ -240,13 +236,13 @@ mod test {
 
     #[tokio::test]
     async fn test_create_challenge_file() {
-        let test_key = "f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY.tvg9X8xCoUuU_vK9qNR1d2RyGSGVfq3VYDJ-O81nnyY";
-        let expected_out = "f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY.tvg9X8xCoUuU_vK9qNR1d2RyGSGVfq3VYDJ-O81nnyY\n";
         static SERVER_ARGS: LazyLock<arg::ServerArgs> = LazyLock::new(|| arg::ServerArgs {
             tls_acme_challenge_helper: Some("echo".to_string()),
             ..Default::default()
         });
-        let result = create_challenge_file(test_key, &SERVER_ARGS).await;
+        let test_key = "f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY.tvg9X8xCoUuU_vK9qNR1d2RyGSGVfq3VYDJ-O81nnyY";
+        let expected_out = "f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY.tvg9X8xCoUuU_vK9qNR1d2RyGSGVfq3VYDJ-O81nnyY\n";
+        let result = create_challenge_file(test_key, &SERVER_ARGS);
         let child = result.unwrap();
         let out = child.wait_with_output().await.unwrap();
         assert!(out.status.success());

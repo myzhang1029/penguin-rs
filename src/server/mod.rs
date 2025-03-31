@@ -70,7 +70,7 @@ async fn check_start_tls(args: &'static ServerArgs) -> Result<Option<TlsIdentity
     if !args.tls_domain.is_empty() {
         trace!("Enabling TLS using ACME");
         let acme_client = acme::Client::populate_or_get(args).await?;
-        let tls_config = acme_client.get_tls_config_spawn_renewal().await?;
+        let tls_config = acme_client.get_tls_config_spawn_renewal();
         return Ok(Some(tls_config));
     }
     trace!("TLS is not enabled");
