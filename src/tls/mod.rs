@@ -109,3 +109,72 @@ pub async fn reload_tls_identity_from_rcgen_pem(
     identity.store(Arc::new(new));
     Ok(())
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use rcgen::generate_simple_self_signed;
+    use rcgen::CertificateParams;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    #[cfg(not(all(any(target_os = "macos", target_os = "windows"), feature = "nativetls")))]
+    async fn test_server_config_reload() {
+        let tmpdir = tempdir().unwrap();
+        let key_path = tmpdir.path().join("key.pem");
+        let cert_path = tmpdir.path().join("cert.pem");
+        let custom_crt = generate_simple_self_signed(vec!["example.com".into()]).unwrap();
+        let crt = custom_crt.cert.pem();
+        let crt_key = custom_crt.key_pair.serialize_pem();
+        tokio::fs::write(&cert_path, crt).await.unwrap();
+        tokio::fs::write(&key_path, crt_key).await.unwrap();
+        let identity = make_tls_identity(
+            cert_path.to_str().unwrap(),
+            key_path.to_str().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+        let old_identity = identity.load().clone();
+        let custom_crt = generate_simple_self_signed(vec!["2.example.com".into()]).unwrap();
+        let crt = custom_crt.cert.pem();
+        let crt_key = custom_crt.key_pair.serialize_pem();
+        tokio::fs::write(&cert_path, crt).await.unwrap();
+        tokio::fs::write(&key_path, crt_key).await.unwrap();
+        reload_tls_identity(
+            &identity,
+            cert_path.to_str().unwrap(),
+            key_path.to_str().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+        let new_identity = identity.load().clone();
+        // Better comparison?
+        assert_ne!(format!("{old_identity:?}"), format!("{new_identity:?}"));
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "acme")]
+    #[cfg(not(all(any(target_os = "macos", target_os = "windows"), feature = "nativetls")))]
+    async fn test_server_config_reload_from_rcgen_pem() {
+        let cert_params = CertificateParams::new(vec!["example.com".into()]).unwrap();
+        let keypair = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P384_SHA384).unwrap();
+        let custom_crt = cert_params.self_signed(&keypair).unwrap();
+        let crt = custom_crt.pem();
+        let identity = make_tls_identity_from_rcgen_pem(crt, keypair, None)
+            .await
+            .unwrap();
+        let old_identity = identity.load().clone();
+        let cert_params = CertificateParams::new(vec!["2.example.com".into()]).unwrap();
+        let keypair = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P384_SHA384).unwrap();
+        let custom_crt = cert_params.self_signed(&keypair).unwrap();
+        let crt = custom_crt.pem();
+        reload_tls_identity_from_rcgen_pem(&identity, crt, keypair, None)
+            .await
+            .unwrap();
+        let new_identity = identity.load().clone();
+        // Better comparison?
+        assert_ne!(format!("{old_identity:?}"), format!("{new_identity:?}"));
+    }
+}

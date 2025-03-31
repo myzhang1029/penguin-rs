@@ -179,14 +179,13 @@ async fn issue(
 
         // Execute the challenge helper to create the file
         let key_auth = order.key_authorization(http_challenge);
-        let cmd = create_challenge_file(
-            &http_challenge.token,
-            key_auth.as_str(),
-            server_args,
-        )?;
+        let cmd = create_challenge_file(&http_challenge.token, key_auth.as_str(), server_args)?;
         cmds.push(cmd);
         // Tell the server we are ready for the challenges
-        order.set_challenge_ready(&http_challenge.url).await.unwrap();
+        order
+            .set_challenge_ready(&http_challenge.url)
+            .await
+            .unwrap();
     }
     let order_cleanup = || async {
         // Clean up the challenge files by sending a newline and closing stdin
@@ -223,7 +222,12 @@ async fn issue(
             return Err(Error::OrderInvalid);
         }
     }
-    assert_eq!(order.state().status, OrderStatus::Ready);
+    // assert: All code paths should result status = Ready
+    assert_eq!(
+        order.state().status,
+        OrderStatus::Ready,
+        "Order status should be Ready (this is a bug)"
+    );
     let names = server_args.tls_domain.clone();
     let mut params: CertificateParams = CertificateParams::new(names.clone())?;
     params.distinguished_name = DistinguishedName::new();
@@ -255,11 +259,7 @@ mod test {
         let test_token = "f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY";
         let test_key_auth = "f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY.tvg9X8xCoUuU_vK9qNR1d2RyGSGVfq3VYDJ-O81nnyY";
         let expected_out = "f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY.tvg9X8xCoUuU_vK9qNR1d2RyGSGVfq3VYDJ-O81nnyY\n";
-        let result = create_challenge_file(
-            test_token,
-            test_key_auth,
-            &SERVER_ARGS,
-        );
+        let result = create_challenge_file(test_token, test_key_auth, &SERVER_ARGS);
         let child = result.unwrap();
         let out = child.wait_with_output().await.unwrap();
         assert!(out.status.success());
