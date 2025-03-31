@@ -254,7 +254,7 @@ mod test {
             ..Default::default()
         });
         let test_token = "f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY";
-        let test_key_auth = "tvg9X8xCoUuU_vK9qNR1d2RyGSGVfq3VYDJ-O81nnyY";
+        let test_key_auth = "f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY.tvg9X8xCoUuU_vK9qNR1d2RyGSGVfq3VYDJ-O81nnyY";
         let expected_out = "f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY.tvg9X8xCoUuU_vK9qNR1d2RyGSGVfq3VYDJ-O81nnyY\n";
         let result = create_challenge_file(
             test_token,
