@@ -75,7 +75,7 @@ tokio-console = ["console-subscriber"]
 # `parking_lot`'s deadlock detection in a separate thread
 deadlock-detection = ["parking_lot/deadlock_detection"]
 # obtaining certificate automatically using ACME protocol
-acme = ["instant-acme", "rcgen", "tokio/process"]
+acme = ["penguin-binary", "instant-acme", "rcgen", "tokio/process"]
 # `penguin` binary
 penguin-binary = [
     "arc-swap",

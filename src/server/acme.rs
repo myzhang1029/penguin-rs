@@ -140,7 +140,7 @@ async fn create_challenge_file(
         .arg(key)
         .kill_on_drop(true)
         .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
         .spawn()?;
     Ok(cmd)
 }
@@ -230,4 +230,27 @@ async fn issue(
         cmd.stdin;
     }
     Ok((private_key, cert_chain_pem))
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::arg;
+    use std::sync::LazyLock;
+
+    #[tokio::test]
+    async fn test_create_challenge_file() {
+        let test_key = "f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY.tvg9X8xCoUuU_vK9qNR1d2RyGSGVfq3VYDJ-O81nnyY";
+        let expected_out = "f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY.tvg9X8xCoUuU_vK9qNR1d2RyGSGVfq3VYDJ-O81nnyY\n";
+        static SERVER_ARGS: LazyLock<arg::ServerArgs> = LazyLock::new(|| arg::ServerArgs {
+            tls_acme_challenge_helper: Some("echo".to_string()),
+            ..Default::default()
+        });
+        let result = create_challenge_file(test_key, &SERVER_ARGS).await;
+        let child = result.unwrap();
+        let out = child.wait_with_output().await.unwrap();
+        assert!(out.status.success());
+        let stdout = String::from_utf8(out.stdout).unwrap();
+        assert_eq!(stdout, expected_out);
+    }
 }
