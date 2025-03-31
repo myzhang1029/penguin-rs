@@ -9,6 +9,8 @@ use http::{
     uri::{Authority, PathAndQuery, Scheme},
     HeaderValue, Uri,
 };
+#[cfg(feature = "acme")]
+use instant_acme::LetsEncrypt;
 use std::{ops::Deref, str::FromStr, sync::OnceLock};
 use thiserror::Error;
 
@@ -50,7 +52,7 @@ pub enum Commands {
 
 // Descriptions are mainly directly stripped from myzhang1029/penguin
 /// Penguin client arguments.
-#[derive(Args, Debug)]
+#[derive(Args, Debug, Default)]
 pub struct ClientArgs {
     /// URL to the penguin server.
     pub server: ServerUrl,
@@ -178,7 +180,7 @@ pub struct ClientArgs {
 }
 
 /// Penguin server arguments.
-#[derive(Args, Debug)]
+#[derive(Args, Debug, Default)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct ServerArgs {
     /// Defines the HTTP listening host - the network interface.
@@ -232,13 +234,27 @@ pub struct ServerArgs {
     /// Automatically obtain a TLS certificate for the specified domain using
     /// ACME. We only support the TLS-ALPN-01 challenge type and requires
     /// port 443 to be available.
-    #[arg(long, conflicts_with_all = ["tls_key", "tls_cert"])]
+    #[arg(long, conflicts_with_all = ["tls_key", "tls_cert"], requires = "tls_acme_email", requires = "tls_acme_accept_tos")]
     pub tls_domain: Vec<String>,
     #[cfg(feature = "acme")]
     /// Directory to store ACME account and certificate data. If not specified,
     /// it will default to "$HOME/.cache/penguin/acme".
-    #[arg(long, default_value_t = default_acme_cache_dir(), requires = "tls_domain")]
+    #[arg(long, default_value_t = default_acme_cache_dir())]
     pub tls_acme_dir: String,
+    #[cfg(feature = "acme")]
+    /// ACME directory URL to use for the ACME challenge.
+    /// Defaults to the Let's Encrypt production URL.
+    #[arg(long, default_value = LetsEncrypt::Production.url())]
+    pub tls_acme_url: String,
+    #[cfg(feature = "acme")]
+    /// Email address to use for ACME account registration.
+    #[arg(long)]
+    pub tls_acme_email: Option<String>,
+    #[cfg(feature = "acme")]
+    /// Accept the ACME terms of service. You must expressly accept the terms of
+    /// service by setting this flag to true.
+    #[arg(long)]
+    pub tls_acme_accept_tos: bool,
     /// Timeout for TLS handshake and HTTP data in seconds.
     /// Setting to 0 disables timeouts.
     #[arg(long, default_value = "60")]
@@ -280,7 +296,7 @@ pub enum ServerUrlError {
 }
 
 /// Server URL
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
 pub struct ServerUrl(pub Uri);
 
 impl FromStr for ServerUrl {
@@ -417,7 +433,7 @@ impl FromStr for Header {
 }
 
 /// An optional duration
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct OptionalDuration(Option<std::time::Duration>);
 
 impl OptionalDuration {
@@ -723,6 +739,33 @@ mod test {
 
     #[cfg(feature = "acme")]
     #[test]
+    fn test_server_args_must_agree_tos() {
+        let result = PenguinCli::try_parse_from([
+            "penguin",
+            "server",
+            "--host",
+            "example.com",
+            "--port",
+            "1234",
+            "--host",
+            "2.example.com",
+            "--tls-domain",
+            "example.com",
+            "--tls-domain",
+            "example.net",
+            "--tls-acme-email",
+            "test@example.com",
+            "--timeout",
+            "50",
+        ]);
+        assert!(
+            result.is_err(),
+            "Expected an error due to missing --tls-acme-accept-tos"
+        );
+    }
+
+    #[cfg(feature = "acme")]
+    #[test]
     fn test_server_args_acme_full() {
         let args = PenguinCli::parse_from([
             "penguin",
@@ -748,6 +791,9 @@ mod test {
             "example.net",
             "--tls-acme-dir",
             "/tmp/penguin-acme",
+            "--tls-acme-email",
+            "test@example.com",
+            "--tls-acme-accept-tos",
             "--timeout",
             "50",
         ]);

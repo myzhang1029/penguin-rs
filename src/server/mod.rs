@@ -226,33 +226,13 @@ fn assert_send<'u, R>(
 
 #[cfg(test)]
 mod test {
-    use crate::arg::OptionalDuration;
-
     use super::*;
 
     fn get_server_args(host: Vec<String>, port: Vec<u16>) -> ServerArgs {
         ServerArgs {
             host,
             port,
-            backend: None,
-            obfs: false,
-            not_found_resp: String::new(),
-            ws_psk: None,
-            tls_key: None,
-            tls_cert: None,
-            tls_ca: None,
-            #[cfg(feature = "acme")]
-            tls_domain: vec![],
-            #[cfg(feature = "acme")]
-            tls_acme_dir: String::new(),
-            timeout: OptionalDuration::NONE,
-            _pid: false,
-            _socks5: false,
-            _reverse: false,
-            _keepalive: 0,
-            _auth: None,
-            _authfile: None,
-            _key: None,
+            ..Default::default()
         }
     }
 
