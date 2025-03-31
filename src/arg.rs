@@ -228,6 +228,17 @@ pub struct ServerArgs {
     /// instead of the system roots. This is commonly used to implement mutual-TLS.
     #[arg(long)]
     pub tls_ca: Option<String>,
+    #[cfg(feature = "acme")]
+    /// Automatically obtain a TLS certificate for the specified domain using
+    /// ACME. We only support the TLS-ALPN-01 challenge type and requires
+    /// port 443 to be available.
+    #[arg(long, conflicts_with_all = ["tls_key", "tls_cert"])]
+    pub tls_domain: Vec<String>,
+    #[cfg(feature = "acme")]
+    /// Directory to store ACME account and certificate data. If not specified,
+    /// it will default to "$HOME/.cache/penguin/acme".
+    #[arg(long, default_value_t = default_acme_cache_dir(), requires = "tls_domain")]
+    pub tls_acme_dir: String,
     /// Timeout for TLS handshake and HTTP data in seconds.
     /// Setting to 0 disables timeouts.
     #[arg(long, default_value = "60")]
@@ -442,10 +453,27 @@ impl FromStr for OptionalDuration {
     }
 }
 
+#[cfg(feature = "acme")]
+fn default_acme_cache_dir() -> String {
+    std::env::var("HOME").map_or_else(
+        |_| "/tmp/penguin/acme".to_string(),
+        |home| format!("{home}/.cache/penguin/acme"),
+    )
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
     use crate::parse_remote::{LocalSpec, Protocol, RemoteSpec};
+
+    #[cfg(feature = "acme")]
+    #[test]
+    fn test_default_acme_cache_dir() {
+        std::env::set_var("HOME", "/tmp/penguin");
+        assert_eq!(default_acme_cache_dir(), "/tmp/penguin/.cache/penguin/acme");
+        std::env::remove_var("HOME");
+        assert_eq!(default_acme_cache_dir(), "/tmp/penguin/acme");
+    }
 
     #[test]
     fn test_serverurl_fromstr() {
@@ -690,6 +718,56 @@ mod test {
         }
     }
 
+    #[cfg(feature = "acme")]
+    #[test]
+    fn test_server_args_acme_full() {
+        let args = PenguinCli::parse_from([
+            "penguin",
+            "server",
+            "--host",
+            "example.com",
+            "--port",
+            "1234",
+            "--host",
+            "2.example.com",
+            "--port",
+            "5678",
+            "--backend",
+            "https://example.com",
+            "--obfs",
+            "--404-resp",
+            "404",
+            "--ws-psk",
+            "avocado",
+            "--tls-domain",
+            "example.com",
+            "--tls-domain",
+            "example.net",
+            "--tls-acme-dir",
+            "/tmp/penguin-acme",
+            "--timeout",
+            "50",
+        ]);
+        assert!(matches!(args.subcommand, Commands::Server(_)));
+        if let Commands::Server(args) = args.subcommand {
+            assert_eq!(args.host, ["example.com", "2.example.com"]);
+            assert_eq!(args.port, [1234, 5678]);
+            assert_eq!(
+                args.backend,
+                Some(BackendUrl::from_str("https://example.com").unwrap())
+            );
+            assert!(args.obfs);
+            assert_eq!(args.not_found_resp, "404");
+            assert_eq!(args.ws_psk, Some(HeaderValue::from_static("avocado")));
+            assert_eq!(args.tls_key, None);
+            assert_eq!(args.tls_cert, None);
+            assert_eq!(args.tls_domain, ["example.com", "example.net"]);
+            assert_eq!(args.tls_acme_dir, "/tmp/penguin-acme");
+            assert_eq!(args.tls_ca, None);
+            assert_eq!(args.timeout, OptionalDuration::from_secs(50));
+        }
+    }
+
     #[test]
     fn test_server_args_full() {
         let args = PenguinCli::parse_from([
@@ -733,6 +811,10 @@ mod test {
             assert_eq!(args.tls_key, Some("key.pem".to_string()));
             assert_eq!(args.tls_cert, Some("cert.pem".to_string()));
             assert_eq!(args.tls_ca, Some("ca.pem".to_string()));
+            #[cfg(feature = "acme")]
+            assert_eq!(args.tls_domain, Vec::<String>::new());
+            #[cfg(feature = "acme")]
+            assert_eq!(args.tls_acme_dir, default_acme_cache_dir());
             assert_eq!(args.timeout, OptionalDuration::from_secs(50));
         }
     }

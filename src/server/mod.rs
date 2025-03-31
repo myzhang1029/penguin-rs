@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
+#[cfg(feature = "acme")]
+mod acme;
 mod forwarder;
 mod service;
 mod websocket;
@@ -239,6 +241,10 @@ mod test {
             tls_key: None,
             tls_cert: None,
             tls_ca: None,
+            #[cfg(feature = "acme")]
+            tls_domain: vec![],
+            #[cfg(feature = "acme")]
+            tls_acme_dir: String::new(),
             timeout: OptionalDuration::NONE,
             _pid: false,
             _socks5: false,

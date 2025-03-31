@@ -29,6 +29,10 @@ fn make_server_args(host: &str, port: u16) -> arg::ServerArgs {
         tls_ca: None,
         tls_cert: None,
         tls_key: None,
+        #[cfg(feature = "acme")]
+        tls_domain: vec![],
+        #[cfg(feature = "acme")]
+        tls_acme_dir: String::new(),
         // Very short timeout for testing purposes.
         timeout: OptionalDuration::from_secs(2),
         _pid: false,
