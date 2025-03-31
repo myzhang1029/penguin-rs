@@ -8,7 +8,7 @@ use instant_acme::{
 use rcgen::{CertificateParams, DistinguishedName, KeyPair};
 use std::sync::OnceLock;
 use tokio::process::Child;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 pub static ACME_CLIENT: OnceLock<Client> = OnceLock::new();
 
@@ -135,6 +135,7 @@ fn create_challenge_file(
         .tls_acme_challenge_helper
         .as_ref()
         .expect("Challenge helper missing (this is a bug)");
+    debug!("Executing challenge helper: {helper} {token} {key}");
     let cmd = tokio::process::Command::new(helper)
         .arg(token)
         .arg(key)
@@ -163,7 +164,7 @@ async fn issue(
     assert!(matches!(order.state().status, OrderStatus::Pending));
     let authorizations = order.authorizations().await?;
     // Save the commands to terminate them after we are done
-    let mut cmd_url: Vec<(Child, &String)> = Vec::with_capacity(authorizations.len());
+    let mut cmds: Vec<Child> = Vec::with_capacity(authorizations.len());
     for auth in &authorizations {
         match auth.status {
             AuthorizationStatus::Pending => {}
@@ -182,12 +183,17 @@ async fn issue(
 
         // Execute the challenge helper to create the file
         let cmd = create_challenge_file(&http_challenge.token, server_args)?;
-        cmd_url.push((cmd, &http_challenge.url));
+        cmds.push(cmd);
+        // Tell the server we are ready for the challenges
+        order.set_challenge_ready(&http_challenge.url).await.unwrap();
     }
-    // Tell the server we are ready for the challenges
-    for (_, url) in &cmd_url {
-        order.set_challenge_ready(url).await.unwrap();
-    }
+    let order_cleanup = || async {
+        // Clean up the challenge files by closing their stdin
+        for mut cmd in cmds {
+            let _ = cmd.stdin.take();
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    };
     // Back off until the order becomes ready or invalid
     let mut wait_time = 5;
     let mut tries = 0;
@@ -199,6 +205,7 @@ async fn issue(
             OrderStatus::Ready => break,
             OrderStatus::Invalid => {
                 error!("Order became invalid");
+                order_cleanup().await;
                 return Err(Error::OrderInvalid);
             }
             _ => {
@@ -210,6 +217,7 @@ async fn issue(
     }
     if order.state().status != OrderStatus::Ready {
         error!("Order did not become ready after 10 attempts");
+        order_cleanup().await;
         return Err(Error::OrderInvalid);
     }
     let names = server_args.tls_domain.clone();
@@ -224,10 +232,7 @@ async fn issue(
             None => tokio::time::sleep(std::time::Duration::from_secs(1)).await,
         }
     };
-    // Clean up the challenge files by closing their stdin
-    for (mut cmd, _) in cmd_url {
-        let _ = cmd.stdin.take();
-    }
+    order_cleanup().await;
     Ok((private_key, cert_chain_pem))
 }
 
