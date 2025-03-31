@@ -306,6 +306,8 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
+    use std::str::FromStr;
+    use std::sync::LazyLock;
 
     type EmptyBody = http_body_util::Empty<Bytes>;
 
@@ -372,10 +374,8 @@ mod test {
     #[cfg(any(feature = "tests-real-internet4", feature = "tests-real-internet6"))]
     #[tokio::test]
     async fn test_backend() {
-        use once_cell::sync::Lazy;
-        use std::str::FromStr;
-        static BACKEND: Lazy<BackendUrl> =
-            Lazy::new(|| BackendUrl::from_str("http://httpbin.org").unwrap());
+        static BACKEND: LazyLock<BackendUrl> =
+            LazyLock::new(|| BackendUrl::from_str("http://httpbin.org").unwrap());
         // Test that the backend is actually working
         let state = State::new(
             Some(&BACKEND),
@@ -413,10 +413,8 @@ mod test {
     #[tokio::test]
     async fn test_backend_tls() {
         // Check that this test makes sense: remove TLS deps of `reqwest`
-        use once_cell::sync::Lazy;
-        use std::str::FromStr;
-        static BACKEND: Lazy<BackendUrl> =
-            Lazy::new(|| BackendUrl::from_str("https://httpbin.org").unwrap());
+        static BACKEND: LazyLock<BackendUrl> =
+            LazyLock::new(|| BackendUrl::from_str("https://httpbin.org").unwrap());
         // Test that the backend is actually working
         let state = State::new(
             Some(&BACKEND),

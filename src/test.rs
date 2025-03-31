@@ -1,7 +1,7 @@
 use super::*;
 use crate::{arg::ServerUrl, parse_remote::Remote};
 #[allow(unused_imports)]
-use once_cell::sync::{Lazy, OnceCell};
+use std::sync::{LazyLock, OnceLock};
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     str::FromStr,
@@ -79,9 +79,10 @@ async fn make_server_cert_ecdsa() -> TempDir {
 
 #[tokio::test]
 async fn test_it_works() {
-    static SERVER_ARGS: Lazy<arg::ServerArgs> = Lazy::new(|| make_server_args("127.0.0.1", 30554));
+    static SERVER_ARGS: LazyLock<arg::ServerArgs> =
+        LazyLock::new(|| make_server_args("127.0.0.1", 30554));
 
-    static CLIENT_ARGS: Lazy<arg::ClientArgs> = Lazy::new(|| {
+    static CLIENT_ARGS: LazyLock<arg::ClientArgs> = LazyLock::new(|| {
         make_client_args(
             "127.0.0.1",
             30554,
@@ -113,7 +114,8 @@ async fn test_it_works() {
 
 #[tokio::test]
 async fn test_server_timeout() {
-    static SERVER_ARGS: Lazy<arg::ServerArgs> = Lazy::new(|| make_server_args("::1", 22183));
+    static SERVER_ARGS: LazyLock<arg::ServerArgs> =
+        LazyLock::new(|| make_server_args("::1", 22183));
     let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
     tokio::time::sleep(Duration::from_secs(2)).await;
     // Connect to the socket and do nothing. Make sure the socket is closed
@@ -132,9 +134,10 @@ async fn test_server_timeout() {
 
 #[tokio::test]
 async fn test_server_timeout_does_not_interrupt_ws() {
-    static SERVER_ARGS: Lazy<arg::ServerArgs> = Lazy::new(|| make_server_args("::1", 23224));
+    static SERVER_ARGS: LazyLock<arg::ServerArgs> =
+        LazyLock::new(|| make_server_args("::1", 23224));
 
-    static CLIENT_ARGS: Lazy<arg::ClientArgs> = Lazy::new(|| {
+    static CLIENT_ARGS: LazyLock<arg::ClientArgs> = LazyLock::new(|| {
         make_client_args(
             "[::1]",
             23224,
@@ -167,9 +170,10 @@ async fn test_server_timeout_does_not_interrupt_ws() {
 
 #[tokio::test]
 async fn test_it_works_v6() {
-    static SERVER_ARGS: Lazy<arg::ServerArgs> = Lazy::new(|| make_server_args("::1", 27254));
+    static SERVER_ARGS: LazyLock<arg::ServerArgs> =
+        LazyLock::new(|| make_server_args("::1", 27254));
 
-    static CLIENT_ARGS: Lazy<arg::ClientArgs> = Lazy::new(|| {
+    static CLIENT_ARGS: LazyLock<arg::ClientArgs> = LazyLock::new(|| {
         make_client_args(
             "[::1]",
             27254,
@@ -203,8 +207,8 @@ async fn test_it_works_v6() {
 #[tokio::test]
 #[cfg(not(all(feature = "nativetls", any(target_os = "macos", target_os = "windows"))))]
 async fn test_it_works_tls_simple() {
-    static SERVER_ARGS: OnceCell<arg::ServerArgs> = OnceCell::new();
-    static CLIENT_ARGS: Lazy<arg::ClientArgs> = Lazy::new(|| arg::ClientArgs {
+    static SERVER_ARGS: OnceLock<arg::ServerArgs> = OnceLock::new();
+    static CLIENT_ARGS: LazyLock<arg::ClientArgs> = LazyLock::new(|| arg::ClientArgs {
         server: ServerUrl::from_str("wss://127.0.0.1:20353/ws").unwrap(),
         remote: vec![Remote::from_str("127.0.0.1:24368:127.0.0.1:12034").unwrap()],
         ws_psk: None,
@@ -254,8 +258,9 @@ async fn test_it_works_tls_simple() {
 
 #[tokio::test]
 async fn test_socks5_connect_reliability_v4() {
-    static SERVER_ARGS: Lazy<arg::ServerArgs> = Lazy::new(|| make_server_args("127.0.0.1", 24895));
-    static CLIENT_ARGS: Lazy<arg::ClientArgs> = Lazy::new(|| {
+    static SERVER_ARGS: LazyLock<arg::ServerArgs> =
+        LazyLock::new(|| make_server_args("127.0.0.1", 24895));
+    static CLIENT_ARGS: LazyLock<arg::ClientArgs> = LazyLock::new(|| {
         make_client_args(
             "127.0.0.1",
             24895,
@@ -310,8 +315,9 @@ async fn test_socks5_connect_reliability_v4() {
 #[tokio::test]
 async fn test_socks5_connect_reliability_v6() {
     // "v6" means that the target server is IPv6, but the client here is IPv4 here to test their interaction.
-    static SERVER_ARGS: Lazy<arg::ServerArgs> = Lazy::new(|| make_server_args("127.0.0.1", 32233));
-    static CLIENT_ARGS: Lazy<arg::ClientArgs> = Lazy::new(|| {
+    static SERVER_ARGS: LazyLock<arg::ServerArgs> =
+        LazyLock::new(|| make_server_args("127.0.0.1", 32233));
+    static CLIENT_ARGS: LazyLock<arg::ClientArgs> = LazyLock::new(|| {
         make_client_args(
             "127.0.0.1",
             32233,
@@ -364,8 +370,9 @@ async fn test_socks5_connect_reliability_v6() {
 
 #[tokio::test]
 async fn test_socks5_udp_v4v4() {
-    static SERVER_ARGS: Lazy<arg::ServerArgs> = Lazy::new(|| make_server_args("127.0.0.1", 14119));
-    static CLIENT_ARGS: Lazy<arg::ClientArgs> = Lazy::new(|| {
+    static SERVER_ARGS: LazyLock<arg::ServerArgs> =
+        LazyLock::new(|| make_server_args("127.0.0.1", 14119));
+    static CLIENT_ARGS: LazyLock<arg::ClientArgs> = LazyLock::new(|| {
         make_client_args(
             "127.0.0.1",
             14119,
@@ -445,8 +452,9 @@ async fn test_socks5_udp_v4v4() {
 #[tokio::test]
 async fn test_socks5_udp_v4v6() {
     // The target server is IPv6, but the client here is IPv4 here to test their interaction.
-    static SERVER_ARGS: Lazy<arg::ServerArgs> = Lazy::new(|| make_server_args("127.0.0.1", 25347));
-    static CLIENT_ARGS: Lazy<arg::ClientArgs> = Lazy::new(|| {
+    static SERVER_ARGS: LazyLock<arg::ServerArgs> =
+        LazyLock::new(|| make_server_args("127.0.0.1", 25347));
+    static CLIENT_ARGS: LazyLock<arg::ClientArgs> = LazyLock::new(|| {
         make_client_args(
             "127.0.0.1",
             25347,
@@ -530,8 +538,9 @@ async fn test_socks5_udp_v4v6() {
 
 #[tokio::test]
 async fn test_socks5_udp_v6v6() {
-    static SERVER_ARGS: Lazy<arg::ServerArgs> = Lazy::new(|| make_server_args("::1", 31370));
-    static CLIENT_ARGS: Lazy<arg::ClientArgs> = Lazy::new(|| {
+    static SERVER_ARGS: LazyLock<arg::ServerArgs> =
+        LazyLock::new(|| make_server_args("::1", 31370));
+    static CLIENT_ARGS: LazyLock<arg::ClientArgs> = LazyLock::new(|| {
         make_client_args(
             "[::1]",
             31370,
@@ -613,8 +622,9 @@ async fn test_socks5_udp_v6v6() {
 
 #[tokio::test]
 async fn test_socks4_works() {
-    static SERVER_ARGS: Lazy<arg::ServerArgs> = Lazy::new(|| make_server_args("127.0.0.1", 10796));
-    static CLIENT_ARGS: Lazy<arg::ClientArgs> = Lazy::new(|| {
+    static SERVER_ARGS: LazyLock<arg::ServerArgs> =
+        LazyLock::new(|| make_server_args("127.0.0.1", 10796));
+    static CLIENT_ARGS: LazyLock<arg::ClientArgs> = LazyLock::new(|| {
         make_client_args(
             "127.0.0.1",
             10796,
@@ -661,8 +671,9 @@ async fn test_socks4_works() {
 #[cfg(feature = "tests-real-internet4")]
 #[tokio::test]
 async fn test_it_works_dns_v4() {
-    static SERVER_ARGS: Lazy<arg::ServerArgs> = Lazy::new(|| make_server_args("127.0.0.1", 17706));
-    static CLIENT_ARGS: Lazy<arg::ClientArgs> = Lazy::new(|| {
+    static SERVER_ARGS: LazyLock<arg::ServerArgs> =
+        LazyLock::new(|| make_server_args("127.0.0.1", 17706));
+    static CLIENT_ARGS: LazyLock<arg::ClientArgs> = LazyLock::new(|| {
         make_client_args(
             "127.0.0.1",
             17706,
@@ -691,8 +702,9 @@ async fn test_it_works_dns_v4() {
 #[cfg(feature = "tests-real-internet6")]
 #[tokio::test]
 async fn test_it_works_dns_v6() {
-    static SERVER_ARGS: Lazy<arg::ServerArgs> = Lazy::new(|| make_server_args("[::1]", 16037));
-    static CLIENT_ARGS: Lazy<arg::ClientArgs> = Lazy::new(|| {
+    static SERVER_ARGS: LazyLock<arg::ServerArgs> =
+        LazyLock::new(|| make_server_args("[::1]", 16037));
+    static CLIENT_ARGS: LazyLock<arg::ClientArgs> = LazyLock::new(|| {
         make_client_args(
             "[::1]",
             16037,

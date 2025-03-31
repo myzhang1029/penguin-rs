@@ -9,8 +9,7 @@ use http::{
     uri::{Authority, PathAndQuery, Scheme},
     HeaderValue, Uri,
 };
-use once_cell::sync::OnceCell;
-use std::{ops::Deref, str::FromStr};
+use std::{ops::Deref, str::FromStr, sync::OnceLock};
 use thiserror::Error;
 
 #[derive(Parser, Debug)]
@@ -26,7 +25,7 @@ pub struct PenguinCli {
 }
 
 /// Global args to avoid cloning
-pub static ARGS: OnceCell<PenguinCli> = OnceCell::new();
+pub static ARGS: OnceLock<PenguinCli> = OnceLock::new();
 
 impl PenguinCli {
     pub fn get_global() -> &'static Self {
