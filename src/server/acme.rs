@@ -216,7 +216,7 @@ async fn issue(
     let csr = params.serialize_request(&private_key)?;
     order.finalize(csr.der()).await?;
     let cert_chain_pem = loop {
-        match order.certificate().await.unwrap() {
+        match order.certificate().await? {
             Some(cert_chain_pem) => break cert_chain_pem,
             None => tokio::time::sleep(std::time::Duration::from_secs(1)).await,
         }
