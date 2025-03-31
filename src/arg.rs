@@ -232,9 +232,9 @@ pub struct ServerArgs {
     pub tls_ca: Option<String>,
     #[cfg(feature = "acme")]
     /// Automatically obtain a TLS certificate for the specified domain using
-    /// ACME. We only support the TLS-ALPN-01 challenge type and requires
-    /// port 443 to be available.
-    #[arg(long, conflicts_with_all = ["tls_key", "tls_cert"], requires = "tls_acme_email", requires = "tls_acme_accept_tos")]
+    /// ACME. We only support the HTTP-01 challenge type and requires a helper
+    /// command specified in --tls-acme-challenge-helper.
+    #[arg(long, conflicts_with_all = ["tls_key", "tls_cert"], requires = "tls_acme_accept_tos", requires = "tls_acme_challenge_helper")]
     pub tls_domain: Vec<String>,
     #[cfg(feature = "acme")]
     /// ACME directory URL to use for the ACME challenge.
@@ -250,6 +250,17 @@ pub struct ServerArgs {
     /// service by setting this flag to true.
     #[arg(long)]
     pub tls_acme_accept_tos: bool,
+    #[cfg(feature = "acme")]
+    /// Command to run for the ACME HTTP-01 challenge. The arguments will be in
+    /// the form of:
+    /// <cmd> <token> <key>
+    /// Once the challenge is completed, stdin will be closed, and the command
+    /// should exit with 0 when this is detected.
+    /// The command should create a file at
+    /// /.well-known/acme-challenge/<token>
+    /// containing only <key>.
+    #[arg(long)]
+    pub tls_acme_challenge_helper: Option<String>,
     /// Timeout for TLS handshake and HTTP data in seconds.
     /// Setting to 0 disables timeouts.
     #[arg(long, default_value = "60")]
@@ -767,6 +778,8 @@ mod test {
             "--tls-acme-email",
             "test@example.com",
             "--tls-acme-accept-tos",
+            "--tls-acme-challenge-helper",
+            "echo",
             "--timeout",
             "50",
         ]);

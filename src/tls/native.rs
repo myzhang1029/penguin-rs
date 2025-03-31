@@ -14,6 +14,29 @@ pub async fn make_server_config(
     _client_ca_path: Option<&str>,
 ) -> Result<TlsIdentityInner, Error> {
     let identity = read_key_cert(key_path, cert_path).await?;
+    make_server_config_from_mem(identity, _client_ca_path).await
+}
+
+#[cfg(feature = "acme")]
+pub async fn make_server_config_from_rcgen_pem(
+    certs: String,
+    keypair: rcgen::KeyPair,
+    client_ca_path: Option<&str>,
+) -> Result<TlsIdentityInner, Error> {
+    let certs = Certificate::from_pem(&certs.into_bytes())?;
+    let identity = Identity::from_pkcs8(
+        &certs,
+        &keypair
+            .serialize_pem()
+            .map_err(|_| Error::PrivateKeyNotSupported)?,
+    )?;
+    make_server_config_from_mem(identity, client_ca_path).await
+}
+
+async fn make_server_config_from_mem(
+    identity: Identity,
+    _client_ca_path: Option<&str>,
+) -> Result<TlsIdentityInner, Error> {
     // TODO: support client CA (sfackler/rust-native-tls#161)
     let raw_acceptor = TlsAcceptor::builder(identity).build()?;
     Ok(raw_acceptor.into())

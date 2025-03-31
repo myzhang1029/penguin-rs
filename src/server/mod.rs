@@ -44,6 +44,9 @@ pub enum Error {
     #[error("TLS error: {0}")]
     #[cfg(feature = "nativetls")]
     NativeTls(#[from] tokio_native_tls::native_tls::Error),
+    #[cfg(feature = "acme")]
+    #[error(transparent)]
+    Acme(#[from] acme::Error),
 }
 
 /// Check if TLS is enabled.
@@ -65,7 +68,10 @@ async fn check_start_tls(args: &'static ServerArgs) -> Result<Option<TlsIdentity
     // `clap` ensures that tls-key or tls-domain are mutually exclusive.
     #[cfg(feature = "acme")]
     if !args.tls_domain.is_empty() {
-        // TODO
+        trace!("Enabling TLS using ACME");
+        let acme_client = acme::Client::populate_or_get(args).await?;
+        let tls_config = acme_client.get_tls_config_spawn_renewal().await?;
+        return Ok(Some(tls_config));
     }
     trace!("TLS is not enabled");
     Ok(None)
