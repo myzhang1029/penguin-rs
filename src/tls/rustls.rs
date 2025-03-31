@@ -215,6 +215,7 @@ impl ServerCertVerifier for EmptyVerifier {
 #[cfg(test)]
 mod test {
     use super::*;
+    use rcgen::CertificateParams;
     use rcgen::generate_simple_self_signed;
     use tempfile::tempdir;
 
@@ -317,5 +318,18 @@ mod test {
             config.alpn_protocols,
             vec![b"h2".to_vec(), b"http/1.1".to_vec()]
         );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "acme")]
+    async fn test_make_server_config_from_rcgen_pem() {
+        let cert_params = CertificateParams::new(vec!["example.com".into()]).unwrap();
+        let keypair = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P384_SHA384).unwrap();
+        let custom_crt = cert_params.self_signed(&keypair).unwrap();
+        let crt = custom_crt.pem();
+
+        let result = make_server_config_from_rcgen_pem(crt, keypair, None).await;
+
+        assert!(result.is_ok());
     }
 }

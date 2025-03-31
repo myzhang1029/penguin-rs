@@ -66,6 +66,8 @@ async fn read_key_cert(key_path: &str, cert_path: &str) -> Result<Identity, Erro
 
 #[cfg(test)]
 mod test {
+    use super::*;
+
     // `native_tls` on macOS and Windows doesn't support reading Ed25519 nor ECDSA-based certificates.
     #[tokio::test]
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -86,5 +88,18 @@ mod test {
         read_key_cert(key_path.to_str().unwrap(), cert_path.to_str().unwrap())
             .await
             .unwrap();
+    }
+    #[tokio::test]
+    #[cfg(feature = "acme")]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    async fn test_make_server_config_from_rcgen_pem() {
+        let cert_params = CertificateParams::new(vec!["example.com".into()]).unwrap();
+        let keypair = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P384_SHA384).unwrap();
+        let custom_crt = cert_params.self_signed(&keypair).unwrap();
+        let crt = custom_crt.pem();
+
+        let result = make_server_config_from_rcgen_pem(crt, keypair, None).await;
+
+        assert!(result.is_ok());
     }
 }
