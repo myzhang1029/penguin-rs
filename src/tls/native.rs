@@ -23,13 +23,7 @@ pub async fn make_server_config_from_rcgen_pem(
     keypair: rcgen::KeyPair,
     client_ca_path: Option<&str>,
 ) -> Result<TlsIdentityInner, Error> {
-    let certs = Certificate::from_pem(&certs.into_bytes())?;
-    let identity = Identity::from_pkcs8(
-        &certs,
-        &keypair
-            .serialize_pem()
-            .map_err(|_| Error::PrivateKeyNotSupported)?,
-    )?;
+    let identity = Identity::from_pkcs8(certs.as_bytes(), &keypair.serialize_pem().as_bytes())?;
     make_server_config_from_mem(identity, client_ca_path).await
 }
 
