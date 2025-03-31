@@ -168,7 +168,10 @@ async fn issue(
         match auth.status {
             AuthorizationStatus::Pending => {}
             AuthorizationStatus::Valid => continue,
-            _ => unimplemented!("Unexpected authorization status: {:?}", auth.status),
+            _ => {
+                error!("Invalid authorization status: {:?}", auth.status);
+                return Err(Error::OrderInvalid);
+            }
         }
         // Find the HTTP-01 challenge
         let http_challenge = auth
