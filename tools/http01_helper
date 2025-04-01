@@ -1,0 +1,7 @@
+#!/bin/sh
+WEBROOT=/var/www/html
+trap "rm -f '$WEBROOT/.well-known/acme-challenge/$1'" EXIT
+mkdir -p "$WEBROOT/.well-known/acme-challenge"
+echo "$2" | tee "$WEBROOT/.well-known/acme-challenge/$1"
+read -r _
+rm "$WEBROOT/.well-known/acme-challenge/$1"
