@@ -293,6 +293,8 @@ mod test {
     use http_body_util::BodyExt;
     use tempfile::tempdir;
     use tokio::io::AsyncReadExt;
+    #[cfg(feature = "tests-acme-has-pebble")]
+    use tokio::{io::AsyncWriteExt, net::TcpListener};
 
     const TEST_KEY_AUTH: &str =
         "f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY.tvg9X8xCoUuU_vK9qNR1d2RyGSGVfq3VYDJ-O81nnyY";
@@ -563,12 +565,56 @@ mod test {
     #[cfg(not(target_os = "windows"))]
     #[tokio::test]
     async fn test_issue() {
-        let script_path = format!("{}/tools/http01_socat_helper",env!("CARGO_MANIFEST_DIR"));
+        let script_path = format!(
+            "{}/.github/workflows/http01_helper_for_test.sh",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let tmpdir = tempdir().unwrap();
+        let actual_path = tmpdir.path().join("http01_helper");
+        tokio::fs::copy(&script_path, &actual_path).await.unwrap();
+        let http_server_task = tokio::spawn(async move {
+            let listener = TcpListener::bind("localhost:5002").await.unwrap();
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buf = [0; 1024];
+                let n = socket.read(&mut buf).await.unwrap();
+                let request = String::from_utf8_lossy(&buf[..n]);
+                // Extract path from the request
+                if let Some(path) = request.split_whitespace().nth(1).and_then(|path| {
+                    if path.starts_with("/") {
+                        Some(&path[1..])
+                    } else {
+                        None
+                    }
+                }) {
+                    let full_path = tmpdir.path().join(path);
+                    if full_path.exists() {
+                        let content = tokio::fs::read_to_string(&full_path)
+                            .await
+                            .unwrap_or_default();
+                        let response = format!("HTTP/1.0 200 OK\r\n\r\n{content}");
+                        socket.write_all(response.as_bytes()).await.unwrap();
+                    } else {
+                        socket
+                            .write_all("HTTP/1.0 404 Not Found\r\n\r\n".as_bytes())
+                            .await
+                            .unwrap();
+                    }
+                } else {
+                    error!("Failed to parse request: {request}");
+                    socket
+                        .write_all("HTTP/1.0 400 Bad Request\r\n\r\n".as_bytes())
+                        .await
+                        .unwrap();
+                }
+            }
+        });
+
         let server_args = ServerArgs {
             tls_domain: vec!["localhost".to_string()],
             tls_acme_accept_tos: true,
             tls_acme_url: TEST_PEBBLE_URL.to_string(),
-            tls_acme_challenge_helper: Some(std::path::PathBuf::from(script_path).into_os_string()),
+            tls_acme_challenge_helper: Some(std::path::PathBuf::from(actual_path).into_os_string()),
             ..Default::default()
         };
         let (account, _cred) = Account::create_with_http(
@@ -586,5 +632,6 @@ mod test {
         let (keypair, cert) = issue(&account, &server_args).await.unwrap();
         assert!(!cert.is_empty());
         assert!(!keypair.serialize_pem().is_empty());
+        http_server_task.abort();
     }
 }

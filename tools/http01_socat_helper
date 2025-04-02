@@ -1,25 +1,14 @@
 #!/bin/sh
 
-# Port 5002 for pebble testing. Change to 80 for production use.
-port=5002
+port=80
 content="$2"
 len="${#content}"
 
 if [ "$1" = "create" ]; then
-    socat TCP4-LISTEN:$port,crlf,reuseaddr,fork SYSTEM:"sleep 1; echo 'HTTP/1.0 200 OK'; echo 'Content-Length: $len'; echo; printf '%s' '$content'" &
-    pid=$!
-    echo "$pid" > "/tmp/http01_socat_helper$content.pid4"
-    socat TCP6-LISTEN:$port,crlf,reuseaddr,fork SYSTEM:"sleep 1; echo 'HTTP/1.0 200 OK'; echo 'Content-Length: $len'; echo; printf '%s' '$content'" &
+    socat TCP-LISTEN:$port,crlf,reuseaddr,fork SYSTEM:"sleep 1; echo 'HTTP/1.0 200 OK'; echo 'Content-Length: $len'; echo; printf '%s' '$content'" &
     pid=$!
     echo "$pid" > "/tmp/http01_socat_helper$content.pid6"
 elif [ "$1" = "remove" ]; then
-    if [ -f "/tmp/http01_socat_helper$content.pid4" ]; then
-        pid=$(cat "/tmp/http01_socat_helper$content.pid4")
-        rm -f "/tmp/http01_socat_helper$content.pid4"
-        if [ -n "$pid" ]; then
-            kill "$pid" 2>/dev/null || true
-        fi
-    fi
     if [ -f "/tmp/http01_socat_helper$content.pid6" ]; then
         pid=$(cat "/tmp/http01_socat_helper$content.pid6")
         rm -f "/tmp/http01_socat_helper$content.pid6"
