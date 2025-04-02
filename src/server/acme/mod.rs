@@ -294,10 +294,13 @@ mod tests {
         let actual_path = tmpdir.path().join("http01_helper");
         tokio::fs::copy(&script_path, &actual_path).await.unwrap();
         let http_server_task = tokio::spawn(async move {
-            // GitHub's Linux runners seem to be unhappy with localhost
-            let listener = TcpListener::bind("127.0.0.1:5002").await.unwrap();
+            let listener4 = TcpListener::bind("127.0.0.1:5002").await.unwrap();
+            let listener6 = TcpListener::bind("[::1]:5002").await.unwrap();
             loop {
-                let (mut socket, _) = listener.accept().await.unwrap();
+                let (mut socket, _) = tokio::select! {
+                    res = listener4.accept() => res.unwrap(),
+                    res = listener6.accept() => res.unwrap(),
+                };
                 let mut buf = [0; 1024];
                 let n = socket.read(&mut buf).await.unwrap();
                 let request = String::from_utf8_lossy(&buf[..n]);
