@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use crate::parse_remote::Remote;
+#[cfg(feature = "acme")]
 use crate::server::acme::ChallengeHelper;
 use clap::{arg, command, ArgAction, Args, Parser, Subcommand};
 use http::{
