@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 #[cfg(feature = "acme")]
-mod acme;
+pub mod acme;
 mod forwarder;
 mod service;
 mod websocket;

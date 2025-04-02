@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use crate::parse_remote::Remote;
+use crate::server::acme::ChallengeHelper;
 use clap::{arg, command, ArgAction, Args, Parser, Subcommand};
 use http::{
     header::HeaderName,
@@ -259,7 +260,7 @@ pub struct ServerArgs {
     /// containing only xxxx.yyyy (the token) when `create` is passed, and remove
     /// the file when `remove` is passed. This is used by the ACME client to
     #[arg(long)]
-    pub tls_acme_challenge_helper: Option<std::ffi::OsString>,
+    pub tls_acme_challenge_helper: Option<ChallengeHelper>,
     /// Timeout for TLS handshake and HTTP data in seconds.
     /// Setting to 0 disables timeouts.
     #[arg(long, default_value = "60")]

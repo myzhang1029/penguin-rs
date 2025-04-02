@@ -1,14 +1,16 @@
+mod challenge_helper;
+
 use crate::{
     arg::ServerArgs,
     tls::{make_tls_identity_from_rcgen_pem, reload_tls_identity_from_rcgen_pem, TlsIdentity},
 };
-use instant_acme::{
-    Account, Authorization, AuthorizationStatus, ChallengeType, Identifier, NewAccount, NewOrder,
-    Order, OrderStatus,
-};
+use challenge_helper::Action;
+use instant_acme::{Account, AuthorizationStatus, Identifier, NewAccount, NewOrder, OrderStatus};
 use rcgen::{CertificateParams, DistinguishedName, KeyPair};
-use std::{ffi::OsStr, sync::OnceLock};
+use std::sync::OnceLock;
 use tracing::{debug, error, info};
+
+pub use challenge_helper::ChallengeHelper;
 
 pub static ACME_CLIENT: OnceLock<Client> = OnceLock::new();
 
@@ -126,92 +128,6 @@ impl Client {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-enum ChallengeFileAction {
-    /// Create a new challenge file
-    Create,
-    /// Remove the challenge file after use
-    Remove,
-}
-
-impl ChallengeFileAction {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Create => "create",
-            Self::Remove => "remove",
-        }
-    }
-}
-
-fn call_challenge_helper(
-    helper: &OsStr,
-    action: ChallengeFileAction,
-    key_authorization: &str,
-) -> Result<tokio::process::Child, Error> {
-    debug!("executing challenge helper: {helper:?} {key_authorization}");
-    let cmd = tokio::process::Command::new(helper)
-        .arg(action.as_str())
-        .arg(key_authorization)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .spawn()?;
-    Ok(cmd)
-}
-
-/// Process a single challenge
-async fn process_one_challenge<'a>(
-    auth: &'a Authorization,
-    order: &Order,
-    helper: &OsStr,
-) -> Result<Option<(String, &'a str)>, Error> {
-    // Find the HTTP-01 challenge for each pending authorization
-    let http_challenge = match auth.status {
-        AuthorizationStatus::Valid => return Ok(None), // Already valid, no need to process
-        AuthorizationStatus::Pending => auth
-            .challenges
-            .iter()
-            .find(|c| c.r#type == ChallengeType::Http01)
-            .ok_or(Error::NoHttp01ChallengeSupport),
-        _ => Err(Error::AuthInvalid(auth.status)),
-    }?;
-    let key_auth = order.key_authorization(http_challenge).as_str().to_string();
-    // Execute the challenge helper to create the file
-    call_challenge_helper(helper, ChallengeFileAction::Create, &key_auth)?
-        .wait()
-        .await
-        .map_err(Error::ChallengeHelperExecution)?;
-    debug!("processing for {key_auth} succeeded");
-    Ok(Some((key_auth, &http_challenge.url)))
-}
-
-/// Process challenge files for the HTTP-01 challenge
-async fn process_challenges(
-    authorizations: &[Authorization],
-    order: &mut instant_acme::Order,
-    helper: &OsStr,
-) -> Result<Vec<String>, Error> {
-    let mut executed_challenges = Vec::with_capacity(authorizations.len());
-    for auth in authorizations {
-        match process_one_challenge(auth, order, helper).await {
-            Ok(Some((key_auth, challenge_url))) => {
-                executed_challenges.push(key_auth);
-                // Tell the server we are ready for the challenges
-                order.set_challenge_ready(challenge_url).await?;
-            }
-            Ok(None) => {}
-            Err(e) => {
-                for key_auth in &executed_challenges {
-                    // Clean up any previously created challenge files on error
-                    let _ = call_challenge_helper(helper, ChallengeFileAction::Remove, key_auth);
-                }
-                error!("Failed to process challenge: {e}");
-                return Err(e);
-            }
-        }
-    }
-    Ok(executed_challenges)
-}
-
 /// Issues a new certificate using the ACME protocol.
 /// Returns (KeyPair, String) where KeyPair is the private key and String is the certificate chain in PEM format.
 async fn issue(account: &Account, server_args: &ServerArgs) -> Result<(KeyPair, String), Error> {
@@ -230,7 +146,9 @@ async fn issue(account: &Account, server_args: &ServerArgs) -> Result<(KeyPair, 
     };
     let mut order = account.new_order(&new_order).await?;
     let authorizations = order.authorizations().await?;
-    let keyauths = process_challenges(&authorizations, &mut order, helper).await?;
+    let keyauths = helper
+        .process_challenges(&authorizations, &mut order)
+        .await?;
     // Back off until the order becomes ready or invalid
     let mut backoff = crate::backoff::Backoff::new(
         std::time::Duration::from_secs(5),
@@ -240,7 +158,7 @@ async fn issue(account: &Account, server_args: &ServerArgs) -> Result<(KeyPair, 
     );
     let order_cleanup = || {
         for key_auth in &keyauths {
-            let _ = call_challenge_helper(helper, ChallengeFileAction::Remove, key_auth);
+            let _ = helper.call(Action::Remove, key_auth);
         }
     };
     while order.state().status != OrderStatus::Ready {
@@ -285,7 +203,7 @@ async fn issue(account: &Account, server_args: &ServerArgs) -> Result<(KeyPair, 
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     #[cfg(feature = "tests-acme-has-pebble")]
     use bytes::Bytes;
@@ -296,18 +214,18 @@ mod test {
     #[cfg(feature = "tests-acme-has-pebble")]
     use tokio::{io::AsyncWriteExt, net::TcpListener};
 
-    const TEST_KEY_AUTH: &str =
+    pub const TEST_KEY_AUTH: &str =
         "f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY.tvg9X8xCoUuU_vK9qNR1d2RyGSGVfq3VYDJ-O81nnyY";
-    const TEST_TOKEN: &str = "f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY";
+    pub const TEST_TOKEN: &str = "f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY";
     #[cfg(feature = "tests-acme-has-pebble")]
-    const TEST_PEBBLE_URL: &str = "https://localhost:14000/dir";
+    pub const TEST_PEBBLE_URL: &str = "https://localhost:14000/dir";
 
     #[cfg(feature = "tests-acme-has-pebble")]
     #[derive(Clone, Debug)]
-    struct IgnoreTlsHttpClient(reqwest::Client);
+    pub struct IgnoreTlsHttpClient(reqwest::Client);
     #[cfg(feature = "tests-acme-has-pebble")]
     impl IgnoreTlsHttpClient {
-        fn new() -> Self {
+        pub fn new() -> Self {
             Self(
                 reqwest::ClientBuilder::new()
                     .danger_accept_invalid_certs(true)
@@ -353,211 +271,6 @@ mod test {
                     body: Box::new(collected_body),
                 })
             })
-        }
-    }
-    #[tokio::test]
-    async fn test_call_challenge_helper_simple() {
-        let expected_out1 = "create f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY.tvg9X8xCoUuU_vK9qNR1d2RyGSGVfq3VYDJ-O81nnyY\n";
-        let result = call_challenge_helper(
-            OsStr::new("echo"),
-            ChallengeFileAction::Create,
-            TEST_KEY_AUTH,
-        );
-        let child = result.unwrap();
-        let out = child.wait_with_output().await.unwrap();
-        assert!(out.status.success());
-        let stdout = String::from_utf8(out.stdout).unwrap();
-        assert_eq!(stdout, expected_out1);
-        let expected_out2 = "remove f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY.tvg9X8xCoUuU_vK9qNR1d2RyGSGVfq3VYDJ-O81nnyY\n";
-        let result = call_challenge_helper(
-            OsStr::new("echo"),
-            ChallengeFileAction::Remove,
-            TEST_KEY_AUTH,
-        );
-        let child = result.unwrap();
-        let out = child.wait_with_output().await.unwrap();
-        assert!(out.status.success());
-        let stdout = String::from_utf8(out.stdout).unwrap();
-        assert_eq!(stdout, expected_out2);
-    }
-
-    #[tokio::test]
-    #[cfg(not(target_os = "windows"))]
-    async fn test_call_challenge_helper_example() {
-        let script_path = format!(
-            "{}/.github/workflows/http01_helper_for_test.sh",
-            env!("CARGO_MANIFEST_DIR")
-        );
-        let tmpdir = tempdir().unwrap();
-        let actual_path = tmpdir.path().join("http01_helper");
-        tokio::fs::copy(&script_path, &actual_path).await.unwrap();
-        call_challenge_helper(
-            actual_path.as_os_str(),
-            ChallengeFileAction::Create,
-            TEST_KEY_AUTH,
-        )
-        .unwrap()
-        .wait()
-        .await
-        .unwrap();
-        let expected_out = tmpdir
-            .path()
-            .join(".well-known/acme-challenge")
-            .join(TEST_TOKEN);
-        assert!(expected_out.exists(), "Challenge file was not created");
-        let mut content = String::new();
-        tokio::fs::File::open(&expected_out)
-            .await
-            .unwrap()
-            .read_to_string(&mut content)
-            .await
-            .unwrap();
-        assert_eq!(content.trim(), TEST_KEY_AUTH);
-
-        call_challenge_helper(
-            actual_path.as_os_str(),
-            ChallengeFileAction::Remove,
-            TEST_KEY_AUTH,
-        )
-        .unwrap()
-        .wait()
-        .await
-        .unwrap();
-        assert!(!expected_out.exists(), "Challenge file was not removed");
-    }
-
-    #[cfg(feature = "tests-acme-has-pebble")]
-    #[cfg(not(target_os = "windows"))]
-    #[tokio::test]
-    async fn test_process_one_challenge() {
-        let script_path = format!(
-            "{}/.github/workflows/http01_helper_for_test.sh",
-            env!("CARGO_MANIFEST_DIR")
-        );
-        let tmpdir = tempdir().unwrap();
-        let actual_path = tmpdir.path().join("http01_helper");
-        tokio::fs::copy(&script_path, &actual_path).await.unwrap();
-        let (account, _cred) = Account::create_with_http(
-            &NewAccount {
-                contact: &[],
-                terms_of_service_agreed: true,
-                only_return_existing: false,
-            },
-            TEST_PEBBLE_URL,
-            None,
-            Box::new(IgnoreTlsHttpClient::new()),
-        )
-        .await
-        .unwrap();
-        let identifier = Identifier::Dns("a.example.com".to_string());
-        let new_order = NewOrder {
-            identifiers: &[identifier],
-        };
-        let mut order = account.new_order(&new_order).await.unwrap();
-        let authorizations = order.authorizations().await.unwrap();
-        let first_auth = authorizations.first().unwrap();
-        assert!(
-            first_auth.status == AuthorizationStatus::Pending,
-            "temporary error in test setup: auth status is {:?} instead of Pending",
-            first_auth.status
-        );
-        let first_auth_challenge = first_auth
-            .challenges
-            .iter()
-            .find(|c| c.r#type == ChallengeType::Http01)
-            .unwrap();
-        let expected_key_auth = order
-            .key_authorization(first_auth_challenge)
-            .as_str()
-            .to_string();
-        let (keyauth, _url) = process_one_challenge(first_auth, &order, actual_path.as_os_str())
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(keyauth, expected_key_auth);
-        let token = expected_key_auth.split('.').next().unwrap();
-        let verify_location = tmpdir.path().join(".well-known/acme-challenge").join(token);
-        assert!(
-            verify_location.exists(),
-            "Challenge file was not created at expected location"
-        );
-        let mut content = String::new();
-        tokio::fs::File::open(&verify_location)
-            .await
-            .unwrap()
-            .read_to_string(&mut content)
-            .await
-            .unwrap();
-        assert_eq!(content.trim(), expected_key_auth);
-    }
-
-    #[cfg(feature = "tests-acme-has-pebble")]
-    #[cfg(not(target_os = "windows"))]
-    #[tokio::test]
-    async fn test_process_challenges() {
-        let script_path = format!(
-            "{}/.github/workflows/http01_helper_for_test.sh",
-            env!("CARGO_MANIFEST_DIR")
-        );
-        let tmpdir = tempdir().unwrap();
-        let actual_path = tmpdir.path().join("http01_helper");
-        tokio::fs::copy(&script_path, &actual_path).await.unwrap();
-        let (account, _cred) = Account::create_with_http(
-            &NewAccount {
-                contact: &[],
-                terms_of_service_agreed: true,
-                only_return_existing: false,
-            },
-            TEST_PEBBLE_URL,
-            None,
-            Box::new(IgnoreTlsHttpClient::new()),
-        )
-        .await
-        .unwrap();
-        let identifiers = vec![
-            Identifier::Dns("a.example.com".to_string()),
-            Identifier::Dns("b.example.com".to_string()),
-            Identifier::Dns("c.example.com".to_string()),
-        ];
-        let new_order = NewOrder {
-            identifiers: &identifiers,
-        };
-        let mut order = account.new_order(&new_order).await.unwrap();
-        let authorizations = order.authorizations().await.unwrap();
-        assert_eq!(authorizations.len(), 3);
-        let expected_key_auths = authorizations
-            .iter()
-            .filter_map(|auth| {
-                if auth.status == AuthorizationStatus::Pending {
-                    let http_challenge = auth
-                        .challenges
-                        .iter()
-                        .find(|c| c.r#type == ChallengeType::Http01);
-                    http_challenge.map(|c| order.key_authorization(c).as_str().to_string())
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-        // Process the challenges
-        let keyauths = process_challenges(&authorizations, &mut order, actual_path.as_os_str())
-            .await
-            .unwrap();
-        for expected_key_auth in &expected_key_auths {
-            assert!(keyauths.contains(expected_key_auth));
-        }
-        for keyauth in &keyauths {
-            let token = keyauth.split('.').next().unwrap();
-            let verify_location = tmpdir.path().join(".well-known/acme-challenge").join(token);
-            assert!(verify_location.exists());
-            let mut content = String::new();
-            tokio::fs::File::open(&verify_location)
-                .await
-                .unwrap()
-                .read_to_string(&mut content)
-                .await
-                .unwrap();
-            assert_eq!(content.trim(), *keyauth);
         }
     }
 
@@ -608,7 +321,7 @@ mod test {
             tls_domain: vec!["localhost".to_string()],
             tls_acme_accept_tos: true,
             tls_acme_url: TEST_PEBBLE_URL.to_string(),
-            tls_acme_challenge_helper: Some(actual_path.into_os_string()),
+            tls_acme_challenge_helper: Some(actual_path.into()),
             ..Default::default()
         };
         let (account, _cred) = Account::create_with_http(
