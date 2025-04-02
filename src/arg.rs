@@ -11,7 +11,7 @@ use http::{
 };
 #[cfg(feature = "acme")]
 use instant_acme::LetsEncrypt;
-use std::{ops::Deref, str::FromStr, sync::OnceLock};
+use std::{fmt::Debug, ops::Deref, str::FromStr, sync::OnceLock};
 use thiserror::Error;
 
 #[derive(Parser, Debug)]
@@ -253,12 +253,11 @@ pub struct ServerArgs {
     #[cfg(feature = "acme")]
     /// Command to run for the ACME HTTP-01 challenge. The arguments will be in
     /// the form of:
-    /// <cmd> <token> <key>
-    /// Once the challenge is completed, stdin will be closed, and the command
-    /// should exit with 0 when this is detected.
+    /// <cmd> (create|remove) xxxx.yyyy
     /// The command should create a file at
-    /// /.well-known/acme-challenge/<token>
-    /// containing only <key>.
+    /// /.well-known/acme-challenge/xxxx
+    /// containing only xxxx.yyyy (the token) when `create` is passed, and remove
+    /// the file when `remove` is passed. This is used by the ACME client to
     #[arg(long)]
     pub tls_acme_challenge_helper: Option<String>,
     /// Timeout for TLS handshake and HTTP data in seconds.
@@ -471,6 +470,15 @@ impl FromStr for OptionalDuration {
             Ok(Self(None))
         } else {
             Ok(Self::from_secs(value))
+        }
+    }
+}
+
+impl std::fmt::Display for OptionalDuration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            Some(duration) => duration.fmt(f),
+            None => write!(f, "indefinite"),
         }
     }
 }

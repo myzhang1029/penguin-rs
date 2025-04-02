@@ -196,6 +196,7 @@ async fn serve_connection_tls<S>(
 ) where
     S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
+    let tls_timeout = state.tls_timeout;
     #[cfg(feature = "__rustls")]
     let stream_future = tokio_rustls::TlsAcceptor::from(tls_config).accept(stream);
     #[cfg(feature = "nativetls")]
@@ -211,7 +212,7 @@ async fn serve_connection_tls<S>(
             error!("TLS handshake error: {err}");
         }
         Err(_) => {
-            error!("TLS handshake timed out after {:?}", state.tls_timeout);
+            error!("TLS handshake timed out after {tls_timeout}");
         }
     }
 }
@@ -232,7 +233,7 @@ where
     // This timeout only limits how much time we wait for the ws handshake to complete.
     // TODO: fully test its interaction with the backend handler as well.
     match http_timeout.timeout(conn).await {
-        Err(_) => error!("HTTP connection timed out after {http_timeout:?}"),
+        Err(_) => error!("HTTP connection timed out after {http_timeout}"),
         Ok(Err(err)) => error!("HTTP connection error: {err}"),
         Ok(Ok(())) => {}
     }

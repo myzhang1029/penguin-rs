@@ -1,7 +1,10 @@
 #!/bin/sh
-WEBROOT=/var/www/html
-trap "rm -f '$WEBROOT/.well-known/acme-challenge/$1'" EXIT
-mkdir -p "$WEBROOT/.well-known/acme-challenge"
-echo "$2" | tee "$WEBROOT/.well-known/acme-challenge/$1"
-read -r _
-rm "$WEBROOT/.well-known/acme-challenge/$1"
+
+token="$(echo "$2"|cut -d. -f1)"
+
+if [ "$1" = "create" ]; then
+    mkdir -p "$WEBROOT/.well-known/acme-challenge"
+    echo "$2" > "$WEBROOT/.well-known/acme-challenge/$token"
+elif [ "$1" = "remove" ]; then
+    rm "$WEBROOT/.well-known/acme-challenge/$token"
+fi
