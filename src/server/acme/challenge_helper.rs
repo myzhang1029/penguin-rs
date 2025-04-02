@@ -1,6 +1,9 @@
 use super::Error;
 use instant_acme::{Authorization, AuthorizationStatus, ChallengeType, Order};
-use std::{ffi::{OsStr, OsString}, path::PathBuf};
+use std::{
+    ffi::{OsStr, OsString},
+    path::PathBuf,
+};
 use tracing::{debug, error};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

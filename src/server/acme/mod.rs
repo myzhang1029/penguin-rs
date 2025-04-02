@@ -6,6 +6,7 @@ use crate::{
 };
 use challenge_helper::Action;
 use instant_acme::{Account, AuthorizationStatus, Identifier, NewAccount, NewOrder, OrderStatus};
+use penguin_mux::dupe::Dupe;
 use rcgen::{CertificateParams, DistinguishedName, KeyPair};
 use std::sync::OnceLock;
 use tracing::{debug, error, info};
@@ -124,7 +125,7 @@ impl Client {
                 }
             }
         });
-        self.tls_config.clone()
+        self.tls_config.dupe()
     }
 }
 
@@ -186,8 +187,7 @@ async fn issue(account: &Account, server_args: &ServerArgs) -> Result<(KeyPair, 
         OrderStatus::Ready,
         "Order not ready (this is a bug)"
     );
-    let names = server_args.tls_domain.clone();
-    let mut params: CertificateParams = CertificateParams::new(names.clone())?;
+    let mut params: CertificateParams = CertificateParams::new(server_args.tls_domain.clone())?;
     params.distinguished_name = DistinguishedName::new();
     let private_key = KeyPair::generate()?;
     let csr = params.serialize_request(&private_key)?;
