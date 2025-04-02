@@ -3,7 +3,8 @@ use crate::{
     tls::{make_tls_identity_from_rcgen_pem, reload_tls_identity_from_rcgen_pem, TlsIdentity},
 };
 use instant_acme::{
-    Account, Authorization, AuthorizationStatus, ChallengeType, Identifier, NewAccount, NewOrder, Order, OrderStatus
+    Account, Authorization, AuthorizationStatus, ChallengeType, Identifier, NewAccount, NewOrder,
+    Order, OrderStatus,
 };
 use rcgen::{CertificateParams, DistinguishedName, KeyPair};
 use std::sync::OnceLock;
@@ -287,6 +288,8 @@ async fn issue(
 #[cfg(test)]
 mod test {
     use super::*;
+    use bytes::Bytes;
+    use http_body_util::BodyExt;
     use std::env;
     use tempfile::tempdir;
     use tokio::io::AsyncReadExt;
@@ -295,6 +298,59 @@ mod test {
         "f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY.tvg9X8xCoUuU_vK9qNR1d2RyGSGVfq3VYDJ-O81nnyY";
     const TEST_TOKEN: &str = "f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY";
 
+    #[cfg(feature = "tests-acme-has-pebble")]
+    #[derive(Clone, Debug)]
+    struct IgnoreTlsHttpClient(reqwest::Client);
+    #[cfg(feature = "tests-acme-has-pebble")]
+    impl IgnoreTlsHttpClient {
+        fn new() -> Self {
+            Self(
+                reqwest::ClientBuilder::new()
+                    .danger_accept_invalid_certs(true)
+                    .build()
+                    .unwrap(),
+            )
+        }
+    }
+    #[cfg(feature = "tests-acme-has-pebble")]
+    impl instant_acme::HttpClient for IgnoreTlsHttpClient {
+        fn request(
+            &self,
+            req: http::Request<http_body_util::Full<bytes::Bytes>>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<instant_acme::BytesResponse, instant_acme::Error>,
+                    > + Send,
+            >,
+        > {
+            let (reqwest_req, body) = req.into_parts();
+            let new_self = self.clone();
+            Box::pin(async move {
+                let mut req = reqwest::Request::new(
+                    reqwest::Method::from_bytes(reqwest_req.method.as_str().as_bytes()).unwrap(),
+                    reqwest::Url::parse(reqwest_req.uri.to_string().as_str()).unwrap(),
+                );
+                let body_bytes = body
+                    .collect()
+                    .await
+                    .map_or_else(|_| Bytes::new(), http_body_util::Collected::to_bytes);
+                *req.headers_mut() = reqwest_req.headers;
+                *req.body_mut() = Some(reqwest::Body::from(body_bytes));
+                let resp = new_self.0.execute(req).await.unwrap();
+                let http_resp: http::Response<reqwest::Body> = resp.into();
+                let (parts, body) = http_resp.into_parts();
+                let collected_body = body
+                    .collect()
+                    .await
+                    .map_or_else(|_| Bytes::new(), http_body_util::Collected::to_bytes);
+                Ok(instant_acme::BytesResponse {
+                    parts,
+                    body: Box::new(collected_body),
+                })
+            })
+        }
+    }
     #[tokio::test]
     async fn test_call_challenge_helper_simple() {
         let expected_out1 = "create f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY.tvg9X8xCoUuU_vK9qNR1d2RyGSGVfq3VYDJ-O81nnyY\n";
@@ -345,5 +401,73 @@ mod test {
         .await
         .unwrap();
         assert!(!expected_out.exists(), "Challenge file was not removed");
+    }
+
+    #[cfg(feature = "tests-acme-has-pebble")]
+    #[cfg(not(target_os = "windows"))]
+    #[tokio::test]
+    async fn test_process_one_challenge() {
+        let script_path = format!("{}/tools/http01_helper", env!("CARGO_MANIFEST_DIR"));
+        let tmpdir = tempdir().unwrap();
+        temp_env::with_var_unset("WEBROOT", || {
+            tokio::spawn(async move {
+                const TEST_URL: &str = "https://localhost:14000/dir";
+                let (account, _cred) = Account::create_with_http(
+                    &NewAccount {
+                        contact: &[],
+                        terms_of_service_agreed: true,
+                        only_return_existing: false,
+                    },
+                    TEST_URL,
+                    None,
+                    Box::new(IgnoreTlsHttpClient::new()),
+                )
+                .await
+                .unwrap();
+                let identifier = Identifier::Dns("a.example.com".to_string());
+                let new_order = NewOrder {
+                    identifiers: &[identifier],
+                };
+                let mut order = account.new_order(&new_order).await.unwrap();
+                let authorizations = order.authorizations().await.unwrap();
+                let first_auth = authorizations.first().unwrap();
+                assert!(
+                    first_auth.status == AuthorizationStatus::Pending,
+                    "temporary error in test setup: auth status is {:?} instead of Pending",
+                    first_auth.status
+                );
+                let first_auth_challenge = first_auth
+                    .challenges
+                    .iter()
+                    .find(|c| c.r#type == ChallengeType::Http01)
+                    .unwrap();
+                let expected_key_auth = order
+                    .key_authorization(first_auth_challenge)
+                    .as_str()
+                    .to_string();
+                std::env::set_var("WEBROOT", tmpdir.path().to_string_lossy().to_string());
+                let (keyauth, _url) = process_one_challenge(first_auth, &script_path, &order)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(keyauth, expected_key_auth);
+                let token = expected_key_auth.split('.').next().unwrap();
+                let verify_location = tmpdir.path().join(".well-known/acme-challenge").join(token);
+                assert!(
+                    verify_location.exists(),
+                    "Challenge file was not created at expected location"
+                );
+                let mut content = String::new();
+                tokio::fs::File::open(&verify_location)
+                    .await
+                    .unwrap()
+                    .read_to_string(&mut content)
+                    .await
+                    .unwrap();
+                assert_eq!(content.trim(), expected_key_auth);
+            })
+        })
+        .await
+        .unwrap();
     }
 }

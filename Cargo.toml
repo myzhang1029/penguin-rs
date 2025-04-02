@@ -68,6 +68,8 @@ nativetls = ["tokio-native-tls", "tokio-tungstenite/native-tls", "reqwest/native
 # Allow some tests that require real internet connection
 tests-real-internet4 = []
 tests-real-internet6 = []
+# Test the ACME client with a local ACME server at https://localhost:14000/dir
+tests-acme-has-pebble = ["acme"]
 # Set the default localhost or unspecified address to IPv6
 default-is-ipv6 = []
 # Enabling this causes `penguin` to listen for `tokio-console` connections
