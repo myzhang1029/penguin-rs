@@ -212,10 +212,7 @@ async fn process_challenges(
 
 /// Issues a new certificate using the ACME protocol.
 /// Returns (KeyPair, String) where KeyPair is the private key and String is the certificate chain in PEM format.
-async fn issue(
-    account: &Account,
-    server_args: &'static ServerArgs,
-) -> Result<(KeyPair, String), Error> {
+async fn issue(account: &Account, server_args: &ServerArgs) -> Result<(KeyPair, String), Error> {
     // `expect`: challenge helper verified by `clap`
     let helper = server_args
         .tls_acme_challenge_helper
@@ -465,6 +462,82 @@ mod test {
                     .await
                     .unwrap();
                 assert_eq!(content.trim(), expected_key_auth);
+            })
+        })
+        .await
+        .unwrap();
+    }
+
+    #[cfg(feature = "tests-acme-has-pebble")]
+    #[cfg(not(target_os = "windows"))]
+    #[tokio::test]
+    async fn test_process_challenges() {
+        let script_path = format!("{}/tools/http01_helper", env!("CARGO_MANIFEST_DIR"));
+        let tmpdir = tempdir().unwrap();
+        temp_env::with_var_unset("WEBROOT", || {
+            tokio::spawn(async move {
+                std::env::set_var("WEBROOT", tmpdir.path().to_string_lossy().to_string());
+                const TEST_URL: &str = "https://localhost:14000/dir";
+                let (account, _cred) = Account::create_with_http(
+                    &NewAccount {
+                        contact: &[],
+                        terms_of_service_agreed: true,
+                        only_return_existing: false,
+                    },
+                    TEST_URL,
+                    None,
+                    Box::new(IgnoreTlsHttpClient::new()),
+                )
+                .await
+                .unwrap();
+                let identifiers = vec![
+                    Identifier::Dns("a.example.com".to_string()),
+                    Identifier::Dns("b.example.com".to_string()),
+                    Identifier::Dns("c.example.com".to_string()),
+                ];
+                let new_order = NewOrder {
+                    identifiers: &identifiers,
+                };
+                let mut order = account.new_order(&new_order).await.unwrap();
+                let authorizations = order.authorizations().await.unwrap();
+                assert_eq!(authorizations.len(), 3);
+                let expected_key_auths = authorizations
+                    .iter()
+                    .filter_map(|auth| {
+                        if auth.status == AuthorizationStatus::Pending {
+                            let http_challenge = auth
+                                .challenges
+                                .iter()
+                                .find(|c| c.r#type == ChallengeType::Http01);
+                            http_challenge.map(|c| {
+                                order.key_authorization(c).as_str().to_string()
+                            })
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                // Process the challenges
+                let keyauths = process_challenges(&authorizations, &script_path, &mut order)
+                    .await
+                    .unwrap();
+                for expected_key_auth in &expected_key_auths {
+                    assert!(keyauths.contains(expected_key_auth));
+                }
+                for keyauth in &keyauths {
+                    let token = keyauth.split('.').next().unwrap();
+                    let verify_location =
+                        tmpdir.path().join(".well-known/acme-challenge").join(token);
+                    assert!(verify_location.exists());
+                    let mut content = String::new();
+                    tokio::fs::File::open(&verify_location)
+                        .await
+                        .unwrap()
+                        .read_to_string(&mut content)
+                        .await
+                        .unwrap();
+                    assert_eq!(content.trim(), *keyauth);
+                }
             })
         })
         .await
