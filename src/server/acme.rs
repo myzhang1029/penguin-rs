@@ -580,14 +580,8 @@ mod test {
                 let n = socket.read(&mut buf).await.unwrap();
                 let request = String::from_utf8_lossy(&buf[..n]);
                 // Extract path from the request
-                if let Some(path) = request.split_whitespace().nth(1).and_then(|path| {
-                    if path.starts_with("/") {
-                        Some(&path[1..])
-                    } else {
-                        None
-                    }
-                }) {
-                    let full_path = tmpdir.path().join(path);
+                if let Some(path) = request.split_whitespace().nth(1) {
+                    let full_path = tmpdir.path().join(path.strip_prefix('/').unwrap_or(path));
                     if full_path.exists() {
                         let content = tokio::fs::read_to_string(&full_path)
                             .await
@@ -596,14 +590,14 @@ mod test {
                         socket.write_all(response.as_bytes()).await.unwrap();
                     } else {
                         socket
-                            .write_all("HTTP/1.0 404 Not Found\r\n\r\n".as_bytes())
+                            .write_all(b"HTTP/1.0 404 Not Found\r\n\r\n")
                             .await
                             .unwrap();
                     }
                 } else {
                     error!("Failed to parse request: {request}");
                     socket
-                        .write_all("HTTP/1.0 400 Bad Request\r\n\r\n".as_bytes())
+                        .write_all(b"HTTP/1.0 400 Bad Request\r\n\r\n")
                         .await
                         .unwrap();
                 }
@@ -614,7 +608,7 @@ mod test {
             tls_domain: vec!["localhost".to_string()],
             tls_acme_accept_tos: true,
             tls_acme_url: TEST_PEBBLE_URL.to_string(),
-            tls_acme_challenge_helper: Some(std::path::PathBuf::from(actual_path).into_os_string()),
+            tls_acme_challenge_helper: Some(actual_path.into_os_string()),
             ..Default::default()
         };
         let (account, _cred) = Account::create_with_http(
