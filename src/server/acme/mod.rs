@@ -40,7 +40,9 @@ pub enum Error {
 /// Simple ACME Client
 pub struct Client {
     account: Account,
-    server_args: &'static ServerArgs,
+    challenge_helper: &'static ChallengeHelper,
+    domain_names: &'static [String],
+    tls_ca: Option<&'static str>,
     tls_config: TlsIdentity,
 }
 
@@ -52,6 +54,12 @@ impl std::fmt::Debug for Client {
 
 impl Client {
     pub async fn populate_or_get(server_args: &'static ServerArgs) -> Result<&'static Self, Error> {
+        // `expect`: challenge helper verified by `clap`
+        let helper = server_args
+            .tls_acme_challenge_helper
+            .as_ref()
+            .expect("Challenge helper missing (this is a bug)");
+
         if let Some(client) = ACME_CLIENT.get() {
             return Ok(client);
         }
@@ -74,11 +82,13 @@ impl Client {
             None,
         )
         .await?;
-        let (keypair, cert) = issue(&account, server_args).await?;
+        let (keypair, cert) = issue(&account, helper, &server_args.tls_domain).await?;
 
         let client = Self {
             account,
-            server_args,
+            challenge_helper: helper,
+            domain_names: &server_args.tls_domain,
+            tls_ca: server_args.tls_ca.as_deref(),
             tls_config: make_tls_identity_from_rcgen_pem(
                 cert,
                 keypair,
@@ -105,14 +115,14 @@ impl Client {
             loop {
                 interval.tick().await;
                 info!("Renewing ACME certificate...");
-                match issue(&self.account, self.server_args).await {
+                match issue(&self.account, self.challenge_helper, self.domain_names).await {
                     Ok((keypair, cert)) => {
                         info!("Certificate renewed successfully.");
                         reload_tls_identity_from_rcgen_pem(
                             &self.tls_config,
                             cert,
                             keypair,
-                            self.server_args.tls_ca.as_deref(),
+                            self.tls_ca,
                         )
                         .await
                         .unwrap_or_else(|e| {
@@ -131,14 +141,12 @@ impl Client {
 
 /// Issues a new certificate using the ACME protocol.
 /// Returns (KeyPair, String) where KeyPair is the private key and String is the certificate chain in PEM format.
-async fn issue(account: &Account, server_args: &ServerArgs) -> Result<(KeyPair, String), Error> {
-    // `expect`: challenge helper verified by `clap`
-    let helper = server_args
-        .tls_acme_challenge_helper
-        .as_ref()
-        .expect("Challenge helper missing (this is a bug)");
-    let idents = server_args
-        .tls_domain
+async fn issue(
+    account: &Account,
+    challenge_helper: &ChallengeHelper,
+    domains: &[String],
+) -> Result<(KeyPair, String), Error> {
+    let idents = domains
         .iter()
         .map(|domain| Identifier::Dns(domain.clone()))
         .collect::<Vec<_>>();
@@ -146,8 +154,8 @@ async fn issue(account: &Account, server_args: &ServerArgs) -> Result<(KeyPair, 
         identifiers: idents.as_slice(),
     };
     let mut order = account.new_order(&new_order).await?;
-    let authorizations = order.authorizations().await?;
-    let keyauths = helper
+    let authorizations: Vec<instant_acme::Authorization> = order.authorizations().await?;
+    let keyauths = challenge_helper
         .process_challenges(&authorizations, &mut order)
         .await?;
     // Back off until the order becomes ready or invalid
@@ -159,7 +167,7 @@ async fn issue(account: &Account, server_args: &ServerArgs) -> Result<(KeyPair, 
     );
     let order_cleanup = || {
         for key_auth in &keyauths {
-            let _ = helper.call(Action::Remove, key_auth);
+            let _ = challenge_helper.call(Action::Remove, key_auth);
         }
     };
     while order.state().status != OrderStatus::Ready {
@@ -187,7 +195,7 @@ async fn issue(account: &Account, server_args: &ServerArgs) -> Result<(KeyPair, 
         OrderStatus::Ready,
         "Order not ready (this is a bug)"
     );
-    let mut params: CertificateParams = CertificateParams::new(server_args.tls_domain.clone())?;
+    let mut params = CertificateParams::new(domains.to_vec())?;
     params.distinguished_name = DistinguishedName::new();
     let private_key = KeyPair::generate()?;
     let csr = params.serialize_request(&private_key)?;
@@ -316,14 +324,7 @@ mod tests {
                 }
             }
         });
-
-        let server_args = ServerArgs {
-            tls_domain: vec!["localhost".to_string()],
-            tls_acme_accept_tos: true,
-            tls_acme_url: TEST_PEBBLE_URL.to_string(),
-            tls_acme_challenge_helper: Some(actual_path.into()),
-            ..Default::default()
-        };
+        let domains = vec!["localhost".to_string()];
         let (account, _cred) = Account::create_with_http(
             &NewAccount {
                 contact: &[],
@@ -336,7 +337,9 @@ mod tests {
         )
         .await
         .unwrap();
-        let (keypair, cert) = issue(&account, &server_args).await.unwrap();
+        let (keypair, cert) = issue(&account, &actual_path.into(), &domains)
+            .await
+            .unwrap();
         assert!(!cert.is_empty());
         assert!(!keypair.serialize_pem().is_empty());
         http_server_task.abort();
