@@ -33,21 +33,13 @@ fn make_client_args(servhost: &str, servport: u16, remotes: Vec<Remote>) -> arg:
     arg::ClientArgs {
         server: ServerUrl::from_str(&format!("ws://{servhost}:{servport}/ws")).unwrap(),
         remote: remotes,
-        ws_psk: None,
         keepalive: 0,
         max_retry_count: 10,
         max_retry_interval: 10,
-        proxy: None,
-        header: vec![],
-        tls_ca: None,
-        tls_cert: None,
-        tls_key: None,
         tls_skip_verify: false,
         hostname: Some(http::HeaderValue::from_static("localhost")),
         channel_timeout: 10,
-        _pid: false,
-        _fingerprint: None,
-        _auth: None,
+        ..Default::default()
     }
 }
 

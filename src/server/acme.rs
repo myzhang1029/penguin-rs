@@ -152,7 +152,6 @@ fn call_challenge_helper(
     let cmd = tokio::process::Command::new(helper)
         .arg(action.as_str())
         .arg(key_authorization)
-        .kill_on_drop(true)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()?;
@@ -288,7 +287,9 @@ async fn issue(account: &Account, server_args: &ServerArgs) -> Result<(KeyPair, 
 #[cfg(test)]
 mod test {
     use super::*;
+    #[cfg(feature = "tests-acme-has-pebble")]
     use bytes::Bytes;
+    #[cfg(feature = "tests-acme-has-pebble")]
     use http_body_util::BodyExt;
     use tempfile::tempdir;
     use tokio::io::AsyncReadExt;
@@ -296,6 +297,7 @@ mod test {
     const TEST_KEY_AUTH: &str =
         "f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY.tvg9X8xCoUuU_vK9qNR1d2RyGSGVfq3VYDJ-O81nnyY";
     const TEST_TOKEN: &str = "f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY";
+    #[cfg(feature = "tests-acme-has-pebble")]
     const TEST_PEBBLE_URL: &str = "https://localhost:14000/dir";
 
     #[cfg(feature = "tests-acme-has-pebble")]
@@ -316,7 +318,7 @@ mod test {
     impl instant_acme::HttpClient for IgnoreTlsHttpClient {
         fn request(
             &self,
-            req: http::Request<http_body_util::Full<bytes::Bytes>>,
+            req: http::Request<http_body_util::Full<Bytes>>,
         ) -> std::pin::Pin<
             Box<
                 dyn std::future::Future<
@@ -555,5 +557,34 @@ mod test {
                 .unwrap();
             assert_eq!(content.trim(), *keyauth);
         }
+    }
+
+    #[cfg(feature = "tests-acme-has-pebble")]
+    #[cfg(not(target_os = "windows"))]
+    #[tokio::test]
+    async fn test_issue() {
+        let script_path = format!("{}/tools/http01_socat_helper",env!("CARGO_MANIFEST_DIR"));
+        let server_args = ServerArgs {
+            tls_domain: vec!["localhost".to_string()],
+            tls_acme_accept_tos: true,
+            tls_acme_url: TEST_PEBBLE_URL.to_string(),
+            tls_acme_challenge_helper: Some(std::path::PathBuf::from(script_path).into_os_string()),
+            ..Default::default()
+        };
+        let (account, _cred) = Account::create_with_http(
+            &NewAccount {
+                contact: &[],
+                terms_of_service_agreed: true,
+                only_return_existing: false,
+            },
+            TEST_PEBBLE_URL,
+            None,
+            Box::new(IgnoreTlsHttpClient::new()),
+        )
+        .await
+        .unwrap();
+        let (keypair, cert) = issue(&account, &server_args).await.unwrap();
+        assert!(!cert.is_empty());
+        assert!(!keypair.serialize_pem().is_empty());
     }
 }
