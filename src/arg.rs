@@ -259,7 +259,7 @@ pub struct ServerArgs {
     /// containing only xxxx.yyyy (the token) when `create` is passed, and remove
     /// the file when `remove` is passed. This is used by the ACME client to
     #[arg(long)]
-    pub tls_acme_challenge_helper: Option<String>,
+    pub tls_acme_challenge_helper: Option<std::ffi::OsString>,
     /// Timeout for TLS handshake and HTTP data in seconds.
     /// Setting to 0 disables timeouts.
     #[arg(long, default_value = "60")]

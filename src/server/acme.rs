@@ -3,13 +3,17 @@ use crate::{
     tls::{make_tls_identity_from_rcgen_pem, reload_tls_identity_from_rcgen_pem, TlsIdentity},
 };
 use instant_acme::{
-    Account, Authorization, AuthorizationStatus, ChallengeType, Identifier, NewAccount, NewOrder, Order, OrderStatus
+    Account, Authorization, AuthorizationStatus, ChallengeType, Identifier, NewAccount, NewOrder,
+    Order, OrderStatus,
 };
 use rcgen::{CertificateParams, DistinguishedName, KeyPair};
-use std::sync::OnceLock;
+use std::{ffi::OsStr, sync::OnceLock};
 use tracing::{debug, error, info};
 
 pub static ACME_CLIENT: OnceLock<Client> = OnceLock::new();
+
+/// How many times to check the order status before giving up
+const MAX_ORDER_RETRIES: u32 = 10;
 
 /// Error type for ACME operations
 #[derive(Debug, thiserror::Error)]
@@ -140,11 +144,11 @@ impl ChallengeFileAction {
 }
 
 fn call_challenge_helper(
-    helper: &str,
+    helper: &OsStr,
     action: ChallengeFileAction,
     key_authorization: &str,
 ) -> Result<tokio::process::Child, Error> {
-    debug!("Executing challenge helper: {helper} {key_authorization}");
+    debug!("executing challenge helper: {helper:?} {key_authorization}");
     let cmd = tokio::process::Command::new(helper)
         .arg(action.as_str())
         .arg(key_authorization)
@@ -158,8 +162,8 @@ fn call_challenge_helper(
 /// Process a single challenge
 async fn process_one_challenge<'a>(
     auth: &'a Authorization,
-    helper: &str,
     order: &Order,
+    helper: &OsStr,
 ) -> Result<Option<(String, &'a str)>, Error> {
     // Find the HTTP-01 challenge for each pending authorization
     let http_challenge = match auth.status {
@@ -184,12 +188,12 @@ async fn process_one_challenge<'a>(
 /// Process challenge files for the HTTP-01 challenge
 async fn process_challenges(
     authorizations: &[Authorization],
-    helper: &str,
     order: &mut instant_acme::Order,
+    helper: &OsStr,
 ) -> Result<Vec<String>, Error> {
     let mut executed_challenges = Vec::with_capacity(authorizations.len());
     for auth in authorizations {
-        match process_one_challenge(auth, helper, order).await {
+        match process_one_challenge(auth, order, helper).await {
             Ok(Some((key_auth, challenge_url))) => {
                 executed_challenges.push(key_auth);
                 // Tell the server we are ready for the challenges
@@ -211,10 +215,7 @@ async fn process_challenges(
 
 /// Issues a new certificate using the ACME protocol.
 /// Returns (KeyPair, String) where KeyPair is the private key and String is the certificate chain in PEM format.
-async fn issue(
-    account: &Account,
-    server_args: &'static ServerArgs,
-) -> Result<(KeyPair, String), Error> {
+async fn issue(account: &Account, server_args: &ServerArgs) -> Result<(KeyPair, String), Error> {
     // `expect`: challenge helper verified by `clap`
     let helper = server_args
         .tls_acme_challenge_helper
@@ -230,13 +231,13 @@ async fn issue(
     };
     let mut order = account.new_order(&new_order).await?;
     let authorizations = order.authorizations().await?;
-    let keyauths = process_challenges(&authorizations, helper, &mut order).await?;
+    let keyauths = process_challenges(&authorizations, &mut order, helper).await?;
     // Back off until the order becomes ready or invalid
     let mut backoff = crate::backoff::Backoff::new(
         std::time::Duration::from_secs(5),
         std::time::Duration::from_secs(60),
         2,
-        10,
+        MAX_ORDER_RETRIES,
     );
     let order_cleanup = || {
         for key_auth in &keyauths {
@@ -287,25 +288,88 @@ async fn issue(
 #[cfg(test)]
 mod test {
     use super::*;
-    use std::env;
+    use bytes::Bytes;
+    use http_body_util::BodyExt;
     use tempfile::tempdir;
     use tokio::io::AsyncReadExt;
 
     const TEST_KEY_AUTH: &str =
         "f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY.tvg9X8xCoUuU_vK9qNR1d2RyGSGVfq3VYDJ-O81nnyY";
     const TEST_TOKEN: &str = "f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY";
+    const TEST_PEBBLE_URL: &str = "https://localhost:14000/dir";
 
+    #[cfg(feature = "tests-acme-has-pebble")]
+    #[derive(Clone, Debug)]
+    struct IgnoreTlsHttpClient(reqwest::Client);
+    #[cfg(feature = "tests-acme-has-pebble")]
+    impl IgnoreTlsHttpClient {
+        fn new() -> Self {
+            Self(
+                reqwest::ClientBuilder::new()
+                    .danger_accept_invalid_certs(true)
+                    .build()
+                    .unwrap(),
+            )
+        }
+    }
+    #[cfg(feature = "tests-acme-has-pebble")]
+    impl instant_acme::HttpClient for IgnoreTlsHttpClient {
+        fn request(
+            &self,
+            req: http::Request<http_body_util::Full<bytes::Bytes>>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<instant_acme::BytesResponse, instant_acme::Error>,
+                    > + Send,
+            >,
+        > {
+            let (reqwest_req, body) = req.into_parts();
+            let new_self = self.clone();
+            Box::pin(async move {
+                let mut req = reqwest::Request::new(
+                    reqwest::Method::from_bytes(reqwest_req.method.as_str().as_bytes()).unwrap(),
+                    reqwest::Url::parse(reqwest_req.uri.to_string().as_str()).unwrap(),
+                );
+                let body_bytes = body
+                    .collect()
+                    .await
+                    .map_or_else(|_| Bytes::new(), http_body_util::Collected::to_bytes);
+                *req.headers_mut() = reqwest_req.headers;
+                *req.body_mut() = Some(reqwest::Body::from(body_bytes));
+                let resp = new_self.0.execute(req).await.unwrap();
+                let http_resp: http::Response<reqwest::Body> = resp.into();
+                let (parts, body) = http_resp.into_parts();
+                let collected_body = body
+                    .collect()
+                    .await
+                    .map_or_else(|_| Bytes::new(), http_body_util::Collected::to_bytes);
+                Ok(instant_acme::BytesResponse {
+                    parts,
+                    body: Box::new(collected_body),
+                })
+            })
+        }
+    }
     #[tokio::test]
     async fn test_call_challenge_helper_simple() {
         let expected_out1 = "create f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY.tvg9X8xCoUuU_vK9qNR1d2RyGSGVfq3VYDJ-O81nnyY\n";
-        let result = call_challenge_helper("echo", ChallengeFileAction::Create, TEST_KEY_AUTH);
+        let result = call_challenge_helper(
+            OsStr::new("echo"),
+            ChallengeFileAction::Create,
+            TEST_KEY_AUTH,
+        );
         let child = result.unwrap();
         let out = child.wait_with_output().await.unwrap();
         assert!(out.status.success());
         let stdout = String::from_utf8(out.stdout).unwrap();
         assert_eq!(stdout, expected_out1);
         let expected_out2 = "remove f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY.tvg9X8xCoUuU_vK9qNR1d2RyGSGVfq3VYDJ-O81nnyY\n";
-        let result = call_challenge_helper("echo", ChallengeFileAction::Remove, TEST_KEY_AUTH);
+        let result = call_challenge_helper(
+            OsStr::new("echo"),
+            ChallengeFileAction::Remove,
+            TEST_KEY_AUTH,
+        );
         let child = result.unwrap();
         let out = child.wait_with_output().await.unwrap();
         assert!(out.status.success());
@@ -316,11 +380,19 @@ mod test {
     #[tokio::test]
     #[cfg(not(target_os = "windows"))]
     async fn test_call_challenge_helper_example() {
-        let script_path = format!("{}/tools/http01_helper", env!("CARGO_MANIFEST_DIR"));
+        let script_path = format!(
+            "{}/.github/workflows/http01_helper_for_test.sh",
+            env!("CARGO_MANIFEST_DIR")
+        );
         let tmpdir = tempdir().unwrap();
-        temp_env::with_var("WEBROOT", Some(tmpdir.path().as_os_str()), || {
-            call_challenge_helper(&script_path, ChallengeFileAction::Create, TEST_KEY_AUTH).unwrap()
-        })
+        let actual_path = tmpdir.path().join("http01_helper");
+        tokio::fs::copy(&script_path, &actual_path).await.unwrap();
+        call_challenge_helper(
+            actual_path.as_os_str(),
+            ChallengeFileAction::Create,
+            TEST_KEY_AUTH,
+        )
+        .unwrap()
         .wait()
         .await
         .unwrap();
@@ -338,12 +410,150 @@ mod test {
             .unwrap();
         assert_eq!(content.trim(), TEST_KEY_AUTH);
 
-        temp_env::with_var("WEBROOT", Some(tmpdir.path().as_os_str()), || {
-            call_challenge_helper(&script_path, ChallengeFileAction::Remove, TEST_KEY_AUTH).unwrap()
-        })
+        call_challenge_helper(
+            actual_path.as_os_str(),
+            ChallengeFileAction::Remove,
+            TEST_KEY_AUTH,
+        )
+        .unwrap()
         .wait()
         .await
         .unwrap();
         assert!(!expected_out.exists(), "Challenge file was not removed");
+    }
+
+    #[cfg(feature = "tests-acme-has-pebble")]
+    #[cfg(not(target_os = "windows"))]
+    #[tokio::test]
+    async fn test_process_one_challenge() {
+        let script_path = format!(
+            "{}/.github/workflows/http01_helper_for_test.sh",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let tmpdir = tempdir().unwrap();
+        let actual_path = tmpdir.path().join("http01_helper");
+        tokio::fs::copy(&script_path, &actual_path).await.unwrap();
+        let (account, _cred) = Account::create_with_http(
+            &NewAccount {
+                contact: &[],
+                terms_of_service_agreed: true,
+                only_return_existing: false,
+            },
+            TEST_PEBBLE_URL,
+            None,
+            Box::new(IgnoreTlsHttpClient::new()),
+        )
+        .await
+        .unwrap();
+        let identifier = Identifier::Dns("a.example.com".to_string());
+        let new_order = NewOrder {
+            identifiers: &[identifier],
+        };
+        let mut order = account.new_order(&new_order).await.unwrap();
+        let authorizations = order.authorizations().await.unwrap();
+        let first_auth = authorizations.first().unwrap();
+        assert!(
+            first_auth.status == AuthorizationStatus::Pending,
+            "temporary error in test setup: auth status is {:?} instead of Pending",
+            first_auth.status
+        );
+        let first_auth_challenge = first_auth
+            .challenges
+            .iter()
+            .find(|c| c.r#type == ChallengeType::Http01)
+            .unwrap();
+        let expected_key_auth = order
+            .key_authorization(first_auth_challenge)
+            .as_str()
+            .to_string();
+        let (keyauth, _url) = process_one_challenge(first_auth, &order, actual_path.as_os_str())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(keyauth, expected_key_auth);
+        let token = expected_key_auth.split('.').next().unwrap();
+        let verify_location = tmpdir.path().join(".well-known/acme-challenge").join(token);
+        assert!(
+            verify_location.exists(),
+            "Challenge file was not created at expected location"
+        );
+        let mut content = String::new();
+        tokio::fs::File::open(&verify_location)
+            .await
+            .unwrap()
+            .read_to_string(&mut content)
+            .await
+            .unwrap();
+        assert_eq!(content.trim(), expected_key_auth);
+    }
+
+    #[cfg(feature = "tests-acme-has-pebble")]
+    #[cfg(not(target_os = "windows"))]
+    #[tokio::test]
+    async fn test_process_challenges() {
+        let script_path = format!(
+            "{}/.github/workflows/http01_helper_for_test.sh",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let tmpdir = tempdir().unwrap();
+        let actual_path = tmpdir.path().join("http01_helper");
+        tokio::fs::copy(&script_path, &actual_path).await.unwrap();
+        let (account, _cred) = Account::create_with_http(
+            &NewAccount {
+                contact: &[],
+                terms_of_service_agreed: true,
+                only_return_existing: false,
+            },
+            TEST_PEBBLE_URL,
+            None,
+            Box::new(IgnoreTlsHttpClient::new()),
+        )
+        .await
+        .unwrap();
+        let identifiers = vec![
+            Identifier::Dns("a.example.com".to_string()),
+            Identifier::Dns("b.example.com".to_string()),
+            Identifier::Dns("c.example.com".to_string()),
+        ];
+        let new_order = NewOrder {
+            identifiers: &identifiers,
+        };
+        let mut order = account.new_order(&new_order).await.unwrap();
+        let authorizations = order.authorizations().await.unwrap();
+        assert_eq!(authorizations.len(), 3);
+        let expected_key_auths = authorizations
+            .iter()
+            .filter_map(|auth| {
+                if auth.status == AuthorizationStatus::Pending {
+                    let http_challenge = auth
+                        .challenges
+                        .iter()
+                        .find(|c| c.r#type == ChallengeType::Http01);
+                    http_challenge.map(|c| order.key_authorization(c).as_str().to_string())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        // Process the challenges
+        let keyauths = process_challenges(&authorizations, &mut order, actual_path.as_os_str())
+            .await
+            .unwrap();
+        for expected_key_auth in &expected_key_auths {
+            assert!(keyauths.contains(expected_key_auth));
+        }
+        for keyauth in &keyauths {
+            let token = keyauth.split('.').next().unwrap();
+            let verify_location = tmpdir.path().join(".well-known/acme-challenge").join(token);
+            assert!(verify_location.exists());
+            let mut content = String::new();
+            tokio::fs::File::open(&verify_location)
+                .await
+                .unwrap()
+                .read_to_string(&mut content)
+                .await
+                .unwrap();
+            assert_eq!(content.trim(), *keyauth);
+        }
     }
 }
