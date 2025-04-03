@@ -113,7 +113,7 @@ UDP datagrams.
 
 #### Logical TCP Stream Tunneling
 Logical TCP streams are initiated by the client. The client MUST send a stream
-frame with the `Syn` operation code and the stream ID set to a unique 32-bit
+frame with the `Syn` operation code and the stream ID set to a unique 16-bit
 unsigned integer in network byte order. The data of the frame MUST be a 32-bit
 unsigned integer in network byte order (`rwnd`), a 16-bit unsigned integer in
 network byte order (`dest_port`), a variable-length UTF-8 string (`dest_host`).
