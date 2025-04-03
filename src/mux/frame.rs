@@ -385,7 +385,12 @@ mod tests {
     #[test]
     fn test_frame_repr() {
         crate::tests::setup_logging();
-        let frame = Frame::Stream(StreamFrame::new_syn(Some(&[0x01, 0x02, 0x03]), Some(5678), 1234, 512));
+        let frame = Frame::Stream(StreamFrame::new_syn(
+            Some(&[0x01, 0x02, 0x03]),
+            Some(5678),
+            1234,
+            512,
+        ));
         let bytes = Vec::try_from(frame).unwrap();
         assert_eq!(
             bytes,

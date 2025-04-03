@@ -10,7 +10,7 @@ use bytes::Bytes;
 use futures_util::task::AtomicWaker;
 use std::io;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -21,10 +21,8 @@ use tracing::{debug, trace, warn};
 pub struct MuxStream<S> {
     /// Receive stream frames
     pub(super) frame_rx: mpsc::Receiver<Bytes>,
-    /// Our port
-    pub(super) our_port: u16,
-    /// Port of the other end
-    pub(super) their_port: u16,
+    /// Stream ID
+    pub(super) stream_id: u16,
     /// Forwarding destination. Only used on `Role::Server`
     pub dest_host: Bytes,
     /// Forwarding destination port. Only used on `Role::Server`
@@ -32,12 +30,12 @@ pub struct MuxStream<S> {
     /// Whether writes should succeed.
     pub(super) can_write: Arc<AtomicBool>,
     /// Number of frames we can still send before we need to wait for an `Ack`
-    pub(super) psh_send_remaining: Arc<AtomicU64>,
+    pub(super) psh_send_remaining: Arc<AtomicU32>,
     /// Number of `Psh` frames received after sending the previous `Ack` frame
     /// `config::RWND - psh_recvd_since` is approximately the peer's `psh_send_remaining`
-    pub(super) psh_recvd_since: AtomicU64,
-    /// Channel to send `Ack` frames to the mux task (our port, their port, psh_recvd_since)
-    pub(super) ack_tx: mpsc::UnboundedSender<(u16, u16, u64)>,
+    pub(super) psh_recvd_since: AtomicU32,
+    /// Channel to send `Ack` frames to the mux task (stream_id, psh_recvd_since)
+    pub(super) ack_tx: mpsc::UnboundedSender<(u16, u32)>,
     /// Waker to wake up the task that sends frames
     pub(super) writer_waker: Arc<AtomicWaker>,
     /// Remaining bytes to be read
@@ -45,14 +43,13 @@ pub struct MuxStream<S> {
     /// See `MultiplexorInner`.
     pub(super) ws: LockedWebSocket<S>,
     /// See `MultiplexorInner`.
-    pub(super) dropped_ports_tx: mpsc::UnboundedSender<(u16, u16)>,
+    pub(super) dropped_ports_tx: mpsc::UnboundedSender<u16>,
 }
 
 impl<S> std::fmt::Debug for MuxStream<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MuxStream")
-            .field("our_port", &self.our_port)
-            .field("their_port", &self.their_port)
+            .field("stream_id", &self.stream_id)
             .field("dest_host", &self.dest_host)
             .field("dest_port", &self.dest_port)
             .field("can_write", &self.can_write)
@@ -64,14 +61,14 @@ impl<S> std::fmt::Debug for MuxStream<S> {
 }
 
 impl<S> Drop for MuxStream<S> {
-    // Dropping the port should act like `close()` has been called.
+    // Dropping the stream should act like `close()` has been called.
     // Since `drop` is not async, this is handled by the mux task.
     /// Close the stream by instructing the mux task to send a `Rst` frame if
-    /// the stream is still open. The associated port will be freed for reuse.
+    /// the stream is still open. The associated stream id will be freed for reuse.
     fn drop(&mut self) {
-        // Notify the task that this port is no longer in use
+        // Notify the task that this stream id is no longer in use
         self.dropped_ports_tx
-            .send((self.our_port, self.their_port))
+            .send(self.stream_id)
             // Maybe the task has already exited, who knows
             .ok();
     }
@@ -114,9 +111,7 @@ impl<S> AsyncRead for MuxStream<S> {
                 let amount_to_ack = self.psh_recvd_since.swap(0, Ordering::Relaxed);
                 // Send an `Ack` frame
                 debug!("queueing `Ack` of {amount_to_ack} frames");
-                self.ack_tx
-                    .send((self.our_port, self.their_port, amount_to_ack))
-                    .ok();
+                self.ack_tx.send((self.stream_id, amount_to_ack)).ok();
                 // If the previous line fails, the task has exited.
                 // In this case, we don't care about the `Ack` frame and the
                 // user will discover the error when they try to write or read
@@ -175,7 +170,7 @@ where
                 // Atomic ordering: we don't really have a critical section here,
                 // so `Relaxed` should be enough.
                 let original = self.psh_send_remaining.load(Ordering::Acquire);
-                trace!("congestion window: {}", original);
+                trace!("congestion window: {original}");
                 if original == 0 {
                     // We have reached the congestion window limit. Wait for an `Ack`
                     debug!("waiting for `Ack`");
@@ -197,10 +192,7 @@ where
                 }
                 trace!("congestion window race condition, retrying");
             }
-            Poll::Ready(
-                StreamFrame::new_psh(self.our_port, self.their_port, Bytes::copy_from_slice(buf))
-                    .into(),
-            )
+            Poll::Ready(StreamFrame::new_psh(self.stream_id, Bytes::copy_from_slice(buf)).into())
         }))
         .map_err(WebSocketError::into_io_error)?;
         trace!("sent a frame");
@@ -231,7 +223,7 @@ where
             // Can write means that things above have not happened, so we should send a `Fin` frame.
             // `ready`: nothing happens if return here
             ready!(self.ws.poll_feed_with(cx, |_cx| {
-                Poll::Ready(StreamFrame::new_fin(self.our_port, self.their_port).into())
+                Poll::Ready(StreamFrame::new_fin(self.stream_id).into())
             }))
             .map_err(WebSocketError::into_io_error)?;
             // Atomic ordering: see `inner.rs` -> `shutdown` and `close_port`.

@@ -11,7 +11,7 @@ pub const DATAGRAM_BUFFER_SIZE: usize = 1 << 9;
 pub const STREAM_BUFFER_SIZE: usize = 1 << 5;
 
 /// Needs to be the same as `STREAM_FRAME_BUFFER_SIZE` but as `u64`
-pub const RWND: u64 = STREAM_FRAME_BUFFER_SIZE as u64;
+pub const RWND: u32 = STREAM_FRAME_BUFFER_SIZE as u32;
 
 /// Number of `StreamFrame`s to buffer in `MuxStream`'s channels before blocking
 #[cfg(not(test))]
@@ -20,7 +20,7 @@ pub const STREAM_FRAME_BUFFER_SIZE: usize = 1 << 9;
 /// If too low, `Ack`s will consume too much bandwidth;
 /// If too high, writers may block.
 #[cfg(not(test))]
-pub const RWND_THRESHOLD: u64 = 1 << 8;
+pub const RWND_THRESHOLD: u32 = 1 << 8;
 
 /// Number of `StreamFrame`s to buffer in `MuxStream`'s channels before blocking
 #[cfg(test)]
@@ -29,4 +29,4 @@ pub const STREAM_FRAME_BUFFER_SIZE: usize = 1 << 2;
 /// test the `Ack` mechanism, so we set this to be the same as the buffer size.
 /// The downside is that tests will be slower.
 #[cfg(test)]
-pub const RWND_THRESHOLD: u64 = RWND;
+pub const RWND_THRESHOLD: u32 = RWND;
