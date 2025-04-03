@@ -411,11 +411,12 @@ impl TryFrom<Vec<u8>> for Frame {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     #[test]
     fn test_stream_frame() {
+        tracing_subscriber::fmt().try_init().ok();
         let frame = Frame::Stream(StreamFrame::new_syn(&[], 5678, 1234, 128));
         assert_eq!(
             frame,
@@ -435,6 +436,7 @@ mod test {
 
     #[test]
     fn test_datagram_frame() {
+        tracing_subscriber::fmt().try_init().ok();
         let frame = Frame::Datagram(DatagramFrame {
             host: Bytes::from_static(&[1, 2, 3, 4]),
             port: 1234,
@@ -450,6 +452,7 @@ mod test {
     /// frames does not change without a protocol version bump.
     #[test]
     fn test_frame_repr() {
+        tracing_subscriber::fmt().try_init().ok();
         let frame = Frame::Stream(StreamFrame::new_syn(&[0x01, 0x02, 0x03], 5678, 1234, 512));
         let bytes = Vec::try_from(frame).unwrap();
         assert_eq!(

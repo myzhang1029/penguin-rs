@@ -254,13 +254,14 @@ pub fn remove_brackets(s: &str) -> &str {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     // We could have DRYed, but this is to physically show the difference.
     #[cfg(not(feature = "default-is-ipv6"))]
     #[test]
     fn test_default_host() {
+        tracing_subscriber::fmt().try_init().ok();
         assert_eq!(
             std::net::Ipv4Addr::from_str(&default_host!(unspec)).unwrap(),
             std::net::Ipv4Addr::UNSPECIFIED
@@ -273,6 +274,7 @@ mod test {
     #[cfg(feature = "default-is-ipv6")]
     #[test]
     fn test_default_host() {
+        tracing_subscriber::fmt().try_init().ok();
         assert_eq!(
             std::net::Ipv6Addr::from_str(&default_host!(unspec)).unwrap(),
             std::net::Ipv6Addr::UNSPECIFIED
@@ -286,6 +288,7 @@ mod test {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn test_parse_remote() {
+        tracing_subscriber::fmt().try_init().ok();
         let tests: &[(&str, Remote)] = &[
             // jpillora's tests and an exhausive list of cases
             (

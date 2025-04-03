@@ -88,12 +88,13 @@ where
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use std::io::Cursor;
 
     #[tokio::test]
     async fn test_read_request_ip() {
+        tracing_subscriber::fmt().try_init().ok();
         let mut reader = Cursor::new([0x01, 0x00, 0x50, 0x7f, 0x00, 0x00, 0x01, 0x61, 0x00]);
         let (command, rhost, rport) = read_request(&mut reader).await.unwrap();
         assert_eq!(command, 0x01);
@@ -103,6 +104,7 @@ mod test {
 
     #[tokio::test]
     async fn test_read_request_domain() {
+        tracing_subscriber::fmt().try_init().ok();
         let mut reader = Cursor::new([
             0x01, 0x00, 0x50, 0x00, 0x00, 0x00, 0x01, 0x61, 0x00, 0x77, 0x77, 0x77, 0x2e, 0x65,
             0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2e, 0x63, 0x6f, 0x6d, 0x00,
@@ -115,6 +117,7 @@ mod test {
 
     #[tokio::test]
     async fn test_write_response() {
+        tracing_subscriber::fmt().try_init().ok();
         let mut writer = Cursor::new(Vec::new());
         write_response(&mut writer, 0x5a).await.unwrap();
         assert_eq!(

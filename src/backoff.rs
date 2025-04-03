@@ -58,11 +58,12 @@ impl Backoff {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     #[test]
     fn test_backoff() {
+        tracing_subscriber::fmt().try_init().ok();
         let mut backoff = Backoff::new(Duration::from_millis(10), Duration::from_secs(1), 2, 5);
         assert_eq!(backoff.advance(), Some(Duration::from_millis(10)));
         assert_eq!(backoff.advance(), Some(Duration::from_millis(20)));

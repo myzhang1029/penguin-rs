@@ -286,6 +286,7 @@ mod tests {
     #[cfg(not(target_os = "windows"))]
     #[tokio::test]
     async fn test_issue() {
+        tracing_subscriber::fmt().try_init().ok();
         let script_path = format!(
             "{}/.github/workflows/http01_helper_for_test.sh",
             env!("CARGO_MANIFEST_DIR")

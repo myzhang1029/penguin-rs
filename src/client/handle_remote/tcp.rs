@@ -124,12 +124,13 @@ pub(super) async fn handle_tcp_stdio(
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use tokio::io::AsyncWriteExt;
 
     #[tokio::test]
     async fn test_open_tcp_listener() {
+        tracing_subscriber::fmt().try_init().ok();
         let listener = open_tcp_listener("127.0.0.1", 0).await.unwrap();
         let local_addr = listener.local_addr().unwrap();
         assert_eq!(local_addr.ip(), std::net::Ipv4Addr::LOCALHOST);

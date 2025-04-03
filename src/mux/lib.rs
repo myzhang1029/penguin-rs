@@ -15,7 +15,7 @@ mod inner;
 mod locked_sink;
 mod stream;
 #[cfg(test)]
-mod test;
+mod tests;
 pub mod ws;
 
 use crate::dupe::Dupe;

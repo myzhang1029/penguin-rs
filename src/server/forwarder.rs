@@ -133,11 +133,12 @@ pub(super) async fn tcp_forwarder_on_channel(
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     #[tokio::test]
     async fn test_bind_and_send_v4() {
+        tracing_subscriber::fmt().try_init().ok();
         let target_sock = UdpSocket::bind(("127.0.0.1", 0)).await.unwrap();
         let target_addr = target_sock.local_addr().unwrap();
         let (socket, target) = bind_and_send(("127.0.0.1", target_addr.port()), b"hello")
@@ -156,6 +157,7 @@ mod test {
 
     #[tokio::test]
     async fn test_bind_and_send_v6() {
+        tracing_subscriber::fmt().try_init().ok();
         let target_sock = UdpSocket::bind(("::1", 0)).await.unwrap();
         let target_addr = target_sock.local_addr().unwrap();
         let (socket, target) = bind_and_send(("::1", target_addr.port()), b"hello")
@@ -174,6 +176,7 @@ mod test {
 
     #[tokio::test]
     async fn test_udp_forward_to_v4() {
+        tracing_subscriber::fmt().try_init().ok();
         let target_sock = UdpSocket::bind(("127.0.0.1", 0)).await.unwrap();
         let target_addr = target_sock.local_addr().unwrap();
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
@@ -202,6 +205,7 @@ mod test {
 
     #[tokio::test]
     async fn test_udp_forward_to_v6() {
+        tracing_subscriber::fmt().try_init().ok();
         let target_sock = UdpSocket::bind(("::1", 0)).await.unwrap();
         let target_addr = target_sock.local_addr().unwrap();
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);

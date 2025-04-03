@@ -12,7 +12,7 @@ mod parse_remote;
 mod proto_version;
 mod server;
 #[cfg(test)]
-mod test;
+mod tests;
 mod tls;
 
 use thiserror::Error;

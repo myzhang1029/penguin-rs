@@ -65,7 +65,7 @@ async fn read_key_cert(key_path: &str, cert_path: &str) -> Result<Identity, Erro
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use rcgen::CertificateParams;
     use tempfile::tempdir;
@@ -74,6 +74,7 @@ mod test {
     #[tokio::test]
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     async fn test_read_key_cert() {
+        tracing_subscriber::fmt().try_init().ok();
         let tmpdir = tempdir().unwrap();
         let key_path = tmpdir.path().join("key.pem");
         let cert_path = tmpdir.path().join("cert.pem");
@@ -92,6 +93,7 @@ mod test {
     #[cfg(feature = "acme")]
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     async fn test_make_server_config_from_rcgen_pem() {
+        tracing_subscriber::fmt().try_init().ok();
         let cert_params = CertificateParams::new(vec!["example.com".into()]).unwrap();
         let keypair = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P384_SHA384).unwrap();
         let custom_crt = cert_params.self_signed(&keypair).unwrap();

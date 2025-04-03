@@ -91,7 +91,7 @@ pub(super) async fn handle_udp_stdio(
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use crate::client::ClientIdMaps;
     use tokio::sync::RwLock;
@@ -100,6 +100,7 @@ mod test {
     async fn test_handle_udp() {
         static LHOST: &str = "127.0.0.1";
         static RHOST: &str = "127.0.0.1";
+        tracing_subscriber::fmt().try_init().ok();
         let (datagram_tx, mut datagram_rx) = tokio::sync::mpsc::channel(1);
         let (stream_command_tx, _) = tokio::sync::mpsc::channel(1);
         let udp_client_map = Arc::new(RwLock::new(ClientIdMaps::new()));
