@@ -1,37 +1,35 @@
--- Wireshark dissector for the Penguin v6 protocol
-penguinv6_proto = Proto("penguin-v6", "Penguin v6 Protocol")
+-- Wireshark dissector for the Penguin v7 protocol
+penguinv6_proto = Proto("penguin-v7", "Penguin v7 Protocol")
 
-local f_type = ProtoField.string("penguin-v6.type", "Type")
-local f_forwarding_port = ProtoField.uint16("penguin-v6.forwarding_port", "Forwarding Port")
-local f_forwarding_host = ProtoField.string("penguin-v6.forwarding_host", "Forwarding Host")
-local f_payload = ProtoField.bytes("penguin-v6.payload", "Payload")
+local f_type = ProtoField.string("penguin-v7.type", "Type")
+local f_forwarding_port = ProtoField.uint16("penguin-v7.forwarding_port", "Forwarding Port")
+local f_forwarding_host = ProtoField.string("penguin-v7.forwarding_host", "Forwarding Host")
+local f_payload = ProtoField.bytes("penguin-v7.payload", "Payload")
+local f_sport = ProtoField.uint16("penguin-v7.sport", "Source Port")
+local f_dport = ProtoField.uint16("penguin-v7.dport", "Destination Port")
 -- stream only
-local f_rwnd = ProtoField.uint64("penguin-v6.rwnd", "Buffer Size")
-local f_sport = ProtoField.uint16("penguin-v6.sport", "Source Port")
-local f_dport = ProtoField.uint16("penguin-v6.dport", "Destination Port")
-local f_flag = ProtoField.string("penguin-v6.flag", "Flag")
-local f_ack = ProtoField.uint64("penguin-v6.ack", "Acknowledge Amount")
+local f_rwnd = ProtoField.uint64("penguin-v7.rwnd", "Buffer Size")
+local f_opcode = ProtoField.string("penguin-v7.opcode", "Operation Code")
+local f_ack = ProtoField.uint64("penguin-v7.ack", "Acknowledge Amount")
 -- datagram only
-local f_host_len = ProtoField.uint8("penguin-v6.host_len", "Host Length")
-local f_userid = ProtoField.uint32("penguin-v6.userid", "User ID")
+local f_host_len = ProtoField.uint8("penguin-v7.host_len", "Host Length")
 
-penguinv6_proto.fields = {
+penguinv7_proto.fields = {
     f_type,
     f_forwarding_port,
     f_forwarding_host,
     f_payload,
-    f_rwnd,
     f_sport,
     f_dport,
-    f_flag,
+    f_rwnd,
+    f_opcode,
     f_ack,
-    f_host_len,
-    f_userid
+    f_host_len
 }
 
-function penguinv6_proto.dissector(buffer, pinfo, tree)
-    pinfo.cols.protocol = "Penguin v6"
-    local subtree = tree:add(penguinv6_proto, buffer(), "Penguin v6 Protocol")
+function penguinv7_proto.dissector(buffer, pinfo, tree)
+    pinfo.cols.protocol = "Penguin v7"
+    local subtree = tree:add(penguinv7_proto, buffer(), "Penguin v7 Protocol")
     local frame_type = buffer(0, 1):uint()
     if frame_type == 1 then
         -- Stream Frame

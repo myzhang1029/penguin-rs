@@ -26,13 +26,13 @@ async fn connect_succeeds() {
     let server_task = tokio::spawn(async move {
         let stream = server_mux.server_new_stream_channel().await.unwrap();
         info!(
-            "stream id = {}, dest = {:?}:{}",
-            stream.stream_id, stream.dest_host, stream.dest_port
+            "sport = {}, dport = {}, dest = {:?}:{}",
+            stream.our_port, stream.their_port, stream.dest_host, stream.dest_port
         );
     });
 
     let stream = client_mux.client_new_stream_channel(&[], 0).await.unwrap();
-    info!("stream id = {}", stream.stream_id);
+    info!("sport = {}, dport = {}", stream.our_port, stream.their_port);
     debug!("Waiting for server task to finish");
     server_task.await.unwrap();
 }
@@ -58,18 +58,20 @@ async fn datagram_channel_passes_data() {
         debug!("Client sending datagram");
         client_mux
             .send_datagram(DatagramFrame {
-                host: Bytes::from_static(b"example.com"),
-                port: 53,
-                sid: 1,
+                sport: 1,
+                dport: 0,
+                target_host: Bytes::from_static(b"example.com"),
+                target_port: 53,
                 data: payload.clone(),
             })
             .await
             .unwrap();
         debug!("Client awaiting datagram");
         let recvd = client_mux.get_datagram().await.unwrap();
-        assert_eq!(*recvd.host, *b"example.com");
-        assert_eq!(recvd.port, 53);
-        assert_eq!(recvd.sid, 1);
+        assert_eq!(recvd.sport, 1);
+        assert_eq!(recvd.dport, 0);
+        assert_eq!(*recvd.target_host, *b"example.com");
+        assert_eq!(recvd.target_port, 53);
         assert_eq!(recvd.data, payload);
     }
     debug!("Waiting for server task to finish");

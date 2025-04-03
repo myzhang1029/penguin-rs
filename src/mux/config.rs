@@ -10,7 +10,7 @@ pub const DATAGRAM_BUFFER_SIZE: usize = 1 << 9;
 /// need to have a crazy high buffer size.
 pub const STREAM_BUFFER_SIZE: usize = 1 << 5;
 
-/// Needs to be the same as `STREAM_FRAME_BUFFER_SIZE` but as `u64`
+/// Needs to be the same as `STREAM_FRAME_BUFFER_SIZE` but as `u32`
 pub const RWND: u32 = STREAM_FRAME_BUFFER_SIZE as u32;
 
 /// Number of `StreamFrame`s to buffer in `MuxStream`'s channels before blocking

@@ -34,7 +34,7 @@ use tokio::{
 };
 use tracing::{error, trace, warn};
 
-pub use crate::frame::{DatagramFrame, Frame, StreamFrame, StreamOpCode};
+pub use crate::frame::{DatagramFrame, Frame, StreamOpCode, StreamFrame};
 pub use crate::stream::MuxStream;
 pub use crate::ws::Role;
 
@@ -75,9 +75,20 @@ pub enum Error {
     /// "The client and server MUST NOT use other WebSocket data frame types"
     #[error("Received `Text` message")]
     TextMessage,
-    /// A `Syn` frame carrying a stream id that is already in use.
-    #[error("Invalid `Syn` stream id: {0}")]
-    InvalidSynStreamId(u16),
+    /// A `SynAck` frame was received by the server.
+    /// "clients MUST NOT send `SynAck` frames"
+    #[error("Server received `SynAck` frame")]
+    ServerReceivedSynAck,
+    /// A `Syn` frame was received by the client.
+    /// "Servers MUST NOT send `Syn` frames"
+    #[error("Client received `Syn` frame")]
+    ClientReceivedSyn,
+    /// A `Syn` frame carrying a non-zero-port ot aport that is already in use.
+    #[error("Invalid `Syn` port: {0}")]
+    InvalidSynPort(u16),
+    /// A `SynAck` frame that does not match any pending `Syn` request.
+    #[error("Bogus `SynAck` frame")]
+    BogusSynAck,
 }
 
 /// A variant of [`std::result::Result`] with [`enum@Error`] as the error type.
@@ -172,20 +183,18 @@ impl<S: WebSocketStream> Multiplexor<S> {
     pub async fn client_new_stream_channel(&self, host: &[u8], port: u16) -> Result<MuxStream<S>> {
         assert_eq!(self.inner.role, Role::Client);
         let (stream_tx, stream_rx) = oneshot::channel();
-        let stream_id = {
+        let sport = {
             let mut streams = self.inner.streams.write().await;
-            // Allocate a new stream id
-            let stream_id = u16::next_available_key(&*streams);
-            trace!("stream id = {stream_id}");
-            streams.insert(stream_id, inner::MuxStreamSlot::Requested(stream_tx));
-            stream_id
+            // Allocate a new port
+            let sport = u16::next_available_key(&*streams);
+            trace!("sport = {sport}");
+            streams.insert(sport, inner::MuxStreamSlot::Requested(stream_tx));
+            sport
         };
-        trace!("sending `Syn`");
+        trace!("sending `Con`");
         self.inner
             .ws
-            .send_with(|| {
-                StreamFrame::new_syn(Some(host), Some(port), stream_id, config::RWND).into()
-            })
+            .send_with(|| StreamFrame::new_con(host, port, sport, config::RWND).into())
             .await
             .map_err(Error::SendStreamFrame)?;
         trace!("sending stream to user");
@@ -266,7 +275,7 @@ impl<S: WebSocketStream> Multiplexor<S> {
 
 impl<S> Drop for Multiplexor<S> {
     fn drop(&mut self) {
-        self.inner.dropped_ports_tx.send(0).ok();
+        self.inner.dropped_ports_tx.send((0, 0)).ok();
     }
 }
 
