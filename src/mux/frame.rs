@@ -81,17 +81,29 @@ impl StreamFrame {
     /// * `rwnd`: Number of frames buffered in the client receive buffer.
     #[must_use]
     #[inline]
-    pub fn new_syn(dest_host: &[u8], dest_port: u16, id: u16, rwnd: u32) -> Self {
-        let host_len = dest_host.len();
-        let mut syn_payload =
-            Vec::with_capacity(std::mem::size_of::<u32>() + std::mem::size_of::<u16>() + host_len);
-        syn_payload.put_u32(rwnd);
-        syn_payload.put_u16(dest_port);
-        syn_payload.extend(dest_host);
+    pub fn new_syn(dest_host: Option<&[u8]>, dest_port: Option<u16>, id: u16, rwnd: u32) -> Self {
+        let syn_payload = match dest_host {
+            Some(dest_host) => {
+                let host_len = dest_host.len();
+                let mut syn_payload = Vec::with_capacity(
+                    std::mem::size_of::<u32>() + std::mem::size_of::<u16>() + host_len,
+                );
+                syn_payload.put_u32(rwnd);
+                syn_payload.put_u16(dest_port.expect(
+                    "`dest_port` not provided when `dest_host` is present (this is a bug)",
+                ));
+                syn_payload.extend(dest_host);
+                Bytes::from(syn_payload)
+            }
+            None => {
+                // When `dest_host` is None, we only send `rwnd`
+                Bytes::copy_from_slice(&rwnd.to_be_bytes())
+            }
+        };
         Self {
             opcode: StreamOpCode::Syn,
             id,
-            data: Bytes::from(syn_payload),
+            data: syn_payload,
         }
     }
     /// Create a new [`StreamFlag::Ack`] frame.
@@ -340,7 +352,7 @@ mod tests {
     #[test]
     fn test_stream_frame() {
         crate::tests::setup_logging();
-        let frame = Frame::Stream(StreamFrame::new_syn(&[], 5678, 1234, 128));
+        let frame = Frame::Stream(StreamFrame::new_syn(Some(&[]), Some(5678), 1234, 128));
         assert_eq!(
             frame,
             Frame::Stream(StreamFrame {
@@ -373,7 +385,7 @@ mod tests {
     #[test]
     fn test_frame_repr() {
         crate::tests::setup_logging();
-        let frame = Frame::Stream(StreamFrame::new_syn(&[0x01, 0x02, 0x03], 5678, 1234, 512));
+        let frame = Frame::Stream(StreamFrame::new_syn(Some(&[0x01, 0x02, 0x03]), Some(5678), 1234, 512));
         let bytes = Vec::try_from(frame).unwrap();
         assert_eq!(
             bytes,
@@ -383,7 +395,19 @@ mod tests {
                 0x04, 0xd2, // id (u16)
                 0x00, 0x00, 0x02, 0x00, // rwnd (u32)
                 0x16, 0x2e, // dest_port (u16)
-                0x01, 0x02, 0x03, // data (variable)
+                0x01, 0x02, 0x03, // host (variable)
+            ]
+        );
+
+        let frame = Frame::Stream(StreamFrame::new_syn(None, None, 1234, 512));
+        let bytes = Vec::try_from(frame).unwrap();
+        assert_eq!(
+            bytes,
+            vec![
+                0x01, // frame type (u8)
+                0x00, // opcode (u8)
+                0x04, 0xd2, // id (u16)
+                0x00, 0x00, 0x02, 0x00, // rwnd (u32)
             ]
         );
 
