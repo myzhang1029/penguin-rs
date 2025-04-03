@@ -4,52 +4,8 @@
 //! Architecture:
 //! The system is similar to a traditional SOCKS5 proxy, but the protocol
 //! allows for UDP to be transmitted over the same WebSocket connection.
-//! It is essentially a SOCKS5 forwarder over a WebSocket link.
 //!
-//! All `Message`s carry a complete frame:
-//! - 1 byte: type (1 for TCP, 3 for UDP)
-//! - variable: dependent on the type (see `StreamFrame` and `DatagramFrame`).
-//!
-//! `Stream` messages are connection-based.
-//! The frames are in the following format:
-//! - 2 bytes: source port in network byte order.
-//! - 2 bytes: destination port in network byte order.
-//! - 1 byte: type (see below)
-//! - variable: payload
-//!
-//! There are six types of frames:
-//! - `Syn`: the client sends this frame to request a connection to a target:
-//!   - 4 bytes: initial receive window size in network byte order.
-//!   - 2 bytes: forwarding destination port in network byte order.
-//!   - variable: (0..256) bytes: (forwarding destination domain name or IP).
-//! - `SynAck`: the server replies with this frame to confirm the connection.
-//!   It is in the same format as `Ack`. Using two types of frames is to
-//!   avoid having to implement a state machine.
-//! - `Ack`: the server replies with this frame to confirm the data reception:
-//!   - 4 bytes: number of `Psh` frames processed since the last `Ack` frame.
-//! - `Rst`: one side sends this frame to indicate that the connection should
-//!   be closed.
-//! - `Psh`: one side sends this frame to send data.
-//! - `Fin`: one side sends this frame to indicate that it has no more data to
-//!   send.
-//!
-//! The handshake is simpler than a TCP handshake:
-//! The client sends a `Syn` frame, then the server replies an `SynAck`.
-//! To reduce overhead, in `Syn`, the `dport` is 0, and the server replies
-//! with a usable port in the `sport` of the `SynAck` frame.
-//! The client asks for a target to `connect` in the `Syn` payload (see above).
-//!
-//! After a certain amount of `Psh` frames are received, the mux will send
-//! a `Ack` frame to confirm the data. The `Ack` frame carries the current
-//! remaining space in the receive buffer as a `u64`. (Similar to TCP receiving
-//! window). One side should never write more frames than the other side's
-//! receive window size before receiving the next `Ack` frame.
-//!
-//! `Datagram` messages are connectionless. On the client side,
-//! each forwarder client (i.e. (port, host) tuple) is assigned a unique
-//! Source ID, and the frame also carries its intended target.
-//! When the server receives datagrams from that target, it will
-//! send them back to the client with the same Source ID.
+//! For more details, see the `PROTOCOL.md` file in the project root.
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 #![allow(clippy::similar_names)]
@@ -71,22 +27,24 @@ pub enum Error {
     InvalidStreamFlag(u8),
 }
 
-/// Stream frame types
+/// Stream operation codes
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
-pub enum StreamFlag {
-    /// Initiating connection by the client.
+pub enum StreamOpCode {
+    /// Initiating connection by the client
     Syn = 0,
-    /// Confirming connection by the server.
-    SynAck = 1,
-    /// Confirming data reception.
+    /// Reserved
+    _Reserved = 1,
+    /// Confirming data reception
     Ack = 2,
-    /// Aborting connection when `dport` does not exist.
+    /// Aborting connection
     Rst = 3,
-    /// Closing connection.
+    /// Closing connection
     Fin = 4,
-    /// Sending data.
+    /// Sending data
     Psh = 5,
+    /// Binding a port
+    Bnd = 6,
 }
 
 /// Stream frame.
@@ -95,12 +53,10 @@ pub enum StreamFlag {
 #[derive(Clone, PartialEq, Eq)]
 #[repr(C)]
 pub struct StreamFrame {
-    /// Source port (2 bytes)
-    pub sport: u16,
-    /// Destination port (2 bytes)
-    pub dport: u16,
-    /// Frame type (1 byte)
-    pub flag: StreamFlag,
+    /// Operation code (1 byte)
+    pub opcode: StreamOpCode,
+    /// Stream ID (4 bytes)
+    pub id: u32,
     /// Data
     pub data: Bytes,
 }
@@ -108,9 +64,8 @@ pub struct StreamFrame {
 impl Debug for StreamFrame {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StreamFrame")
-            .field("sport", &self.sport)
-            .field("dport", &self.dport)
-            .field("flag", &self.flag)
+            .field("id", &self.id)
+            .field("opcode", &self.opcode)
             .field("data.len", &self.data.len())
             .finish()
     }
@@ -122,104 +77,80 @@ impl StreamFrame {
     /// # Arguments
     /// * `dest_host`: The destination host to forward to.
     /// * `dest_port`: The destination port to forward to.
-    /// * `sport`: The source port of this stream.
+    /// * `id`: The ID of the stream.
     /// * `rwnd`: Number of frames buffered in the client receive buffer.
     #[must_use]
     #[inline]
-    pub fn new_syn(dest_host: &[u8], dest_port: u16, sport: u16, rwnd: u64) -> Self {
+    pub fn new_syn(dest_host: &[u8], dest_port: u16, id: u32, rwnd: u32) -> Self {
         let host_len = dest_host.len();
         let mut syn_payload =
-            Vec::with_capacity(std::mem::size_of::<u64>() + std::mem::size_of::<u16>() + host_len);
-        syn_payload.put_u64(rwnd);
+            Vec::with_capacity(std::mem::size_of::<u32>() + std::mem::size_of::<u16>() + host_len);
+        syn_payload.put_u32(rwnd);
         syn_payload.put_u16(dest_port);
         syn_payload.extend(dest_host);
         Self {
-            sport,
-            dport: 0,
-            flag: StreamFlag::Syn,
+            opcode: StreamOpCode::Syn,
+            id,
             data: Bytes::from(syn_payload),
-        }
-    }
-    /// Create a new [`StreamFlag::SynAck`] frame.
-    ///
-    /// # Arguments
-    /// * `sport`: The source port of this stream.
-    /// * `dport`: The destination port of this stream (i.e. the source port
-    ///   of the `Syn` frame).
-    /// * `rwnd`: Number of frames buffered in the server receive buffer.
-    #[must_use]
-    #[inline]
-    pub fn new_synack(sport: u16, dport: u16, rwnd: u64) -> Self {
-        Self {
-            sport,
-            dport,
-            flag: StreamFlag::SynAck,
-            data: Bytes::copy_from_slice(&rwnd.to_be_bytes()),
         }
     }
     /// Create a new [`StreamFlag::Ack`] frame.
     ///
     /// # Arguments
-    /// * `sport`: The source port of this stream.
-    /// * `dport`: The destination port of this stream.
+    /// * `id`: The stream ID of the frame being acknowledged.
     /// * `psh_recvd_since`: The number of `Psh` frames received since the
     ///   previous `Ack` frame.
     #[must_use]
     #[inline]
-    pub fn new_ack(sport: u16, dport: u16, psh_recvd_since: u64) -> Self {
+    pub fn new_ack(id: u32, psh_recvd_since: u32) -> Self {
         Self {
-            sport,
-            dport,
-            flag: StreamFlag::Ack,
+            opcode: StreamOpCode::Ack,
+            id,
             data: Bytes::copy_from_slice(&psh_recvd_since.to_be_bytes()),
         }
     }
     /// Create a new [`StreamFlag::Rst`] frame.
     ///
     /// # Arguments
-    /// * `sport`: The destination port of the offending frame.
-    /// * `dport`: The source port of the offending frame.
+    /// * `id`: The stream ID of the offending frame.
     #[must_use]
     #[inline]
-    pub const fn new_rst(sport: u16, dport: u16) -> Self {
+    pub const fn new_rst(id: u32) -> Self {
         Self {
-            sport,
-            dport,
-            flag: StreamFlag::Rst,
+            opcode: StreamOpCode::Rst,
+            id,
             data: Bytes::new(),
         }
     }
     /// Create a new [`StreamFlag::Fin`] frame.
     ///
     /// # Arguments
-    /// * `sport`: The source port of this stream.
-    /// * `dport`: The destination port of this stream.
+    /// * `id`: The stream ID of the frame being closed.
     #[must_use]
     #[inline]
-    pub const fn new_fin(sport: u16, dport: u16) -> Self {
+    pub const fn new_fin(id: u32) -> Self {
         Self {
-            sport,
-            dport,
-            flag: StreamFlag::Fin,
+            opcode: StreamOpCode::Fin,
+            id,
             data: Bytes::new(),
         }
     }
     /// Create a new [`StreamFlag::Psh`] frame.
     ///
     /// # Arguments
-    /// * `sport`: The source port of this stream.
-    /// * `dport`: The destination port of this stream.
+    /// * `id`: The stream ID of the frame.
     /// * `data`: The data to send.
     #[must_use]
     #[inline]
-    pub const fn new_psh(sport: u16, dport: u16, data: Bytes) -> Self {
+    pub const fn new_psh(id: u32, data: Bytes) -> Self {
         Self {
-            sport,
-            dport,
-            flag: StreamFlag::Psh,
+            opcode: StreamOpCode::Psh,
+            id,
             data,
         }
     }
+
+    // TODO: Implement `new_bnd` when needed.
 }
 
 /// Datagram frame.
@@ -270,17 +201,14 @@ impl From<StreamFrame> for Vec<u8> {
     #[tracing::instrument(level = "trace")]
     #[inline]
     fn from(frame: StreamFrame) -> Self {
-        let size = 1
-            + std::mem::size_of::<u16>()
-            + std::mem::size_of::<u16>()
-            + std::mem::size_of::<StreamFlag>()
+        let size = std::mem::size_of::<u8>()
+            + std::mem::size_of::<StreamOpCode>()
             + std::mem::size_of::<u32>()
             + frame.data.len();
         let mut encoded = Self::with_capacity(size);
         encoded.put_u8(1);
-        encoded.put_u16(frame.sport);
-        encoded.put_u16(frame.dport);
-        encoded.put_u8(frame.flag as u8);
+        encoded.put_u8(frame.opcode as u8);
+        encoded.put_u32(frame.id);
         encoded.extend(&frame.data);
         encoded
     }
@@ -329,23 +257,18 @@ impl TryFrom<Bytes> for StreamFrame {
         if data.remaining() < 5 {
             return Err(Error::FrameTooShort);
         }
-        let sport = data.get_u16();
-        let dport = data.get_u16();
-        let flag = match data.get_u8() {
-            0 => StreamFlag::Syn,
-            1 => StreamFlag::SynAck,
-            2 => StreamFlag::Ack,
-            3 => StreamFlag::Rst,
-            4 => StreamFlag::Fin,
-            5 => StreamFlag::Psh,
+        let opcode = match data.get_u8() {
+            0 => StreamOpCode::Syn,
+            1 => panic!("Reserved opcode 1 received (this is a bug)"),
+            2 => StreamOpCode::Ack,
+            3 => StreamOpCode::Rst,
+            4 => StreamOpCode::Fin,
+            5 => StreamOpCode::Psh,
+            6 => StreamOpCode::Bnd,
             other => return Err(Error::InvalidStreamFlag(other)),
         };
-        Ok(Self {
-            sport,
-            dport,
-            flag,
-            data,
-        })
+        let id = data.get_u32();
+        Ok(Self { opcode, id, data })
     }
 }
 
@@ -421,12 +344,9 @@ mod tests {
         assert_eq!(
             frame,
             Frame::Stream(StreamFrame {
-                sport: 1234,
-                dport: 0,
-                flag: StreamFlag::Syn,
-                data: Bytes::from_static(&[
-                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x16, 0x2e
-                ]),
+                id: 1234,
+                opcode: StreamOpCode::Syn,
+                data: Bytes::from_static(&[0x00, 0x00, 0x00, 0x80, 0x16, 0x2e]),
             })
         );
         let bytes = Vec::try_from(frame.clone()).unwrap();
@@ -459,68 +379,50 @@ mod tests {
             bytes,
             vec![
                 0x01, // frame type (u8)
-                0x04, 0xd2, // sport (u16)
-                0x00, 0x00, // dport (u16)
-                0x00, // flag (u8)
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, // rwnd (u64)
+                0x00, // opcode (u8)
+                0x00, 0x00, 0x04, 0xd2, // id (u32)
+                0x00, 0x00, 0x02, 0x00, // rwnd (u32)
                 0x16, 0x2e, // dest_port (u16)
                 0x01, 0x02, 0x03, // data (variable)
             ]
         );
 
-        let frame = Frame::Stream(StreamFrame::new_synack(1234, 5678, 128));
+        let frame = Frame::Stream(StreamFrame::new_ack(5678, 128));
         let bytes = Vec::try_from(frame).unwrap();
         assert_eq!(
             bytes,
             vec![
                 0x01, // frame type (u8)
-                0x04, 0xd2, // sport (u16)
-                0x16, 0x2e, // dport (u16)
-                0x01, // flag (u8)
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, // rwnd (u64)
+                0x02, // opcode (u8)
+                0x00, 0x00, 0x16, 0x2e, // id (u32)
+                0x00, 0x00, 0x00, 0x80, // psh_recvd_since (u32)
             ]
         );
 
-        let frame = Frame::Stream(StreamFrame::new_ack(5678, 1234, 128));
+        let frame = Frame::Stream(StreamFrame::new_rst(12345678));
         let bytes = Vec::try_from(frame).unwrap();
         assert_eq!(
             bytes,
             vec![
                 0x01, // frame type (u8)
-                0x16, 0x2e, // sport (u16)
-                0x04, 0xd2, // dport (u16)
-                0x02, // flag (u8)
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, // psh_recvd_since (u64)
+                0x03, // opcode (u8)
+                0x07, 0x5b, 0xcd, 0x15, // id (u32)
             ]
         );
 
-        let frame = Frame::Stream(StreamFrame::new_rst(1234, 5678));
+        let frame = Frame::Stream(StreamFrame::new_fin(5678));
         let bytes = Vec::try_from(frame).unwrap();
         assert_eq!(
             bytes,
             vec![
                 0x01, // frame type (u8)
-                0x04, 0xd2, // sport (u16)
-                0x16, 0x2e, // dport (u16)
-                0x03, // flag (u8)
-            ]
-        );
-
-        let frame = Frame::Stream(StreamFrame::new_fin(5678, 1234));
-        let bytes = Vec::try_from(frame).unwrap();
-        assert_eq!(
-            bytes,
-            vec![
-                0x01, // frame type (u8)
-                0x16, 0x2e, // sport (u16)
-                0x04, 0xd2, // dport (u16)
-                0x04  // flag (u8)
+                0x04, // opcode (u8)
+                0x00, 0x00, 0x16, 0x2e, // id (u32)
             ]
         );
 
         let frame = Frame::Stream(StreamFrame::new_psh(
             1234,
-            5678,
             Bytes::from_static(&[1, 2, 3, 4]),
         ));
         let bytes = Vec::try_from(frame).unwrap();
@@ -528,9 +430,8 @@ mod tests {
             bytes,
             vec![
                 0x01, // frame type (u8)
-                0x04, 0xd2, // sport (u16)
-                0x16, 0x2e, // dport (u16)
-                0x05, // flag (u8)
+                0x05, // opcode (u8)
+                0x00, 0x00, 0x04, 0xd2, // id (u32)
                 0x01, 0x02, 0x03, 0x04 // data (variable)
             ]
         );
