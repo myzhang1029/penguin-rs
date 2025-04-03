@@ -61,15 +61,15 @@ Stream Frame Format:
 0                   1                   2                   3
 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-| Type (1 byte) | Oper (1 byte) |                  Stream ID
+| Type (1 byte) |  Op (1 byte)  |      Stream ID (2 bytes)      |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-        (4 bytes)               |        Data (variable)        |
+|                         Data (variable)                       |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
 
 - Type: `0x01` for a stream frame.
 
-- Stream ID: a 32-bit unsigned integer in network byte order for identifying
+- Stream ID: a 16-bit unsigned integer in network byte order for identifying
   logical streams multiplexed over the same connection.
 
 - Operation code: `0x00` is a `Syn` frame, `0x01` is reserved, `0x02` is an
