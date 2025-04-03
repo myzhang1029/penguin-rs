@@ -125,6 +125,8 @@ impl ChallengeHelper {
 #[cfg(test)]
 mod tests {
     use super::super::tests::*;
+    #[cfg(feature = "tests-acme-has-pebble")]
+    use super::super::tests_need_pebble::*;
     use super::*;
     #[cfg(feature = "tests-acme-has-pebble")]
     use instant_acme::{Account, Identifier, NewAccount, NewOrder};
@@ -152,7 +154,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(not(target_os = "windows"))]
     async fn test_call_challenge_helper_example() {
         tracing_subscriber::fmt().try_init().ok();
         let script_path = format!(
@@ -160,7 +161,7 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         );
         let tmpdir = tempdir().unwrap();
-        let actual_path = tmpdir.path().join("http01_helper");
+        let actual_path = tmpdir.path().join("http01_helper.sh");
         tokio::fs::copy(&script_path, &actual_path).await.unwrap();
         let helper = ChallengeHelper::from(actual_path);
         helper
@@ -193,7 +194,6 @@ mod tests {
     }
 
     #[cfg(feature = "tests-acme-has-pebble")]
-    #[cfg(not(target_os = "windows"))]
     #[tokio::test]
     async fn test_process_one_challenge() {
         tracing_subscriber::fmt().try_init().ok();
@@ -202,7 +202,7 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         );
         let tmpdir = tempdir().unwrap();
-        let actual_path = tmpdir.path().join("http01_helper");
+        let actual_path = tmpdir.path().join("http01_helper.sh");
         tokio::fs::copy(&script_path, &actual_path).await.unwrap();
         let helper = ChallengeHelper::from(actual_path);
         let (account, _cred) = Account::create_with_http(
@@ -261,7 +261,6 @@ mod tests {
     }
 
     #[cfg(feature = "tests-acme-has-pebble")]
-    #[cfg(not(target_os = "windows"))]
     #[tokio::test]
     async fn test_process_challenges() {
         tracing_subscriber::fmt().try_init().ok();
@@ -270,7 +269,7 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         );
         let tmpdir = tempdir().unwrap();
-        let actual_path = tmpdir.path().join("http01_helper");
+        let actual_path = tmpdir.path().join("http01_helper.sh");
         tokio::fs::copy(&script_path, &actual_path).await.unwrap();
         let helper = ChallengeHelper::from(actual_path);
         let (account, _cred) = Account::create_with_http(

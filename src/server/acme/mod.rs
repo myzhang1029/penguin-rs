@@ -212,26 +212,26 @@ async fn issue(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    #[cfg(feature = "tests-acme-has-pebble")]
-    use bytes::Bytes;
-    #[cfg(feature = "tests-acme-has-pebble")]
-    use http_body_util::BodyExt;
-    use tempfile::tempdir;
-    use tokio::io::AsyncReadExt;
-    #[cfg(feature = "tests-acme-has-pebble")]
-    use tokio::{io::AsyncWriteExt, net::TcpListener};
-
     pub const TEST_KEY_AUTH: &str =
         "f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY.tvg9X8xCoUuU_vK9qNR1d2RyGSGVfq3VYDJ-O81nnyY";
     pub const TEST_TOKEN: &str = "f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY";
-    #[cfg(feature = "tests-acme-has-pebble")]
+}
+
+#[cfg(test)]
+#[cfg(feature = "tests-acme-has-pebble")]
+mod tests_need_pebble {
+    use super::*;
+    use bytes::Bytes;
+    use http_body_util::BodyExt;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
     pub const TEST_PEBBLE_URL: &str = "https://localhost:14000/dir";
 
-    #[cfg(feature = "tests-acme-has-pebble")]
     #[derive(Clone, Debug)]
     pub struct IgnoreTlsHttpClient(reqwest::Client);
-    #[cfg(feature = "tests-acme-has-pebble")]
     impl IgnoreTlsHttpClient {
         pub fn new() -> Self {
             Self(
@@ -242,7 +242,6 @@ mod tests {
             )
         }
     }
-    #[cfg(feature = "tests-acme-has-pebble")]
     impl instant_acme::HttpClient for IgnoreTlsHttpClient {
         fn request(
             &self,
@@ -282,8 +281,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "tests-acme-has-pebble")]
-    #[cfg(not(target_os = "windows"))]
     #[tokio::test]
     async fn test_issue() {
         tracing_subscriber::fmt().try_init().ok();
@@ -291,8 +288,8 @@ mod tests {
             "{}/.github/workflows/http01_helper_for_test.sh",
             env!("CARGO_MANIFEST_DIR")
         );
-        let tmpdir = tempdir().unwrap();
-        let actual_path = tmpdir.path().join("http01_helper");
+        let tmpdir = tempfile::tempdir().unwrap();
+        let actual_path = tmpdir.path().join("http01_helper.sh");
         tokio::fs::copy(&script_path, &actual_path).await.unwrap();
         let http_server_task = tokio::spawn(async move {
             let listener4 = TcpListener::bind("127.0.0.1:5002").await.unwrap();

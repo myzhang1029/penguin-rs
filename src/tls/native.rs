@@ -64,15 +64,15 @@ async fn read_key_cert(key_path: &str, cert_path: &str) -> Result<Identity, Erro
     Ok(Identity::from_pkcs8(&cert, &key)?)
 }
 
+// `native_tls` on macOS and Windows doesn't support reading Ed25519 nor ECDSA-based certificates, but `rcgen` doesn't support generating RSA keys.
 #[cfg(test)]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod tests {
     use super::*;
     use rcgen::CertificateParams;
     use tempfile::tempdir;
 
-    // `native_tls` on macOS and Windows doesn't support reading Ed25519 nor ECDSA-based certificates.
     #[tokio::test]
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     async fn test_read_key_cert() {
         tracing_subscriber::fmt().try_init().ok();
         let tmpdir = tempdir().unwrap();
@@ -91,7 +91,6 @@ mod tests {
     }
     #[tokio::test]
     #[cfg(feature = "acme")]
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     async fn test_make_server_config_from_rcgen_pem() {
         tracing_subscriber::fmt().try_init().ok();
         let cert_params = CertificateParams::new(vec!["example.com".into()]).unwrap();
