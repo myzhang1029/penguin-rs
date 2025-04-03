@@ -34,9 +34,8 @@ use tokio::{
 };
 use tracing::{error, trace, warn};
 
-pub use crate::frame::{DatagramFrame, Frame, StreamOpCode, StreamFrame};
+pub use crate::frame::{DatagramFrame, Frame, StreamFrame, StreamOpCode};
 pub use crate::stream::MuxStream;
-pub use crate::ws::Role;
 
 /// Multiplexor error
 #[derive(Debug, Error)]
@@ -75,17 +74,9 @@ pub enum Error {
     /// "The client and server MUST NOT use other WebSocket data frame types"
     #[error("Received `Text` message")]
     TextMessage,
-    /// A `SynAck` frame was received by the server.
-    /// "clients MUST NOT send `SynAck` frames"
-    #[error("Server received `SynAck` frame")]
-    ServerReceivedSynAck,
-    /// A `Syn` frame was received by the client.
-    /// "Servers MUST NOT send `Syn` frames"
-    #[error("Client received `Syn` frame")]
-    ClientReceivedSyn,
-    /// A `Syn` frame carrying a non-zero-port ot aport that is already in use.
-    #[error("Invalid `Syn` port: {0}")]
-    InvalidSynPort(u16),
+    /// A `Con` frame carrying a non-zero-dport.
+    #[error("Received `Con` frame with non-zero dport ({0})")]
+    ConWithDport(u16),
     /// A `SynAck` frame that does not match any pending `Syn` request.
     #[error("Bogus `SynAck` frame")]
     BogusSynAck,
@@ -100,9 +91,9 @@ pub struct Multiplexor<S> {
     inner: MultiplexorInner<S>,
     /// Channel of received datagram frames for processing.
     datagram_rx: Mutex<mpsc::Receiver<DatagramFrame>>,
-    /// Channel for a server-side `Multiplexor` to receive newly
-    /// established streams.
-    server_stream_rx: Mutex<mpsc::Receiver<MuxStream<S>>>,
+    /// Channel for a `Multiplexor` to receive newly
+    /// established streams after the peer requests one.
+    con_recv_stream_rx: Mutex<mpsc::Receiver<MuxStream<S>>>,
 }
 
 impl<S: WebSocketStream> Multiplexor<S> {
@@ -123,17 +114,15 @@ impl<S: WebSocketStream> Multiplexor<S> {
     #[tracing::instrument(skip_all, level = "debug")]
     pub fn new(
         ws: S,
-        role: Role,
         keepalive_interval: Option<std::time::Duration>,
         task_joinset: Option<&mut JoinSet<Result<()>>>,
     ) -> Self {
         let (datagram_tx, datagram_rx) = mpsc::channel(config::DATAGRAM_BUFFER_SIZE);
-        let (server_stream_tx, server_stream_rx) = mpsc::channel(config::STREAM_BUFFER_SIZE);
+        let (con_recv_stream_tx, con_recv_stream_rx) = mpsc::channel(config::STREAM_BUFFER_SIZE);
         let (dropped_ports_tx, dropped_ports_rx) = mpsc::unbounded_channel();
         let (ack_tx, ack_rx) = mpsc::unbounded_channel();
 
         let inner = MultiplexorInner {
-            role,
             ws: locked_sink::LockedWebSocket::new(ws),
             keepalive_interval,
             streams: Arc::new(RwLock::new(HashMap::new())),
@@ -143,7 +132,7 @@ impl<S: WebSocketStream> Multiplexor<S> {
         let task_future =
             inner
                 .dupe()
-                .task(datagram_tx, server_stream_tx, dropped_ports_rx, ack_rx);
+                .task(datagram_tx, con_recv_stream_tx, dropped_ports_rx, ack_rx);
         if let Some(task_joinset) = task_joinset {
             task_joinset.spawn(task_future);
         } else {
@@ -158,7 +147,7 @@ impl<S: WebSocketStream> Multiplexor<S> {
         Self {
             inner,
             datagram_rx: Mutex::new(datagram_rx),
-            server_stream_rx: Mutex::new(server_stream_rx),
+            con_recv_stream_rx: Mutex::new(con_recv_stream_rx),
         }
     }
 
@@ -180,8 +169,7 @@ impl<S: WebSocketStream> Multiplexor<S> {
     /// inaccessible through normal means. Subsequent calls to this function
     /// will result in a new channel being established.
     #[tracing::instrument(skip(self), level = "debug")]
-    pub async fn client_new_stream_channel(&self, host: &[u8], port: u16) -> Result<MuxStream<S>> {
-        assert_eq!(self.inner.role, Role::Client);
+    pub async fn new_stream_channel(&self, host: &[u8], port: u16) -> Result<MuxStream<S>> {
         let (stream_tx, stream_rx) = oneshot::channel();
         let sport = {
             let mut streams = self.inner.streams.write().await;
@@ -206,7 +194,7 @@ impl<S: WebSocketStream> Multiplexor<S> {
         Ok(stream)
     }
 
-    /// Get the next available stream channel.
+    /// Accept a new stream channel from the remote peer.
     ///
     /// # Errors
     /// Returns [`Error::Closed`] if the connection is closed.
@@ -219,9 +207,8 @@ impl<S: WebSocketStream> Multiplexor<S> {
     /// for a new connection, it is guaranteed that no connected stream will
     /// be lost.
     #[tracing::instrument(skip(self), level = "debug")]
-    pub async fn server_new_stream_channel(&self) -> Result<MuxStream<S>> {
-        assert_eq!(self.inner.role, Role::Server);
-        self.server_stream_rx
+    pub async fn accept_stream_channel(&self) -> Result<MuxStream<S>> {
+        self.con_recv_stream_rx
             .lock()
             .await
             .recv()

@@ -20,18 +20,18 @@ async fn connect_succeeds() {
     setup_logging();
     let (client, server) = crate::ws::mock::get_pair().await;
 
-    let client_mux = Multiplexor::new(client, Role::Client, None, None);
-    let server_mux = Multiplexor::new(server, Role::Server, None, None);
+    let client_mux = Multiplexor::new(client, None, None);
+    let server_mux = Multiplexor::new(server, None, None);
 
     let server_task = tokio::spawn(async move {
-        let stream = server_mux.server_new_stream_channel().await.unwrap();
+        let stream = server_mux.accept_stream_channel().await.unwrap();
         info!(
             "sport = {}, dport = {}, dest = {:?}:{}",
             stream.our_port, stream.their_port, stream.dest_host, stream.dest_port
         );
     });
 
-    let stream = client_mux.client_new_stream_channel(&[], 0).await.unwrap();
+    let stream = client_mux.new_stream_channel(&[], 0).await.unwrap();
     info!("sport = {}, dport = {}", stream.our_port, stream.their_port);
     debug!("Waiting for server task to finish");
     server_task.await.unwrap();
@@ -42,8 +42,8 @@ async fn datagram_channel_passes_data() {
     setup_logging();
     let (client, server) = crate::ws::mock::get_pair().await;
 
-    let client_mux = Multiplexor::new(client, Role::Client, None, None);
-    let server_mux = Multiplexor::new(server, Role::Server, None, None);
+    let client_mux = Multiplexor::new(client, None, None);
+    let server_mux = Multiplexor::new(server, None, None);
 
     let server_task = tokio::spawn(async move {
         for _ in 0..64 {
@@ -83,15 +83,15 @@ async fn connected_stream_passes_data() {
     setup_logging();
     let (client, server) = crate::ws::mock::get_pair().await;
 
-    let client_mux = Multiplexor::new(client, Role::Client, None, None);
-    let server_mux = Multiplexor::new(server, Role::Server, None, None);
+    let client_mux = Multiplexor::new(client, None, None);
+    let server_mux = Multiplexor::new(server, None, None);
 
     let input_bytes: Vec<u8> = (0..(1024 * 1024)).map(|_| rand::random::<u8>()).collect();
     let len = input_bytes.len();
     let input_bytes_clone = input_bytes.clone();
 
     let server_task = tokio::spawn(async move {
-        let mut conn = server_mux.server_new_stream_channel().await.unwrap();
+        let mut conn = server_mux.accept_stream_channel().await.unwrap();
         let mut i = 0;
         while i < input_bytes_clone.len() {
             conn.write_all(&input_bytes_clone[i..i + 1024])
@@ -105,7 +105,7 @@ async fn connected_stream_passes_data() {
 
     let mut output_bytes: Vec<u8> = vec![];
 
-    let mut conn = client_mux.client_new_stream_channel(&[], 0).await.unwrap();
+    let mut conn = client_mux.new_stream_channel(&[], 0).await.unwrap();
     while output_bytes.len() < len {
         let mut buf = [0u8; 2048];
         let bytes = conn.read(&mut buf).await.unwrap();
@@ -126,22 +126,22 @@ async fn test_early_eof_detected() {
     setup_logging();
     let (client, server) = crate::ws::mock::get_pair().await;
 
-    let client_mux = Multiplexor::new(client, Role::Client, None, None);
-    let server_mux = Multiplexor::new(server, Role::Server, None, None);
+    let client_mux = Multiplexor::new(client, None, None);
+    let server_mux = Multiplexor::new(server, None, None);
 
     let input_bytes: Vec<u8> = (0..1024).map(|_| rand::random::<u8>()).collect();
     let len = input_bytes.len();
     let input_bytes_clone = input_bytes.clone();
 
     let server_task = tokio::spawn(async move {
-        let mut conn = server_mux.server_new_stream_channel().await.unwrap();
+        let mut conn = server_mux.accept_stream_channel().await.unwrap();
         conn.write_all(&input_bytes_clone).await.unwrap();
         info!("Done send");
     });
 
     let mut output_bytes: Vec<u8> = vec![];
 
-    let mut conn = client_mux.client_new_stream_channel(&[], 0).await.unwrap();
+    let mut conn = client_mux.new_stream_channel(&[], 0).await.unwrap();
     while output_bytes.len() < len + 2 {
         let mut buf = [0u8; 2048];
         let bytes = conn.read(&mut buf).await.unwrap();
@@ -162,15 +162,15 @@ async fn test_several_channels() {
     setup_logging();
     let (client, server) = crate::ws::mock::get_pair().await;
 
-    let client_mux = Multiplexor::new(client, Role::Client, None, None);
-    let server_mux = Multiplexor::new(server, Role::Server, None, None);
+    let client_mux = Multiplexor::new(client, None, None);
+    let server_mux = Multiplexor::new(server, None, None);
 
     let server_task = tokio::spawn(async move {
-        let mut conn1 = server_mux.server_new_stream_channel().await.unwrap();
+        let mut conn1 = server_mux.accept_stream_channel().await.unwrap();
         info!("server conn1 = {:?}", conn1);
-        let mut conn2 = server_mux.server_new_stream_channel().await.unwrap();
+        let mut conn2 = server_mux.accept_stream_channel().await.unwrap();
         info!("server conn2 = {:?}", conn2);
-        let mut conn3 = server_mux.server_new_stream_channel().await.unwrap();
+        let mut conn3 = server_mux.accept_stream_channel().await.unwrap();
         info!("server conn3 = {:?}", conn3);
         let mut buf = [0u8; 32];
         let bytes = conn3.read(&mut buf).await.unwrap();
@@ -183,11 +183,11 @@ async fn test_several_channels() {
         assert_eq!(buf[..bytes], b"hello"[..]);
         info!("server conn1 read = {:?}", bytes);
     });
-    let mut conn1 = client_mux.client_new_stream_channel(&[], 0).await.unwrap();
+    let mut conn1 = client_mux.new_stream_channel(&[], 0).await.unwrap();
     info!("client conn1 = {:?}", conn1);
-    let mut conn2 = client_mux.client_new_stream_channel(&[], 0).await.unwrap();
+    let mut conn2 = client_mux.new_stream_channel(&[], 0).await.unwrap();
     info!("client conn2 = {:?}", conn2);
-    let mut conn3 = client_mux.client_new_stream_channel(&[], 0).await.unwrap();
+    let mut conn3 = client_mux.new_stream_channel(&[], 0).await.unwrap();
     info!("client conn3 = {:?}", conn3);
     conn1.write_all(b"hello").await.unwrap();
     conn1.shutdown().await.unwrap();

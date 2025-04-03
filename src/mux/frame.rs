@@ -84,9 +84,8 @@ impl StreamFrame {
     #[inline]
     pub fn new_con(target_host: &[u8], target_port: u16, sport: u16, rwnd: u32) -> Self {
         let host_len = target_host.len();
-        let mut con_payload = Vec::with_capacity(
-            std::mem::size_of::<u32>() + std::mem::size_of::<u16>() + host_len,
-        );
+        let mut con_payload =
+            Vec::with_capacity(std::mem::size_of::<u32>() + std::mem::size_of::<u16>() + host_len);
         con_payload.put_u32(rwnd);
         con_payload.put_u16(target_port);
         con_payload.extend(target_host);
@@ -170,9 +169,7 @@ impl StreamFrame {
     #[must_use]
     #[inline]
     pub fn new_bnd(sport: u16, target_host: &[u8], target_port: u16) -> Self {
-        let mut bnd_payload = Vec::with_capacity(
-            std::mem::size_of::<u16>() + target_host.len(),
-        );
+        let mut bnd_payload = Vec::with_capacity(std::mem::size_of::<u16>() + target_host.len());
         bnd_payload.put_u16(target_port);
         bnd_payload.extend(target_host);
         Self {
@@ -307,7 +304,12 @@ impl TryFrom<Bytes> for StreamFrame {
         };
         let sport = data.get_u16();
         let dport = data.get_u16();
-        Ok(Self { opcode, sport, dport, data })
+        Ok(Self {
+            opcode,
+            sport,
+            dport,
+            data,
+        })
     }
 }
 
@@ -381,7 +383,7 @@ mod tests {
     #[test]
     fn test_stream_frame() {
         crate::tests::setup_logging();
-        let frame = Frame::Stream(StreamFrame::new_con(&[], 5678, 1234,   128));
+        let frame = Frame::Stream(StreamFrame::new_con(&[], 5678, 1234, 128));
         assert_eq!(
             frame,
             Frame::Stream(StreamFrame {
@@ -416,12 +418,7 @@ mod tests {
     #[test]
     fn test_frame_repr() {
         crate::tests::setup_logging();
-        let frame = Frame::Stream(StreamFrame::new_con(
-            &[0x01, 0x02, 0x03],
-            5678,
-            1234,
-            512,
-        ));
+        let frame = Frame::Stream(StreamFrame::new_con(&[0x01, 0x02, 0x03], 5678, 1234, 512));
         let bytes = Vec::try_from(frame).unwrap();
         assert_eq!(
             bytes,
@@ -490,11 +487,7 @@ mod tests {
             ]
         );
 
-        let frame = Frame::Stream(StreamFrame::new_bnd(
-            42132,
-            &[1, 2, 3, 4],
-            1234,
-        ));
+        let frame = Frame::Stream(StreamFrame::new_bnd(42132, &[1, 2, 3, 4], 1234));
         let bytes = Vec::try_from(frame).unwrap();
         assert_eq!(
             bytes,
