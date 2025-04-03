@@ -34,31 +34,29 @@ function penguinv7_proto.dissector(buffer, pinfo, tree)
     if frame_type == 1 then
         -- Stream Frame
         subtree:add(f_type, "stream")
-        subtree:add(f_sport, buffer(1, 2))
-        subtree:add(f_dport, buffer(3, 2))
-        local flagtypes = {
+        local opcode = buffer(1, 1):uint()
+        subtree:add(f_sport, buffer(2, 2))
+        subtree:add(f_dport, buffer(4, 2))
+        local opcodes = {
             [0] = "Syn",
-            [1] = "SynAck",
             [2] = "Ack",
             [3] = "Rst",
             [4] = "Fin",
-            [5] = "Psh"
+            [5] = "Psh",
+            [6] = "Bnd"
         }
-        local flag = buffer(5, 1):uint()
-        if flagtypes[flag] ~= nil then
-            subtree:add(f_flag, flagtypes[flag])
+        if opcodes[opcode] ~= nil then
+            subtree:add(f_opcode, opcodes[opcode])
         else
             -- Not penguin-v6
             return 0
         end
-        if flag == 0 or flag == 1 then
-            -- Syn or SynAck rwnd
+        if opcode == 0 then
+            -- Syn rwnd
             subtree:add(f_rwnd, buffer(6, 8))
-            if flag == 0 then
-                -- Syn forwarding target
-                subtree:add(f_forwarding_port, buffer(14, 2))
-                subtree:add(f_forwarding_host, buffer(16))
-            end
+            -- Syn forwarding target
+            subtree:add(f_forwarding_port, buffer(14, 2))
+            subtree:add(f_forwarding_host, buffer(16))
         elseif flag == 2 then
             -- Ack amount
             subtree:add(f_ack, buffer(6, 8))
@@ -71,10 +69,10 @@ function penguinv7_proto.dissector(buffer, pinfo, tree)
         subtree:add(f_type, "datagram")
         local hostlen = buffer(1, 1):uint()
         subtree:add(f_host_len, hostlen)
-        subtree:add(f_forwarding_host, buffer(2, hostlen))
-        subtree:add(f_forwarding_port, buffer(2 + hostlen, 2))
-        local userid = buffer(4 + hostlen, 4):uint()
-        subtree:add(f_userid, userid)
+        subtree:add(f_sport, buffer(2, 2))
+        subtree:add(f_dport, buffer(4, 2))
+        subtree:add(f_forwarding_port, buffer(6, 2))
+        subtree:add(f_forwarding_host, buffer(8, hostlen))
         -- Remaining is data
         subtree:add(f_payload, buffer(8 + hostlen))
     else
@@ -83,4 +81,4 @@ function penguinv7_proto.dissector(buffer, pinfo, tree)
     end
 end
 local ws_dissector_table = DissectorTable.get("ws.protocol")
-ws_dissector_table:add("penguin-v6", penguinv6_proto)
+ws_dissector_table:add("penguin-v7", penguinv7_proto)
