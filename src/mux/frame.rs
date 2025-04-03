@@ -55,8 +55,8 @@ pub enum StreamOpCode {
 pub struct StreamFrame {
     /// Operation code (1 byte)
     pub opcode: StreamOpCode,
-    /// Stream ID (4 bytes)
-    pub id: u32,
+    /// Stream ID (2 bytes)
+    pub id: u16,
     /// Data
     pub data: Bytes,
 }
@@ -81,7 +81,7 @@ impl StreamFrame {
     /// * `rwnd`: Number of frames buffered in the client receive buffer.
     #[must_use]
     #[inline]
-    pub fn new_syn(dest_host: &[u8], dest_port: u16, id: u32, rwnd: u32) -> Self {
+    pub fn new_syn(dest_host: &[u8], dest_port: u16, id: u16, rwnd: u32) -> Self {
         let host_len = dest_host.len();
         let mut syn_payload =
             Vec::with_capacity(std::mem::size_of::<u32>() + std::mem::size_of::<u16>() + host_len);
@@ -102,7 +102,7 @@ impl StreamFrame {
     ///   previous `Ack` frame.
     #[must_use]
     #[inline]
-    pub fn new_ack(id: u32, psh_recvd_since: u32) -> Self {
+    pub fn new_ack(id: u16, psh_recvd_since: u32) -> Self {
         Self {
             opcode: StreamOpCode::Ack,
             id,
@@ -115,7 +115,7 @@ impl StreamFrame {
     /// * `id`: The stream ID of the offending frame.
     #[must_use]
     #[inline]
-    pub const fn new_rst(id: u32) -> Self {
+    pub const fn new_rst(id: u16) -> Self {
         Self {
             opcode: StreamOpCode::Rst,
             id,
@@ -128,7 +128,7 @@ impl StreamFrame {
     /// * `id`: The stream ID of the frame being closed.
     #[must_use]
     #[inline]
-    pub const fn new_fin(id: u32) -> Self {
+    pub const fn new_fin(id: u16) -> Self {
         Self {
             opcode: StreamOpCode::Fin,
             id,
@@ -142,7 +142,7 @@ impl StreamFrame {
     /// * `data`: The data to send.
     #[must_use]
     #[inline]
-    pub const fn new_psh(id: u32, data: Bytes) -> Self {
+    pub const fn new_psh(id: u16, data: Bytes) -> Self {
         Self {
             opcode: StreamOpCode::Psh,
             id,
@@ -203,12 +203,12 @@ impl From<StreamFrame> for Vec<u8> {
     fn from(frame: StreamFrame) -> Self {
         let size = std::mem::size_of::<u8>()
             + std::mem::size_of::<StreamOpCode>()
-            + std::mem::size_of::<u32>()
+            + std::mem::size_of::<u16>()
             + frame.data.len();
         let mut encoded = Self::with_capacity(size);
         encoded.put_u8(1);
         encoded.put_u8(frame.opcode as u8);
-        encoded.put_u32(frame.id);
+        encoded.put_u16(frame.id);
         encoded.extend(&frame.data);
         encoded
     }
@@ -254,12 +254,12 @@ impl TryFrom<Bytes> for StreamFrame {
 
     #[inline]
     fn try_from(mut data: Bytes) -> Result<Self, Self::Error> {
-        if data.remaining() < 5 {
+        if data.remaining() < 3 {
             return Err(Error::FrameTooShort);
         }
         let opcode = match data.get_u8() {
             0 => StreamOpCode::Syn,
-            1 => panic!("Reserved opcode 1 received (this is a bug)"),
+            // 0x01 is reserved
             2 => StreamOpCode::Ack,
             3 => StreamOpCode::Rst,
             4 => StreamOpCode::Fin,
@@ -267,7 +267,7 @@ impl TryFrom<Bytes> for StreamFrame {
             6 => StreamOpCode::Bnd,
             other => return Err(Error::InvalidStreamFlag(other)),
         };
-        let id = data.get_u32();
+        let id = data.get_u16();
         Ok(Self { opcode, id, data })
     }
 }
@@ -380,7 +380,7 @@ mod tests {
             vec![
                 0x01, // frame type (u8)
                 0x00, // opcode (u8)
-                0x00, 0x00, 0x04, 0xd2, // id (u32)
+                0x04, 0xd2, // id (u16)
                 0x00, 0x00, 0x02, 0x00, // rwnd (u32)
                 0x16, 0x2e, // dest_port (u16)
                 0x01, 0x02, 0x03, // data (variable)
@@ -394,19 +394,19 @@ mod tests {
             vec![
                 0x01, // frame type (u8)
                 0x02, // opcode (u8)
-                0x00, 0x00, 0x16, 0x2e, // id (u32)
+                0x16, 0x2e, // id (u16)
                 0x00, 0x00, 0x00, 0x80, // psh_recvd_since (u32)
             ]
         );
 
-        let frame = Frame::Stream(StreamFrame::new_rst(12345678));
+        let frame = Frame::Stream(StreamFrame::new_rst(1291));
         let bytes = Vec::try_from(frame).unwrap();
         assert_eq!(
             bytes,
             vec![
                 0x01, // frame type (u8)
                 0x03, // opcode (u8)
-                0x07, 0x5b, 0xcd, 0x15, // id (u32)
+                0x05, 0x0b, // id (u32)
             ]
         );
 
@@ -417,7 +417,7 @@ mod tests {
             vec![
                 0x01, // frame type (u8)
                 0x04, // opcode (u8)
-                0x00, 0x00, 0x16, 0x2e, // id (u32)
+                0x16, 0x2e, // id (u32)
             ]
         );
 
@@ -431,7 +431,7 @@ mod tests {
             vec![
                 0x01, // frame type (u8)
                 0x05, // opcode (u8)
-                0x00, 0x00, 0x04, 0xd2, // id (u32)
+                0x04, 0xd2, // id (u32)
                 0x01, 0x02, 0x03, 0x04 // data (variable)
             ]
         );
