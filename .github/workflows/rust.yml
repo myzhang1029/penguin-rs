@@ -45,14 +45,12 @@ jobs:
       run: cargo install grcov
 
     - name: Set up Go for Pebble
-      if: matrix.config.name != 'Windows'
       uses: actions/setup-go@v5
       with:
         go-version: '>=1.20.0'
         cache: false
 
     - name: Install and run pebble
-      if: matrix.config.name != 'Windows'
       run: .github/workflows/pebble.sh
 
     - name: Check if program builds
