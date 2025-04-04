@@ -323,8 +323,10 @@ impl TryFrom<Frame> for Vec<u8> {
         match frame {
             Frame::Stream(frame) => Ok(frame.into()),
             Frame::Datagram(frame) => frame.try_into(),
-            // This variant should not be serialized
-            Frame::Flush => panic!("Flush frame should not be serialized to bytes"),
+            // This variant should not be serialized by conforming code
+            Frame::Flush => {
+                panic!("`Flush` frame should not be serialized to bytes (this is a bug)")
+            }
         }
     }
 }
