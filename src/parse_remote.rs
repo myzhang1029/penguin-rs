@@ -261,7 +261,7 @@ mod tests {
     #[cfg(not(feature = "default-is-ipv6"))]
     #[test]
     fn test_default_host() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         assert_eq!(
             std::net::Ipv4Addr::from_str(&default_host!(unspec)).unwrap(),
             std::net::Ipv4Addr::UNSPECIFIED
@@ -274,7 +274,7 @@ mod tests {
     #[cfg(feature = "default-is-ipv6")]
     #[test]
     fn test_default_host() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         assert_eq!(
             std::net::Ipv6Addr::from_str(&default_host!(unspec)).unwrap(),
             std::net::Ipv6Addr::UNSPECIFIED
@@ -288,7 +288,7 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn test_parse_remote() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let tests: &[(&str, Remote)] = &[
             // jpillora's tests and an exhausive list of cases
             (

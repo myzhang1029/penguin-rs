@@ -283,7 +283,7 @@ mod tests_need_pebble {
 
     #[tokio::test]
     async fn test_issue() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let script_path = format!(
             "{}/.github/workflows/http01_helper_for_test.sh",
             env!("CARGO_MANIFEST_DIR")

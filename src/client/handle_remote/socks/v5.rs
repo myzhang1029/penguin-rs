@@ -207,7 +207,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_auth_methods() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let mut reader = Cursor::new(vec![0x02, 0x00, 0x01]);
         let methods = read_auth_methods(&mut reader).await.unwrap();
         assert_eq!(methods, vec![0x00, 0x01]);
@@ -215,7 +215,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_auth_method() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let mut writer = Cursor::new(vec![]);
         write_auth_method(&mut writer, 0x00).await.unwrap();
         assert_eq!(writer.get_ref(), &[0x05, 0x00]);
@@ -223,7 +223,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_request_v4() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let mut reader = Cursor::new(vec![
             0x05, 0x01, 0x00, 0x01, 0x7f, 0x00, 0x00, 0x01, 0x00, 0x50,
         ]);
@@ -235,7 +235,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_request_v6() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let mut reader = Cursor::new(vec![
             0x05, 0x01, 0x00, 0x04, 0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x50,
@@ -248,7 +248,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_request_domain() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let mut reader = Cursor::new(vec![
             0x05, 0x01, 0x00, 0x03, 0x0f, 0x77, 0x77, 0x77, 0x2e, 0x65, 0x78, 0x61, 0x6d, 0x70,
             0x6c, 0x65, 0x2e, 0x63, 0x6f, 0x6d, 0x00, 0x50,
@@ -261,14 +261,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_request_invalid_address_type() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let mut reader = Cursor::new(vec![0x05, 0x01, 0x00, 0x02, 0x00, 0x50]);
         read_request(&mut reader).await.unwrap_err();
     }
 
     #[tokio::test]
     async fn test_write_response() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let mut writer = Cursor::new(vec![]);
         write_response(&mut writer, 0x00, ([127, 0, 0, 1], 80).into())
             .await
@@ -281,7 +281,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_response_unspecified() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let mut writer = Cursor::new(vec![]);
         write_response_unspecified(&mut writer, 0x00).await.unwrap();
         assert_eq!(

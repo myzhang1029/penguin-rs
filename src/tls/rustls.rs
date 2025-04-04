@@ -221,7 +221,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_rustls_rootcertstore() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         // No custom CA store
         let sys_root = generate_rustls_rootcertstore(None).await.unwrap();
         assert!(!sys_root.is_empty());
@@ -240,7 +240,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_try_load_certificate() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         // No certificate and key
         let no_cert = try_load_certificate(None, None).await.unwrap();
         assert!(no_cert.is_none());
@@ -284,7 +284,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_server_config() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let tmpdir = tempdir().unwrap();
         let key_path = tmpdir.path().join("key.pem");
         let cert_path = tmpdir.path().join("cert.pem");
@@ -308,7 +308,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_client_config() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let tmpdir = tempdir().unwrap();
         let ca_path = tmpdir.path().join("ca.pem");
         let custom_ca = generate_simple_self_signed(vec!["example.com".into()]).unwrap();
@@ -327,7 +327,7 @@ mod tests {
     #[tokio::test]
     #[cfg(feature = "acme")]
     async fn test_make_server_config_from_rcgen_pem() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let cert_params = CertificateParams::new(vec!["example.com".into()]).unwrap();
         let keypair = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P384_SHA384).unwrap();
         let custom_crt = cert_params.self_signed(&keypair).unwrap();

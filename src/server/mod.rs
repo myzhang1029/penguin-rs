@@ -262,7 +262,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "`port` is empty (this is a bug)")]
     fn test_arg_to_sockaddrs_empty() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let args = get_server_args(vec![], vec![]);
         let _ = arg_to_sockaddrs(&args).unwrap();
     }
@@ -271,7 +271,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "`host` is empty (this is a bug)")]
     fn test_arg_to_sockaddrs_empty_host() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let args = get_server_args(vec![], vec![1234]);
         let _ = arg_to_sockaddrs(&args).unwrap();
     }
@@ -280,7 +280,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "`port` is empty (this is a bug)")]
     fn test_arg_to_sockaddrs_empty_port() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let args = get_server_args(vec!["::".to_string()], vec![]);
         let _ = arg_to_sockaddrs(&args).unwrap();
     }
@@ -288,7 +288,7 @@ mod tests {
     /// Test `arg_to_sockaddrs` with a single host and a single port.
     #[test]
     fn test_arg_to_sockaddrs_single_v4() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let args = get_server_args(vec!["127.0.0.1".to_string()], vec![9999]);
         let sockaddrs = arg_to_sockaddrs(&args).unwrap();
         assert_eq!(sockaddrs.len(), 1);
@@ -302,7 +302,7 @@ mod tests {
     /// Test `arg_to_sockaddrs` with a single host and a single port.
     #[test]
     fn test_arg_to_sockaddrs_single_v6() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let args = get_server_args(vec!["[::1]".to_string()], vec![1532]);
         let sockaddrs = arg_to_sockaddrs(&args).unwrap();
         assert_eq!(sockaddrs.len(), 1);
@@ -316,7 +316,7 @@ mod tests {
     /// Test `arg_to_sockaddrs` with several hosts and one port.
     #[test]
     fn test_arg_to_sockaddrs_multi_v4() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let args = get_server_args(
             vec![
                 "127.0.0.1".to_string(),

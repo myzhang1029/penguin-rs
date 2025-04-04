@@ -5,10 +5,19 @@
 use super::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, info};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+
+pub fn setup_logging() {
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer())
+        .with(EnvFilter::from_default_env())
+        .try_init()
+        .ok();
+}
 
 #[tokio::test]
 async fn connect_succeeds() {
-    tracing_subscriber::fmt().try_init().ok();
+    setup_logging();
     let (client, server) = crate::ws::mock::get_pair().await;
 
     let client_mux = Multiplexor::new(client, Role::Client, None, None);
@@ -30,7 +39,7 @@ async fn connect_succeeds() {
 
 #[tokio::test]
 async fn datagram_channel_passes_data() {
-    tracing_subscriber::fmt().try_init().ok();
+    setup_logging();
     let (client, server) = crate::ws::mock::get_pair().await;
 
     let client_mux = Multiplexor::new(client, Role::Client, None, None);
@@ -69,7 +78,7 @@ async fn datagram_channel_passes_data() {
 
 #[tokio::test]
 async fn connected_stream_passes_data() {
-    tracing_subscriber::fmt().try_init().ok();
+    setup_logging();
     let (client, server) = crate::ws::mock::get_pair().await;
 
     let client_mux = Multiplexor::new(client, Role::Client, None, None);
@@ -112,7 +121,7 @@ async fn connected_stream_passes_data() {
 
 #[tokio::test]
 async fn test_early_eof_detected() {
-    tracing_subscriber::fmt().try_init().ok();
+    setup_logging();
     let (client, server) = crate::ws::mock::get_pair().await;
 
     let client_mux = Multiplexor::new(client, Role::Client, None, None);
@@ -148,7 +157,7 @@ async fn test_early_eof_detected() {
 
 #[tokio::test]
 async fn test_several_channels() {
-    tracing_subscriber::fmt().try_init().ok();
+    setup_logging();
     let (client, server) = crate::ws::mock::get_pair().await;
 
     let client_mux = Multiplexor::new(client, Role::Client, None, None);

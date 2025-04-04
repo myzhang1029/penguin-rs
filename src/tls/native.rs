@@ -74,7 +74,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_key_cert() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let tmpdir = tempdir().unwrap();
         let key_path = tmpdir.path().join("key.pem");
         let cert_path = tmpdir.path().join("cert.pem");
@@ -92,7 +92,7 @@ mod tests {
     #[tokio::test]
     #[cfg(feature = "acme")]
     async fn test_make_server_config_from_rcgen_pem() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let cert_params = CertificateParams::new(vec!["example.com".into()]).unwrap();
         let keypair = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P384_SHA384).unwrap();
         let custom_crt = cert_params.self_signed(&keypair).unwrap();

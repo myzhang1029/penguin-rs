@@ -452,7 +452,7 @@ mod tests {
     use std::net::IpAddr;
     #[tokio::test]
     async fn test_client_map_add_client() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let (stub_stream_tx, _stub_stream_rx) = mpsc::channel(1);
         let (stub_datagram_tx, _stub_datagram_rx) = mpsc::channel(1);
         let handler_resources = HandlerResources {
@@ -500,7 +500,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_client_map_remove_client() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let (stub_stream_tx, _stub_stream_rx) = mpsc::channel(1);
         let (stub_datagram_tx, _stub_datagram_rx) = mpsc::channel(1);
         let handler_resources = HandlerResources {

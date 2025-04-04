@@ -492,7 +492,7 @@ mod tests {
 
     #[test]
     fn test_serverurl_fromstr() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         assert_eq!(
             ServerUrl::from_str("example.com").unwrap().to_string(),
             "ws://example.com/"
@@ -524,7 +524,7 @@ mod tests {
 
     #[test]
     fn test_backendurl_fromstr() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         assert_eq!(
             BackendUrl::from_str("https://example.com")
                 .unwrap()
@@ -557,7 +557,7 @@ mod tests {
 
     #[test]
     fn test_header_parser() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let header = Header::from_str("X-Test: test").unwrap();
         assert_eq!(header.name.as_str().to_lowercase(), "X-Test".to_lowercase());
         header.value.to_str().unwrap();
@@ -578,7 +578,7 @@ mod tests {
 
     #[test]
     fn test_client_args_minimal() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let args = PenguinCli::parse_from(["penguin", "client", "127.0.0.1:9999/endpoint", "1234"]);
         assert!(matches!(args.subcommand, Commands::Client(_)));
         if let Commands::Client(args) = args.subcommand {

@@ -135,7 +135,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_call_challenge_helper_simple() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let expected_out1 = "create f86oS4UZR6kX5U31VVc05dhOa-GMEvU3RL1Q64fVaKY.tvg9X8xCoUuU_vK9qNR1d2RyGSGVfq3VYDJ-O81nnyY\n";
         let helper = ChallengeHelper(OsString::from("echo"));
         let result = helper.call(Action::Create, TEST_KEY_AUTH);
@@ -155,7 +155,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_call_challenge_helper_example() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let script_path = format!(
             "{}/.github/workflows/http01_helper_for_test.sh",
             env!("CARGO_MANIFEST_DIR")
@@ -196,7 +196,7 @@ mod tests {
     #[cfg(feature = "tests-acme-has-pebble")]
     #[tokio::test]
     async fn test_process_one_challenge() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let script_path = format!(
             "{}/.github/workflows/http01_helper_for_test.sh",
             env!("CARGO_MANIFEST_DIR")
@@ -263,7 +263,7 @@ mod tests {
     #[cfg(feature = "tests-acme-has-pebble")]
     #[tokio::test]
     async fn test_process_challenges() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let script_path = format!(
             "{}/.github/workflows/http01_helper_for_test.sh",
             env!("CARGO_MANIFEST_DIR")

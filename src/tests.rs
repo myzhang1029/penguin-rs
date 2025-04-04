@@ -17,6 +17,15 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream, UdpSocket},
 };
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+
+pub fn setup_logging() {
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer())
+        .with(EnvFilter::from_default_env())
+        .try_init()
+        .ok();
+}
 
 fn make_server_args(host: &str, port: u16) -> arg::ServerArgs {
     arg::ServerArgs {
@@ -72,7 +81,7 @@ async fn test_it_works() {
             vec![Remote::from_str("127.0.0.1:21628:127.0.0.1:10807").unwrap()],
         )
     });
-    tracing_subscriber::fmt().try_init().ok();
+    setup_logging();
 
     let input_bytes: Vec<u8> = (0..(1024 * 1024)).map(|_| rand::random::<u8>()).collect();
     let input_len = input_bytes.len();
@@ -100,7 +109,7 @@ async fn test_it_works() {
 async fn test_server_timeout() {
     static SERVER_ARGS: LazyLock<arg::ServerArgs> =
         LazyLock::new(|| make_server_args("::1", 22183));
-    tracing_subscriber::fmt().try_init().ok();
+    setup_logging();
     let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
     tokio::time::sleep(Duration::from_secs(2)).await;
     // Connect to the socket and do nothing. Make sure the socket is closed
@@ -129,7 +138,7 @@ async fn test_server_timeout_does_not_interrupt_ws() {
             vec![Remote::from_str("[::1]:27848:[::1]:17787").unwrap()],
         )
     });
-    tracing_subscriber::fmt().try_init().ok();
+    setup_logging();
 
     let input_bytes: Vec<u8> = (0..(1024 * 1024)).map(|_| rand::random::<u8>()).collect();
     let input_len = input_bytes.len();
@@ -165,7 +174,7 @@ async fn test_it_works_v6() {
             vec![Remote::from_str("[::1]:20246:[::1]:30389").unwrap()],
         )
     });
-    tracing_subscriber::fmt().try_init().ok();
+    setup_logging();
 
     let input_bytes: Vec<u8> = (0..(1024 * 1024)).map(|_| rand::random::<u8>()).collect();
     let input_len = input_bytes.len();
@@ -213,7 +222,7 @@ async fn test_it_works_tls_simple() {
         _fingerprint: None,
         _auth: None,
     });
-    tracing_subscriber::fmt().try_init().ok();
+    setup_logging();
 
     let mut serv_cfg = make_server_args("127.0.0.1", 20353);
     let cert_dir = make_server_cert_ecdsa().await;
@@ -254,7 +263,7 @@ async fn test_socks5_connect_reliability_v4() {
             vec![Remote::from_str("127.0.0.1:21330:socks").unwrap()],
         )
     });
-    tracing_subscriber::fmt().try_init().ok();
+    setup_logging();
 
     let client_task = tokio::spawn(crate::client::client_main(&CLIENT_ARGS));
     let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
@@ -312,7 +321,7 @@ async fn test_socks5_connect_reliability_v6() {
             vec![Remote::from_str("127.0.0.1:13261:socks").unwrap()],
         )
     });
-    tracing_subscriber::fmt().try_init().ok();
+    setup_logging();
 
     let client_task = tokio::spawn(crate::client::client_main(&CLIENT_ARGS));
     let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
@@ -368,7 +377,7 @@ async fn test_socks5_udp_v4v4() {
             vec![Remote::from_str("127.0.0.1:30711:socks").unwrap()],
         )
     });
-    tracing_subscriber::fmt().try_init().ok();
+    setup_logging();
 
     let client_task = tokio::spawn(crate::client::client_main(&CLIENT_ARGS));
     let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
@@ -451,7 +460,7 @@ async fn test_socks5_udp_v4v6() {
             vec![Remote::from_str("127.0.0.1:26396:socks").unwrap()],
         )
     });
-    tracing_subscriber::fmt().try_init().ok();
+    setup_logging();
 
     let client_task = tokio::spawn(crate::client::client_main(&CLIENT_ARGS));
     let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
@@ -538,7 +547,7 @@ async fn test_socks5_udp_v6v6() {
             vec![Remote::from_str("[::1]:12654:socks").unwrap()],
         )
     });
-    tracing_subscriber::fmt().try_init().ok();
+    setup_logging();
 
     let client_task = tokio::spawn(crate::client::client_main(&CLIENT_ARGS));
     let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
@@ -623,7 +632,7 @@ async fn test_socks4_works() {
             vec![Remote::from_str("127.0.0.1:23213:socks").unwrap()],
         )
     });
-    tracing_subscriber::fmt().try_init().ok();
+    setup_logging();
 
     let client_task = tokio::spawn(crate::client::client_main(&CLIENT_ARGS));
     let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
@@ -673,7 +682,7 @@ async fn test_it_works_dns_v4() {
             vec![Remote::from_str("127.0.0.1:20326:1.1.1.1:53/udp").unwrap()],
         )
     });
-    tracing_subscriber::fmt().try_init().ok();
+    setup_logging();
 
     let client_task = tokio::spawn(crate::client::client_main(&CLIENT_ARGS));
     let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
@@ -705,7 +714,7 @@ async fn test_it_works_dns_v6() {
             vec![Remote::from_str("[::1]:20326:[2606:4700:4700::1111]:53/udp").unwrap()],
         )
     });
-    tracing_subscriber::fmt().try_init().ok();
+    setup_logging();
 
     let client_task = tokio::spawn(crate::client::client_main(&CLIENT_ARGS));
     let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));

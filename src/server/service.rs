@@ -313,7 +313,7 @@ mod tests {
 
     #[test]
     fn test_make_sec_websocket_accept() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let key = "dGhlIHNhbXBsZSBub25jZQ==";
         let expected = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=";
         let actual = make_sec_websocket_accept(&key.parse().unwrap());
@@ -326,7 +326,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_obfs_or_not() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         // Test `/health` without obfuscation
         let state = State::new(
             None,
@@ -406,7 +406,7 @@ mod tests {
     async fn test_backend() {
         static BACKEND: LazyLock<BackendUrl> =
             LazyLock::new(|| BackendUrl::from_str("http://httpbin.org").unwrap());
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         // Test that the backend is actually working
         let state = State::new(
             Some(&BACKEND),
@@ -446,7 +446,7 @@ mod tests {
         // Check that this test makes sense: remove TLS deps of `reqwest`
         static BACKEND: LazyLock<BackendUrl> =
             LazyLock::new(|| BackendUrl::from_str("https://httpbin.org").unwrap());
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         // Test that the backend is actually working
         let state = State::new(
             Some(&BACKEND),
@@ -482,7 +482,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_stealth_websocket_upgrade_method() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         // Test non-GET request
         let state = State::new(
             None,
@@ -509,7 +509,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_stealth_websocket_upgrade_missing_key_header() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         // Test missing upgrade header
         let state = State::new(
             None,
@@ -537,7 +537,7 @@ mod tests {
     async fn test_stealth_websocket_upgrade_wrong_psk() {
         // Test wrong PSK
         static PSK: HeaderValue = HeaderValue::from_static("correct PSK");
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let state = State::new(
             None,
             Some(&PSK),
