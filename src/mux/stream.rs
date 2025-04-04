@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::frame::{Frame, StreamFrame};
-use crate::config;
 use bytes::Bytes;
 use futures_util::task::AtomicWaker;
 use std::io;
@@ -33,7 +32,7 @@ pub struct MuxStream {
     /// Number of frames we can still send before we need to wait for an `Ack`
     pub(super) psh_send_remaining: Arc<AtomicU64>,
     /// Number of `Psh` frames received after sending the previous `Ack` frame
-    /// `config::RWND - psh_recvd_since` is approximately the peer's `psh_send_remaining`
+    /// `rwnd - psh_recvd_since` is approximately the peer's `psh_send_remaining`
     pub(super) psh_recvd_since: AtomicU64,
     /// Waker to wake up the task that sends frames
     pub(super) writer_waker: Arc<AtomicWaker>,
@@ -43,6 +42,10 @@ pub struct MuxStream {
     pub(super) frame_tx: mpsc::UnboundedSender<Frame>,
     /// See `MultiplexorInner`.
     pub(super) dropped_ports_tx: mpsc::UnboundedSender<(u16, u16)>,
+    /// Number of `Psh` frames between `Ack`s:
+    /// If too low, `Ack`s will consume too much bandwidth;
+    /// If too high, writers may block.
+    pub(super) rwnd_threshold: u64,
 }
 
 impl std::fmt::Debug for MuxStream {
@@ -55,6 +58,7 @@ impl std::fmt::Debug for MuxStream {
             .field("can_write", &self.can_write)
             .field("psh_send_remaining", &self.psh_send_remaining)
             .field("psh_recvd_since", &self.psh_recvd_since)
+            .field("rwnd_threshold", &self.rwnd_threshold)
             .field("buf.len", &self.buf.len())
             .finish_non_exhaustive()
     }
@@ -103,7 +107,7 @@ impl AsyncRead for MuxStream {
             // However, one of us will send an `Ack` frame with a value of 0,
             // which is harmless.
             let new = self.psh_recvd_since.fetch_add(1, Ordering::Relaxed) + 1;
-            if new >= config::RWND_THRESHOLD {
+            if new >= self.rwnd_threshold {
                 // Reset the counter
                 // Atomic ordering: as long as we use the atomically-fetched value
                 // to send an `Ack` frame, the net amount

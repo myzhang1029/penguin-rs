@@ -19,7 +19,7 @@ pub fn setup_logging() {
 #[tokio::test]
 async fn connect_succeeds() {
     setup_logging();
-    let (client, server) = crate::ws::mock::get_pair().await;
+    let (client, server) = crate::ws::mock::get_pair(None).await;
 
     let client_mux = Multiplexor::new(client, Role::Client, OptionalDuration::NONE, None);
     let server_mux = Multiplexor::new(server, Role::Server, OptionalDuration::NONE, None);
@@ -39,9 +39,10 @@ async fn connect_succeeds() {
 }
 
 #[tokio::test]
-async fn datagram_channel_passes_data() {
+async fn datagram_channel_passes_data_tiny_mtu() {
     setup_logging();
-    let (client, server) = crate::ws::mock::get_pair().await;
+    // 8 bytes is the IPv4 minimum segment size. Let's try that
+    let (client, server) = crate::ws::mock::get_pair(Some(8)).await;
 
     let client_mux = Multiplexor::new(client, Role::Client, OptionalDuration::NONE, None);
     let server_mux = Multiplexor::new(server, Role::Server, OptionalDuration::NONE, None);
@@ -78,9 +79,142 @@ async fn datagram_channel_passes_data() {
 }
 
 #[tokio::test]
+async fn datagram_channel_passes_data() {
+    setup_logging();
+    let (client, server) = crate::ws::mock::get_pair(None).await;
+
+    let client_mux = Multiplexor::new(client, Role::Client, OptionalDuration::NONE, None);
+    let server_mux = Multiplexor::new(server, Role::Server, OptionalDuration::NONE, None);
+
+    let server_task = tokio::spawn(async move {
+        for _ in 0..64 {
+            let dgram = server_mux.get_datagram().await.unwrap();
+            debug!("Server got datagram");
+            server_mux.send_datagram(dgram).await.unwrap();
+        }
+    });
+
+    for _ in 0..64 {
+        let payload: Bytes = (0..32768).map(|_| rand::random::<u8>()).collect();
+        debug!("Client sending datagram");
+        client_mux
+            .send_datagram(DatagramFrame {
+                host: Bytes::from_static(b"example.com"),
+                port: 53,
+                sid: 1,
+                data: payload.clone(),
+            })
+            .await
+            .unwrap();
+        debug!("Client awaiting datagram");
+        let recvd = client_mux.get_datagram().await.unwrap();
+        assert_eq!(*recvd.host, *b"example.com");
+        assert_eq!(recvd.port, 53);
+        assert_eq!(recvd.sid, 1);
+        assert_eq!(recvd.data, payload);
+    }
+    debug!("Waiting for server task to finish");
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn connected_stream_passes_data_tiny_mtu_rwndminusone() {
+    setup_logging();
+    let (client, server) = crate::ws::mock::get_pair(Some(20)).await;
+
+    let (mut client_mux, taskdata_client) =
+        Multiplexor::new_no_task(Role::Client, OptionalDuration::NONE);
+    let (mut server_mux, taskdata_server) =
+        Multiplexor::new_no_task(Role::Server, OptionalDuration::NONE);
+
+    client_mux.inner.default_rwnd_threshold = crate::config::RWND - 1;
+    server_mux.inner.default_rwnd_threshold = crate::config::RWND - 1;
+
+    client_mux.spawn_task(client, taskdata_client, None);
+    server_mux.spawn_task(server, taskdata_server, None);
+
+    let input_bytes: Vec<u8> = (0..(1024 * 1024)).map(|_| rand::random::<u8>()).collect();
+    let len = input_bytes.len();
+    let input_bytes_clone = input_bytes.clone();
+
+    let server_task = tokio::spawn(async move {
+        let mut conn = server_mux.server_new_stream_channel().await.unwrap();
+        let mut i = 0;
+        while i < input_bytes_clone.len() {
+            conn.write_all(&input_bytes_clone[i..i + 1024])
+                .await
+                .unwrap();
+            i += 1024;
+        }
+        info!("Done send");
+        conn.shutdown().await.unwrap();
+    });
+
+    let mut output_bytes: Vec<u8> = vec![];
+
+    let mut conn = client_mux.client_new_stream_channel(&[], 0).await.unwrap();
+    while output_bytes.len() < len {
+        let mut buf = [0u8; 2048];
+        let bytes = conn.read(&mut buf).await.unwrap();
+        if bytes == 0 {
+            break;
+        }
+        output_bytes.extend(&buf[..bytes]);
+        info!("Read {} bytes", output_bytes.len());
+    }
+
+    assert_eq!(input_bytes, output_bytes);
+    debug!("Waiting for server task to finish");
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn connected_stream_passes_data_tiny_mtu() {
+    setup_logging();
+    let (client, server) = crate::ws::mock::get_pair(Some(20)).await;
+
+    let client_mux = Multiplexor::new(client, Role::Client, OptionalDuration::NONE, None);
+    let server_mux = Multiplexor::new(server, Role::Server, OptionalDuration::NONE, None);
+
+    let input_bytes: Vec<u8> = (0..(1024 * 1024)).map(|_| rand::random::<u8>()).collect();
+    let len = input_bytes.len();
+    let input_bytes_clone = input_bytes.clone();
+
+    let server_task = tokio::spawn(async move {
+        let mut conn = server_mux.server_new_stream_channel().await.unwrap();
+        let mut i = 0;
+        while i < input_bytes_clone.len() {
+            conn.write_all(&input_bytes_clone[i..i + 1024])
+                .await
+                .unwrap();
+            i += 1024;
+        }
+        info!("Done send");
+        conn.shutdown().await.unwrap();
+    });
+
+    let mut output_bytes: Vec<u8> = vec![];
+
+    let mut conn = client_mux.client_new_stream_channel(&[], 0).await.unwrap();
+    while output_bytes.len() < len {
+        let mut buf = [0u8; 2048];
+        let bytes = conn.read(&mut buf).await.unwrap();
+        if bytes == 0 {
+            break;
+        }
+        output_bytes.extend(&buf[..bytes]);
+        info!("Read {} bytes", output_bytes.len());
+    }
+
+    assert_eq!(input_bytes, output_bytes);
+    debug!("Waiting for server task to finish");
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
 async fn connected_stream_passes_data() {
     setup_logging();
-    let (client, server) = crate::ws::mock::get_pair().await;
+    let (client, server) = crate::ws::mock::get_pair(None).await;
 
     let client_mux = Multiplexor::new(client, Role::Client, OptionalDuration::NONE, None);
     let server_mux = Multiplexor::new(server, Role::Server, OptionalDuration::NONE, None);
@@ -123,7 +257,7 @@ async fn connected_stream_passes_data() {
 #[tokio::test]
 async fn test_early_eof_detected() {
     setup_logging();
-    let (client, server) = crate::ws::mock::get_pair().await;
+    let (client, server) = crate::ws::mock::get_pair(None).await;
 
     let client_mux = Multiplexor::new(client, Role::Client, OptionalDuration::NONE, None);
     let server_mux = Multiplexor::new(server, Role::Server, OptionalDuration::NONE, None);
@@ -159,7 +293,7 @@ async fn test_early_eof_detected() {
 #[tokio::test]
 async fn test_several_channels() {
     setup_logging();
-    let (client, server) = crate::ws::mock::get_pair().await;
+    let (client, server) = crate::ws::mock::get_pair(None).await;
 
     let client_mux = Multiplexor::new(client, Role::Client, OptionalDuration::NONE, None);
     let server_mux = Multiplexor::new(server, Role::Server, OptionalDuration::NONE, None);
