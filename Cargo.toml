@@ -76,7 +76,7 @@ default-is-ipv6 = []
 tokio-console = ["dep:console-subscriber"]
 # `parking_lot`'s deadlock detection in a separate thread
 deadlock-detection = ["parking-lot"]
-parking-lot = ["dep:parking_lot", "tokio/parking_lot"]
+parking-lot = ["parking_lot/deadlock_detection", "tokio/parking_lot"]
 # obtaining certificate automatically using ACME protocol
 acme = ["penguin-binary", "dep:instant-acme", "dep:rcgen", "tokio/process"]
 # `penguin` binary
