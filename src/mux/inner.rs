@@ -77,8 +77,10 @@ pub struct MultiplexorInner {
     /// Sending (0, _) means that the multiplexor is being dropped and the
     /// task should exit.
     /// The reason we need `their_port` is to ensure the connection is `Rst`ed
-    /// if the user did not call `poll_shutdown` on the `MuxStream`.
+    /// if the user did not call `poll_shutdown` on the [`MuxStream`].
     pub dropped_ports_tx: mpsc::UnboundedSender<(u16, u16)>,
+    /// Default threshold for `Ack` replies. See [`MuxStream`] for more details.
+    pub default_rwnd_threshold: u64,
 }
 
 impl std::fmt::Debug for MultiplexorInner {
@@ -99,6 +101,7 @@ impl Dupe for MultiplexorInner {
             keepalive_interval: self.keepalive_interval,
             streams: self.streams.dupe(),
             dropped_ports_tx: self.dropped_ports_tx.dupe(),
+            default_rwnd_threshold: self.default_rwnd_threshold,
         }
     }
 }
@@ -150,6 +153,7 @@ impl MultiplexorInner {
                     // there is a bug in our code or `tokio` itself.
                     let frame = maybe_frame.expect("frame receiver should not be closed (this is a bug)");
                     // Buffer `Psh` frames, and flush everything else immediately
+                    trace!("sinking frame {frame:?}");
                     match frame {
                         Frame::Stream(ref sf) if sf.flag == StreamFlag::Psh => {
                             ws.feed(Message::Binary(frame.try_into()?)).await
@@ -311,7 +315,7 @@ impl MultiplexorInner {
                         }
                     }
                     Frame::Stream(stream_frame) => {
-                        trace!("received stream frame: {:?}", stream_frame);
+                        trace!("received stream frame: {stream_frame:?}");
                         self.process_stream_frame(stream_frame, server_stream_tx)
                             .await?;
                     }
@@ -527,6 +531,7 @@ impl MultiplexorInner {
             buf: Bytes::new(),
             frame_tx: self.frame_tx.dupe(),
             dropped_ports_tx: self.dropped_ports_tx.dupe(),
+            rwnd_threshold: self.default_rwnd_threshold.min(peer_rwnd),
         };
         // Send a `SynAck`
         // Make sure `SynAck` is sent before the stream is sent to the user
@@ -579,6 +584,7 @@ impl MultiplexorInner {
             buf: Bytes::new(),
             frame_tx: self.frame_tx.dupe(),
             dropped_ports_tx: self.dropped_ports_tx.dupe(),
+            rwnd_threshold: self.default_rwnd_threshold.min(peer_rwnd),
         };
         // Save the TX end of the stream so we can write to it when subsequent frames arrive
         let mut streams = self.streams.write().await;
