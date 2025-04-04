@@ -42,11 +42,11 @@ rustls-native-certs = { version = "0.8", optional = true }
 rustls-pemfile = { version = "2", optional = true }
 sha1 = { version = "0.10", optional = true }
 thiserror = "2"
-tokio = { version = "^1, >=1.23.1", features = ["macros", "parking_lot", "rt", "sync", "time"] }
+tokio = { version = "^1, >=1.23.1", features = ["macros", "rt", "sync", "time"] }
 tokio-native-tls = { version = "0.3", optional = true }
 tokio-rustls = { version = "0.26", features = ["logging", "ring", "tls12"], default-features = false, optional = true }
 tokio-tungstenite = { version = "0.26", default-features = false }
-tracing = { version = "0.1", features = ["max_level_trace", "release_max_level_debug"] }
+tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
 webpki-roots = { version = "0.26", optional = true }
 
@@ -60,10 +60,10 @@ default = ["rustls-native-roots", "tests-real-internet4", "penguin-binary", "acm
 # Note that it does not make sense to use more than one TLS implementations
 # at the same time, but there must be at least one if `penguin-binary` is
 # enabled.
-rustls-webpki-roots = ["webpki-roots", "tokio-tungstenite/rustls-tls-webpki-roots", "reqwest/rustls-tls-webpki-roots", "__rustls"]
-rustls-native-roots = ["rustls-native-certs", "tokio-tungstenite/rustls-tls-native-roots", "reqwest/rustls-tls-native-roots", "__rustls"]
-__rustls = ["rustls", "rustls-pemfile", "tokio-rustls"]
-nativetls = ["tokio-native-tls", "tokio-tungstenite/native-tls", "reqwest/native-tls"]
+rustls-webpki-roots = ["dep:webpki-roots", "tokio-tungstenite/rustls-tls-webpki-roots", "reqwest/rustls-tls-webpki-roots", "__rustls"]
+rustls-native-roots = ["dep:rustls-native-certs", "tokio-tungstenite/rustls-tls-native-roots", "reqwest/rustls-tls-native-roots", "__rustls"]
+__rustls = ["dep:rustls", "dep:rustls-pemfile", "dep:tokio-rustls"]
+nativetls = ["dep:tokio-native-tls", "tokio-tungstenite/native-tls", "reqwest/native-tls"]
 # Allow some tests that require real internet connection
 tests-real-internet4 = []
 tests-real-internet6 = []
@@ -72,22 +72,24 @@ tests-acme-has-pebble = ["acme"]
 # Set the default localhost or unspecified address to IPv6
 default-is-ipv6 = []
 # Enabling this causes `penguin` to listen for `tokio-console` connections
-tokio-console = ["console-subscriber"]
+tokio-console = ["dep:console-subscriber"]
+# Statically remove some logging code. This breaks `tokio-console`
+remove-logging = ["tracing/max_level_trace", "tracing/release_max_level_debug"]
 # `parking_lot`'s deadlock detection in a separate thread
-deadlock-detection = ["parking_lot/deadlock_detection"]
+deadlock-detection = ["parking_lot/deadlock_detection", "tokio/parking_lot"]
 # obtaining certificate automatically using ACME protocol
-acme = ["penguin-binary", "instant-acme", "rcgen", "tokio/process"]
+acme = ["penguin-binary", "dep:instant-acme", "dep:rcgen", "tokio/process"]
 # `penguin` binary
 penguin-binary = [
-    "arc-swap",
-    "base64",
-    "clap",
-    "http-body-util",
-    "hyper",
-    "hyper-util",
-    "reqwest",
-    "sha1",
-    "tracing-subscriber",
+    "dep:arc-swap",
+    "dep:base64",
+    "dep:clap",
+    "dep:http-body-util",
+    "dep:hyper",
+    "dep:hyper-util",
+    "dep:reqwest",
+    "dep:sha1",
+    "dep:tracing-subscriber",
     "tokio/fs", "tokio/io-std", "tokio/net", "tokio/rt-multi-thread", "tokio/signal",
     "tokio-tungstenite/default",
 ]
