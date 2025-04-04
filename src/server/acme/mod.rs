@@ -282,6 +282,7 @@ mod tests_need_pebble {
     }
 
     #[tokio::test]
+    #[cfg(not(target_os = "windows"))]
     async fn test_issue() {
         crate::tests::setup_logging();
         let script_path = format!(

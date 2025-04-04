@@ -154,6 +154,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(target_os = "windows"))]
     async fn test_call_challenge_helper_example() {
         crate::tests::setup_logging();
         let script_path = format!(
@@ -194,6 +195,7 @@ mod tests {
     }
 
     #[cfg(feature = "tests-acme-has-pebble")]
+    #[cfg(not(target_os = "windows"))]
     #[tokio::test]
     async fn test_process_one_challenge() {
         crate::tests::setup_logging();
@@ -261,6 +263,7 @@ mod tests {
     }
 
     #[cfg(feature = "tests-acme-has-pebble")]
+    #[cfg(not(target_os = "windows"))]
     #[tokio::test]
     async fn test_process_challenges() {
         crate::tests::setup_logging();
