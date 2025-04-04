@@ -58,11 +58,13 @@ pub(crate) mod mock {
     use super::*;
     use tokio::io::DuplexStream;
 
-    pub async fn get_pair() -> (
+    pub async fn get_pair(
+        link_mss: Option<usize>,
+    ) -> (
         tokio_tungstenite::WebSocketStream<DuplexStream>,
         tokio_tungstenite::WebSocketStream<DuplexStream>,
     ) {
-        let (client, server) = tokio::io::duplex(10);
+        let (client, server) = tokio::io::duplex(link_mss.unwrap_or(2048));
         let client =
             tokio_tungstenite::WebSocketStream::from_raw_socket(client, Role::Client, None).await;
         let server =

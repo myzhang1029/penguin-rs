@@ -93,6 +93,13 @@ pub struct Multiplexor {
     /// established streams.
     server_stream_rx: Mutex<mpsc::Receiver<MuxStream>>,
 }
+/// Internal type used for spawning the multiplexor task.
+type TaskData = (
+    mpsc::Sender<DatagramFrame>,
+    mpsc::Sender<MuxStream>,
+    mpsc::UnboundedReceiver<Frame>,
+    mpsc::UnboundedReceiver<(u16, u16)>,
+);
 
 impl Multiplexor {
     /// Create a new `Multiplexor`.
@@ -116,6 +123,14 @@ impl Multiplexor {
         keepalive_interval: OptionalDuration,
         task_joinset: Option<&mut JoinSet<Result<()>>>,
     ) -> Self {
+        let (mux, taskdata) = Self::new_no_task(role, keepalive_interval);
+        mux.spawn_task(ws, taskdata, task_joinset);
+        mux
+    }
+
+    /// Create a new `Multiplexor` without spawning the task.
+    #[inline]
+    fn new_no_task(role: Role, keepalive_interval: OptionalDuration) -> (Self, TaskData) {
         let (datagram_tx, datagram_rx) = mpsc::channel(config::DATAGRAM_BUFFER_SIZE);
         let (server_stream_tx, server_stream_rx) = mpsc::channel(config::STREAM_BUFFER_SIZE);
         // This one is unbounded because the protocol provides its own flow control for `Psh` frames
@@ -131,8 +146,29 @@ impl Multiplexor {
             keepalive_interval,
             streams: Arc::new(RwLock::new(HashMap::new())),
             dropped_ports_tx,
+            default_rwnd_threshold: config::DEFAULT_RWND_THRESHOLD,
         };
-        let task_future = inner.dupe().task(
+
+        let mux = Self {
+            inner,
+            datagram_rx: Mutex::new(datagram_rx),
+            server_stream_rx: Mutex::new(server_stream_rx),
+        };
+        let taskdata = (datagram_tx, server_stream_tx, frame_rx, dropped_ports_rx);
+        (mux, taskdata)
+    }
+
+    /// Spawn the multiplexor task.
+    /// This function and [`new_no_task`] are implementation details and not exposed in the public API.
+    #[inline]
+    fn spawn_task<S: WebSocketStream>(
+        &self,
+        ws: S,
+        taskdata: TaskData,
+        task_joinset: Option<&mut JoinSet<Result<()>>>,
+    ) {
+        let (datagram_tx, server_stream_tx, frame_rx, dropped_ports_rx) = taskdata;
+        let task_future = self.inner.dupe().task(
             ws,
             datagram_tx,
             server_stream_tx,
@@ -149,12 +185,6 @@ impl Multiplexor {
             });
         }
         trace!("Multiplexor task spawned");
-
-        Self {
-            inner,
-            datagram_rx: Mutex::new(datagram_rx),
-            server_stream_rx: Mutex::new(server_stream_rx),
-        }
     }
 
     /// Request a channel for `host` and `port`.
