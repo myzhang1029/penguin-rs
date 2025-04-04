@@ -33,7 +33,6 @@ http-body-util = { version = "0.1", optional = true }
 hyper = { version = "1", features = ["server", "http1", "http2"], optional = true }
 hyper-util = { version = "0.1", features = ["server", "server-auto", "tokio"], optional = true }
 instant-acme = { version = "0.7", features = ["ring", "hyper-rustls"], default-features = false, optional = true }
-parking_lot = { version = "0.12", optional = true }
 rand = "0.9"
 rcgen = { version = "0.13", optional = true }
 reqwest = { version = "0.12", optional = true, default-features = false }
@@ -75,8 +74,6 @@ default-is-ipv6 = []
 tokio-console = ["dep:console-subscriber"]
 # Statically remove some logging code. This breaks `tokio-console`
 remove-logging = ["tracing/max_level_trace", "tracing/release_max_level_debug"]
-# `parking_lot`'s deadlock detection in a separate thread
-deadlock-detection = ["parking_lot/deadlock_detection", "tokio/parking_lot"]
 # obtaining certificate automatically using ACME protocol
 acme = ["penguin-binary", "dep:instant-acme", "dep:rcgen", "tokio/process"]
 # `penguin` binary
