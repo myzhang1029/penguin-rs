@@ -145,7 +145,7 @@ mod tests {
 
     #[test]
     fn test_backoff() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let mut backoff = Backoff::new(Duration::from_millis(10), Duration::from_secs(1), 2, 5);
         assert_eq!(backoff.advance(), Some(Duration::from_millis(10)));
         assert_eq!(backoff.advance(), Some(Duration::from_millis(20)));
@@ -171,7 +171,7 @@ mod tests {
 
     #[test]
     fn test_optional_duration() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let dur = OptionalDuration::from_secs(10);
         assert_eq!(dur.to_string(), "10s");
         let dur_none = OptionalDuration::NONE;
@@ -184,7 +184,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_optional_interval() {
-        tracing_subscriber::fmt().try_init().ok();
+        crate::tests::setup_logging();
         let dur = OptionalDuration::from_secs(2);
         let mut interval = OptionalInterval::from(dur);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
