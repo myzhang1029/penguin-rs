@@ -2,10 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use super::frame::StreamFrame;
-use super::locked_sink::LockedWebSocket;
+use super::frame::{Frame, StreamFrame};
 use crate::config;
-use crate::ws::WebSocketError;
 use bytes::Bytes;
 use futures_util::task::AtomicWaker;
 use std::io;
@@ -18,7 +16,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, trace, warn};
 
 /// All parameters of a stream channel
-pub struct MuxStream<S> {
+pub struct MuxStream {
     /// Receive stream frames
     pub(super) frame_rx: mpsc::Receiver<Bytes>,
     /// Our port
@@ -36,19 +34,17 @@ pub struct MuxStream<S> {
     /// Number of `Psh` frames received after sending the previous `Ack` frame
     /// `config::RWND - psh_recvd_since` is approximately the peer's `psh_send_remaining`
     pub(super) psh_recvd_since: AtomicU64,
-    /// Channel to send `Ack` frames to the mux task (our port, their port, psh_recvd_since)
-    pub(super) ack_tx: mpsc::UnboundedSender<(u16, u16, u64)>,
     /// Waker to wake up the task that sends frames
     pub(super) writer_waker: Arc<AtomicWaker>,
     /// Remaining bytes to be read
     pub(super) buf: Bytes,
     /// See `MultiplexorInner`.
-    pub(super) ws: LockedWebSocket<S>,
+    pub(super) frame_tx: mpsc::UnboundedSender<Frame>,
     /// See `MultiplexorInner`.
     pub(super) dropped_ports_tx: mpsc::UnboundedSender<(u16, u16)>,
 }
 
-impl<S> std::fmt::Debug for MuxStream<S> {
+impl std::fmt::Debug for MuxStream {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MuxStream")
             .field("our_port", &self.our_port)
@@ -63,7 +59,7 @@ impl<S> std::fmt::Debug for MuxStream<S> {
     }
 }
 
-impl<S> Drop for MuxStream<S> {
+impl Drop for MuxStream {
     // Dropping the port should act like `close()` has been called.
     // Since `drop` is not async, this is handled by the mux task.
     /// Close the stream by instructing the mux task to send a `Rst` frame if
@@ -77,7 +73,7 @@ impl<S> Drop for MuxStream<S> {
     }
 }
 
-impl<S> AsyncRead for MuxStream<S> {
+impl AsyncRead for MuxStream {
     /// Read data from the stream.
     /// There are two cases where this function gives EOF:
     /// 1. One `Message` contains an empty payload.
@@ -113,9 +109,11 @@ impl<S> AsyncRead for MuxStream<S> {
                 // `Psh` frames received - `Ack`ed amount is correct.
                 let amount_to_ack = self.psh_recvd_since.swap(0, Ordering::Relaxed);
                 // Send an `Ack` frame
-                debug!("queueing `Ack` of {amount_to_ack} frames");
-                self.ack_tx
-                    .send((self.our_port, self.their_port, amount_to_ack))
+                debug!("sending `Ack` of {amount_to_ack} frames");
+                self.frame_tx
+                    .send(
+                        StreamFrame::new_ack(self.our_port, self.their_port, amount_to_ack).into(),
+                    )
                     .ok();
                 // If the previous line fails, the task has exited.
                 // In this case, we don't care about the `Ack` frame and the
@@ -139,10 +137,7 @@ impl<S> AsyncRead for MuxStream<S> {
     }
 }
 
-impl<S> AsyncWrite for MuxStream<S>
-where
-    S: crate::ws::WebSocketStream,
-{
+impl AsyncWrite for MuxStream {
     /// Write data to the stream. Each invocation of this method will send a
     /// separate frame in a new [`Message`](crate::ws::Message), so it may be
     /// beneficial to wrap it in a [`BufWriter`](tokio::io::BufWriter) where
@@ -164,83 +159,58 @@ where
             debug!("stream has been closed, returning `BrokenPipe`");
             return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
         }
-        // Our purpose is to transparently pipe data with `Sink`/`Stream`,
-        // so when some data arrives, we really should flush it as soon as
-        // practical. XXX: performance penalty?
-        // `ready`: nothing happens if return here
-        ready!(self.ws.poll_flush(cx)).map_err(WebSocketError::into_io_error)?;
-        // `ready`: extra flushes are harmless although they are not necessary
-        ready!(self.ws.poll_feed_with(cx, |cx| {
-            loop {
-                // Atomic ordering: we don't really have a critical section here,
-                // so `Relaxed` should be enough.
-                let original = self.psh_send_remaining.load(Ordering::Acquire);
-                trace!("congestion window: {}", original);
-                if original == 0 {
-                    // We have reached the congestion window limit. Wait for an `Ack`
-                    debug!("waiting for `Ack`");
-                    self.writer_waker.register(cx.waker());
-                    // Since all writes start with `poll_flush`, we don't need to
-                    // flush here. There is actually no way to `poll_flush` without
-                    // magic.
-                    return Poll::Pending;
-                }
-                let new = original - 1;
-                // Atomic ordering: see the comment above
-                if self
-                    .psh_send_remaining
-                    .compare_exchange_weak(original, new, Ordering::AcqRel, Ordering::Relaxed)
-                    .is_ok()
-                {
-                    // We have successfully decremented the congestion window
-                    break;
-                }
-                trace!("congestion window race condition, retrying");
+        loop {
+            // Atomic ordering: we don't really have a critical section here,
+            // so `Relaxed` should be enough.
+            let original = self.psh_send_remaining.load(Ordering::Acquire);
+            trace!("congestion window: {original}");
+            if original == 0 {
+                // We have reached the congestion window limit. Wait for an `Ack`
+                debug!("waiting for `Ack`");
+                self.writer_waker.register(cx.waker());
+                // Since all writes start with `poll_flush`, we don't need to
+                // flush here. There is actually no way to `poll_flush` without
+                // magic.
+                return Poll::Pending;
             }
-            Poll::Ready(
-                StreamFrame::new_psh(self.our_port, self.their_port, Bytes::copy_from_slice(buf))
-                    .into(),
-            )
-        }))
-        .map_err(WebSocketError::into_io_error)?;
+            let new = original - 1;
+            // Atomic ordering: see the comment above
+            if self
+                .psh_send_remaining
+                .compare_exchange_weak(original, new, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+            {
+                // We have successfully decremented the congestion window
+                break;
+            }
+            trace!("congestion window race condition, retrying");
+        }
+        let frame =
+            StreamFrame::new_psh(self.our_port, self.their_port, Bytes::copy_from_slice(buf))
+                .into();
+        self.frame_tx
+            .send(frame)
+            .map_err(|_| io::ErrorKind::BrokenPipe)?;
         trace!("sent a frame");
         Poll::Ready(Ok(buf.len()))
     }
 
-    #[tracing::instrument(skip(cx), level = "trace")]
+    #[tracing::instrument(skip(_cx), level = "trace")]
     #[inline]
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        ready!(self.ws.poll_flush(cx)).map_err(WebSocketError::into_io_error)?;
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        // The frame sink does not need to be flushed
         Poll::Ready(Ok(()))
     }
 
     /// Close the write end of the stream (`shutdown(SHUT_WR)`).
     /// This function will send a [`Fin`](crate::frame::StreamFlag::Fin) frame
     /// to the remote peer.
-    #[tracing::instrument(skip(cx), level = "trace")]
+    #[tracing::instrument(skip(_cx), level = "trace")]
     #[inline]
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        // There is no need to send a `Fin` frame if the mux task has already removed the stream
-        // because either:
-        // 1. `MuxStream` was dropped before `poll_shutdown` is completed and the mux task should
-        //    have already sent a `Rst` frame.
-        // 2. The entire mux task has been dropped, so we will only get `BrokenPipe` error.
-        // Atomic ordering: see `inner.rs` -> `shutdown` and `close_port`.
-        // As a summary, duplicate `Fin`/`Rst` frames are harmless.
-        if self.can_write.load(Ordering::Relaxed) {
-            // Can write means that things above have not happened, so we should send a `Fin` frame.
-            // `ready`: nothing happens if return here
-            ready!(self.ws.poll_feed_with(cx, |_cx| {
-                Poll::Ready(StreamFrame::new_fin(self.our_port, self.their_port).into())
-            }))
-            .map_err(WebSocketError::into_io_error)?;
-            // Atomic ordering: see `inner.rs` -> `shutdown` and `close_port`.
-            self.can_write.store(false, Ordering::Relaxed);
-        }
-        // `ready`: if poll resumes, `self.fin_sent` indicates where to continue
-        // We don't want to `close()` the sink here!!!
-        // This line is allowed to fail, because the sink might have been closed altogether
-        ready!(self.ws.poll_flush(cx)).ok();
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.frame_tx
+            .send(StreamFrame::new_fin(self.our_port, self.their_port).into())
+            .map_err(|_| io::ErrorKind::BrokenPipe)?;
         Poll::Ready(Ok(()))
     }
 }
