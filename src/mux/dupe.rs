@@ -46,7 +46,7 @@ impl_dupe_as_clone! {
 }
 
 // `Client` uses `Arc` internally.
-#[cfg(feature = "reqwest")]
+#[cfg(feature = "penguin-binary")]
 impl Dupe for reqwest::Client {
     fn dupe(&self) -> Self {
         self.clone()
