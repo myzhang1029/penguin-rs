@@ -13,6 +13,7 @@ use http::{
 };
 #[cfg(feature = "acme")]
 use instant_acme::LetsEncrypt;
+use penguin_mux::timing::OptionalDuration;
 use std::{fmt::Debug, ops::Deref, str::FromStr, sync::OnceLock};
 use thiserror::Error;
 
@@ -120,8 +121,8 @@ pub struct ClientArgs {
     /// transport is HTTP, in many instances we'll be traversing through
     /// proxies, often these proxies will close idle connections. You must
     /// specify a time in seconds (set to 0 to disable).
-    #[arg(long, default_value_t = 25)]
-    pub keepalive: u64,
+    #[arg(long, default_value = "25")]
+    pub keepalive: OptionalDuration,
     /// Maximum number of times to retry before exiting.
     /// A value of 0 means unlimited.
     #[arg(long, default_value_t = 0)]
@@ -276,8 +277,8 @@ pub struct ServerArgs {
     #[arg(long = "reverse")]
     pub _reverse: bool,
     /// For compatibility with `chisel` only. This option is a no-op.
-    #[arg(long = "keepalive", default_value_t = 0)]
-    pub _keepalive: u64,
+    #[arg(long = "keepalive", default_value = "0")]
+    pub _keepalive: OptionalDuration,
     /// For compatibility with `chisel` only. This option is a no-op.
     #[arg(long = "auth")]
     pub _auth: Option<String>,
@@ -436,52 +437,6 @@ impl FromStr for Header {
         let name = HeaderName::from_str(name)?;
         let value = HeaderValue::from_str(value.trim())?;
         Ok(Self { name, value })
-    }
-}
-
-/// An optional duration
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct OptionalDuration(Option<std::time::Duration>);
-
-impl OptionalDuration {
-    // Possibly only used in tests
-    #[allow(dead_code)]
-    pub const NONE: Self = Self(None);
-
-    pub const fn from_secs(duration: u64) -> Self {
-        Self(Some(std::time::Duration::from_secs(duration)))
-    }
-
-    pub async fn timeout<T>(&self, future: T) -> Result<T::Output, tokio::time::error::Elapsed>
-    where
-        T: std::future::Future,
-    {
-        match self.0 {
-            Some(duration) => tokio::time::timeout(duration, future).await,
-            None => Ok(future.await),
-        }
-    }
-}
-
-impl FromStr for OptionalDuration {
-    type Err = std::num::ParseIntError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let value = s.parse::<u64>()?;
-        if value == 0 {
-            Ok(Self(None))
-        } else {
-            Ok(Self::from_secs(value))
-        }
-    }
-}
-
-impl std::fmt::Display for OptionalDuration {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0 {
-            Some(duration) => duration.fmt(f),
-            None => write!(f, "indefinite"),
-        }
     }
 }
 
@@ -648,7 +603,7 @@ mod tests {
                 ]
             );
             assert_eq!(args.ws_psk, Some(HeaderValue::from_static("avocado")));
-            assert_eq!(args.keepalive, 10);
+            assert_eq!(args.keepalive, OptionalDuration::from_secs(10));
             assert_eq!(args.max_retry_count, 400);
             assert_eq!(args.max_retry_interval, 1000);
             assert_eq!(

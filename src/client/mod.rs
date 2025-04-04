@@ -10,9 +10,9 @@ use self::handle_remote::handle_remote;
 use self::maybe_retryable::MaybeRetryableError;
 use crate::arg::ClientArgs;
 use crate::config;
-use crate::Dupe;
 use bytes::Bytes;
-use penguin_mux::{DatagramFrame, IntKey, Multiplexor, Role};
+use penguin_mux::timing::{Backoff, OptionalDuration};
+use penguin_mux::{DatagramFrame, Dupe, IntKey, Multiplexor, Role};
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -24,7 +24,7 @@ use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::{mpsc, oneshot, RwLock};
 use tokio::task::JoinSet;
 use tokio::time;
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::MaybeTlsStream;
 use tracing::{error, info, trace, warn};
 
 /// Errors
@@ -46,7 +46,7 @@ pub enum Error {
     RemoteDisconnected,
 }
 
-type MuxStream = penguin_mux::MuxStream<WebSocketStream<MaybeTlsStream<TcpStream>>>;
+type MuxStream = penguin_mux::MuxStream;
 
 // Send the information about how to send the stream to the listener
 /// Type that local listeners send to the main loop to request a connection
@@ -267,7 +267,7 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
     };
     let main_future = async move {
         // Initial retry interval is 200ms
-        let mut backoff = crate::backoff::Backoff::new(
+        let mut backoff = Backoff::new(
             Duration::from_millis(200),
             Duration::from_millis(args.max_retry_interval),
             2,
@@ -275,12 +275,6 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
         );
         // Place to park one failed stream request so that it can be retried
         let mut failed_stream_request: Option<StreamCommand> = None;
-        // Keep alive interval
-        let keepalive = if args.keepalive == 0 {
-            None
-        } else {
-            Some(Duration::from_secs(args.keepalive))
-        };
         // Timeout for channel requests
         let channel_timeout = Duration::from_secs(args.channel_timeout);
         // Retry loop
@@ -294,7 +288,7 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
                         &mut failed_stream_request,
                         &mut datagram_rx,
                         udp_client_map.dupe(),
-                        keepalive,
+                        args.keepalive,
                         channel_timeout,
                     )
                     .await
@@ -347,7 +341,7 @@ async fn on_connected(
     failed_stream_request: &mut Option<StreamCommand>,
     datagram_rx: &mut mpsc::Receiver<DatagramFrame>,
     udp_client_map: Arc<RwLock<ClientIdMaps>>,
-    keepalive: Option<Duration>,
+    keepalive: OptionalDuration,
     channel_timeout: Duration,
 ) -> Result<Infallible, Error> {
     let mut mux_task_joinset = JoinSet::new();
@@ -404,7 +398,7 @@ async fn on_connected(
 /// If we fail, put the request back in the failed_stream_request slot.
 #[tracing::instrument(skip_all, level = "trace")]
 async fn get_send_stream_chan(
-    mux: &mut Multiplexor<WebSocketStream<MaybeTlsStream<TcpStream>>>,
+    mux: &mut Multiplexor,
     stream_command: StreamCommand,
     failed_stream_request: &mut Option<StreamCommand>,
     channel_timeout: Duration,

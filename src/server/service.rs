@@ -3,9 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::websocket::handle_websocket;
-use crate::arg::{BackendUrl, OptionalDuration};
+use crate::arg::BackendUrl;
 use crate::proto_version::PROTOCOL_VERSION;
-use crate::Dupe;
 use base64::engine::general_purpose::STANDARD as B64_STANDARD_ENGINE;
 use base64::Engine;
 use bytes::Bytes;
@@ -14,6 +13,7 @@ use http_body_util::{BodyExt, Full as FullBody};
 use hyper::service::Service;
 use hyper::upgrade::OnUpgrade;
 use hyper_util::rt::TokioIo;
+use penguin_mux::{timing::OptionalDuration, Dupe};
 use sha1::{Digest, Sha1};
 use std::future::Future;
 use std::pin::Pin;

@@ -6,7 +6,7 @@ use crate::{
 };
 use challenge_helper::Action;
 use instant_acme::{Account, AuthorizationStatus, Identifier, NewAccount, NewOrder, OrderStatus};
-use penguin_mux::dupe::Dupe;
+use penguin_mux::{timing::Backoff, Dupe};
 use rcgen::{CertificateParams, DistinguishedName, KeyPair};
 use std::sync::OnceLock;
 use tracing::{debug, error, info};
@@ -159,7 +159,7 @@ async fn issue(
         .process_challenges(&authorizations, &mut order)
         .await?;
     // Back off until the order becomes ready or invalid
-    let mut backoff = crate::backoff::Backoff::new(
+    let mut backoff = Backoff::new(
         std::time::Duration::from_secs(5),
         std::time::Duration::from_secs(60),
         2,

@@ -4,9 +4,9 @@
 
 use super::FatalError;
 use crate::client::HandlerResources;
-use crate::{config, Dupe};
+use crate::config;
 use bytes::Bytes;
-use penguin_mux::DatagramFrame;
+use penguin_mux::{DatagramFrame, Dupe};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::UdpSocket;
