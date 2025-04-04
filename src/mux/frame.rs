@@ -262,6 +262,9 @@ pub enum Frame {
     Stream(StreamFrame),
     /// Datagram frame, encoded with `Type=0x03`
     Datagram(DatagramFrame),
+    /// This variant is used for internal purposes only
+    /// It should not be leaked to the user.
+    Flush,
 }
 
 impl From<StreamFrame> for Vec<u8> {
@@ -311,11 +314,17 @@ impl TryFrom<DatagramFrame> for Vec<u8> {
 impl TryFrom<Frame> for Vec<u8> {
     type Error = TryFromIntError;
 
+    /// Convert a [`Frame`] to bytes.
+    ///
+    /// # Panics
+    /// This will panic if the frame is an internal `Flush` frame.
     #[inline]
     fn try_from(frame: Frame) -> Result<Self, Self::Error> {
         match frame {
             Frame::Stream(frame) => Ok(frame.into()),
             Frame::Datagram(frame) => frame.try_into(),
+            // This variant should not be serialized
+            Frame::Flush => panic!("Flush frame should not be serialized to bytes"),
         }
     }
 }

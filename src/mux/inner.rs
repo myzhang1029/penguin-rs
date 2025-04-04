@@ -70,10 +70,10 @@ pub struct MultiplexorInner {
     pub frame_tx: mpsc::UnboundedSender<Frame>,
     /// Interval between keepalive `Ping`s
     pub keepalive_interval: OptionalDuration,
-    /// Open stream channels: our_port -> `MuxStreamData`
+    /// Open stream channels: `our_port` -> `MuxStreamData`
     pub streams: Arc<RwLock<HashMap<u16, MuxStreamSlot>>>,
     /// Channel for notifying the task of a dropped `MuxStream`
-    /// (in the form (our_port, their_port)).
+    /// (in the form (`our_port`, `their_port`)).
     /// Sending (0, _) means that the multiplexor is being dropped and the
     /// task should exit.
     /// The reason we need `their_port` is to ensure the connection is `Rst`ed
@@ -149,7 +149,14 @@ impl MultiplexorInner {
                     // cannot happen because `Self` contains one sender unless
                     // there is a bug in our code or `tokio` itself.
                     let frame = maybe_frame.expect("frame receiver should not be closed (this is a bug)");
-                    ws.send(Message::Binary(frame.try_into()?)).await?;
+                    // Buffer `Psh` frames, and flush everything else immediately
+                    match frame {
+                        Frame::Stream(ref sf) if sf.flag == StreamFlag::Psh => {
+                            ws.feed(Message::Binary(frame.try_into()?)).await
+                        }
+                        Frame::Flush => ws.flush().await,
+                        _ => ws.send(Message::Binary(frame.try_into()?)).await,
+                    }?;
                 }
                 req = dropped_ports_rx.recv() => {
                     if let Some((our_port, their_port)) = req {
@@ -209,6 +216,9 @@ impl MultiplexorInner {
         // We must use `try_recv` because, again, `Self` contains one sender.
         if should_drain_frame_rx {
             while let Ok(frame) = frame_rx.try_recv() {
+                if matches!(frame, Frame::Flush) {
+                    continue;
+                }
                 debug!("sending remaining frame after mux drop");
                 if let Err(e) = ws.feed(Message::Binary(frame.try_into()?)).await {
                     warn!("Failed to send remaining frame after mux drop: {e}");
@@ -284,7 +294,7 @@ impl MultiplexorInner {
                 let frame = data.try_into()?;
                 match frame {
                     Frame::Datagram(datagram_frame) => {
-                        trace!("received datagram frame: {:?}", datagram_frame);
+                        trace!("received datagram frame: {datagram_frame:?}");
                         // Only fails if the receiver is dropped or the queue is full.
                         // The first case means the multiplexor itself is dropped;
                         // In the second case, we just drop the frame to avoid blocking.
@@ -304,6 +314,10 @@ impl MultiplexorInner {
                         trace!("received stream frame: {:?}", stream_frame);
                         self.process_stream_frame(stream_frame, server_stream_tx)
                             .await?;
+                    }
+                    Frame::Flush => {
+                        // Normal code should never leak a `Flush` frame
+                        panic!("received `Flush` frame in the multiplexor task (this is a bug)");
                     }
                 }
                 Ok(false)
