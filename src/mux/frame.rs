@@ -54,7 +54,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 #![allow(clippy::similar_names)]
 
-use crate::ws::Message;
 use bytes::{Buf, BufMut, Bytes};
 use std::{fmt::Debug, num::TryFromIntError};
 use thiserror::Error;
@@ -394,10 +393,26 @@ impl TryFrom<Bytes> for Frame {
 
 // I thought the rest was automatically implemented by the compiler.
 // Add when needed.
-impl From<StreamFrame> for Message {
+impl From<StreamFrame> for Frame {
     #[inline]
     fn from(frame: StreamFrame) -> Self {
-        Vec::<u8>::from(frame).into()
+        Self::Stream(frame)
+    }
+}
+
+impl From<DatagramFrame> for Frame {
+    #[inline]
+    fn from(frame: DatagramFrame) -> Self {
+        Self::Datagram(frame)
+    }
+}
+
+impl TryFrom<Frame> for Bytes {
+    type Error = <Vec<u8> as TryFrom<Frame>>::Error;
+
+    #[inline]
+    fn try_from(frame: Frame) -> Result<Self, Self::Error> {
+        Vec::try_from(frame).map(Self::from)
     }
 }
 
