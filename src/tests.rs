@@ -1,9 +1,7 @@
 #![allow(clippy::match_on_vec_items)]
 use super::*;
-use crate::{
-    arg::{OptionalDuration, ServerUrl},
-    parse_remote::Remote,
-};
+use crate::{arg::ServerUrl, parse_remote::Remote};
+use penguin_mux::timing::OptionalDuration;
 #[allow(unused_imports)]
 use std::sync::{LazyLock, OnceLock};
 use std::{
@@ -42,7 +40,7 @@ fn make_client_args(servhost: &str, servport: u16, remotes: Vec<Remote>) -> arg:
     arg::ClientArgs {
         server: ServerUrl::from_str(&format!("ws://{servhost}:{servport}/ws")).unwrap(),
         remote: remotes,
-        keepalive: 0,
+        keepalive: OptionalDuration::NONE,
         max_retry_count: 10,
         max_retry_interval: 10,
         tls_skip_verify: false,
@@ -207,7 +205,7 @@ async fn test_it_works_tls_simple() {
         server: ServerUrl::from_str("wss://127.0.0.1:20353/ws").unwrap(),
         remote: vec![Remote::from_str("127.0.0.1:24368:127.0.0.1:12034").unwrap()],
         ws_psk: None,
-        keepalive: 0,
+        keepalive: OptionalDuration::NONE,
         max_retry_count: 10,
         max_retry_interval: 10,
         proxy: None,

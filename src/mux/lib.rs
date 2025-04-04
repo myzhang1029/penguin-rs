@@ -9,19 +9,18 @@
 #![allow(clippy::module_name_repetitions)]
 
 mod config;
-pub mod dupe;
+mod dupe;
 mod frame;
 mod inner;
-mod locked_sink;
 mod stream;
 #[cfg(test)]
 mod tests;
+pub mod timing;
 pub mod ws;
 
-use crate::dupe::Dupe;
 use crate::inner::MultiplexorInner;
-use crate::ws::{Message, WebSocketStream};
-use bytes::Bytes;
+use crate::timing::OptionalDuration;
+use crate::ws::WebSocketStream;
 use rand::distr::uniform::SampleUniform;
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -34,6 +33,7 @@ use tokio::{
 };
 use tracing::{error, trace, warn};
 
+pub use crate::dupe::Dupe;
 pub use crate::frame::{DatagramFrame, Frame, StreamFrame, StreamOpCode};
 pub use crate::stream::MuxStream;
 
@@ -49,19 +49,9 @@ pub enum Error {
     #[error("Mux is already closed")]
     Closed,
 
-    // These are WebSocket errors separated by their origin
-    /// WebSocket error when polling the next message.
-    #[error("Failed to receive message: {0}")]
-    Next(crate::ws::Error),
-    /// WebSocket error when sending a datagram.
-    #[error("Failed to send datagram: {0}")]
-    SendDatagram(crate::ws::Error),
-    /// WebSocket error when sending a stream frame.
-    #[error("Failed to send stream frame: {0}")]
-    SendStreamFrame(crate::ws::Error),
-    /// WebSocket error when working with [Ping](Message::Ping)/[Pong](Message::Pong) frames.
-    #[error("Failed to send ping/pong: {0}")]
-    PingPong(crate::ws::Error),
+    /// WebSocket errors
+    #[error("WebSocket Error: {0}")]
+    WebSocket(#[from] crate::ws::Error),
 
     // These are the ones that shouldn't normally happen
     /// Datagram target host longer than 255 octets.
@@ -87,16 +77,16 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// A multiplexor over a `WebSocket` connection.
 #[derive(Debug)]
-pub struct Multiplexor<S> {
-    inner: MultiplexorInner<S>,
+pub struct Multiplexor {
+    inner: MultiplexorInner,
     /// Channel of received datagram frames for processing.
     datagram_rx: Mutex<mpsc::Receiver<DatagramFrame>>,
     /// Channel for a `Multiplexor` to receive newly
     /// established streams after the peer requests one.
-    con_recv_stream_rx: Mutex<mpsc::Receiver<MuxStream<S>>>,
+    con_recv_stream_rx: Mutex<mpsc::Receiver<MuxStream>>,
 }
 
-impl<S: WebSocketStream> Multiplexor<S> {
+impl Multiplexor {
     /// Create a new `Multiplexor`.
     ///
     /// # Arguments
@@ -112,27 +102,33 @@ impl<S: WebSocketStream> Multiplexor<S> {
     ///   that the caller can notice if the task exits. If it is `None`, the
     ///   task will be spawned by `tokio::spawn` and errors will be logged.
     #[tracing::instrument(skip_all, level = "debug")]
-    pub fn new(
+    pub fn new<S: WebSocketStream>(
         ws: S,
-        keepalive_interval: Option<std::time::Duration>,
+        keepalive_interval: OptionalDuration,
         task_joinset: Option<&mut JoinSet<Result<()>>>,
     ) -> Self {
         let (datagram_tx, datagram_rx) = mpsc::channel(config::DATAGRAM_BUFFER_SIZE);
         let (con_recv_stream_tx, con_recv_stream_rx) = mpsc::channel(config::STREAM_BUFFER_SIZE);
+        // This one is unbounded because the protocol provides its own flow control for `Psh` frames
+        // and other frame types are to be immediately processed without any backpressure,
+        // so they are ok to be unbounded channels.
+        let (frame_tx, frame_rx) = mpsc::unbounded_channel();
+        // This one cannot be bounded because it needs to be used in Drop
         let (dropped_ports_tx, dropped_ports_rx) = mpsc::unbounded_channel();
-        let (ack_tx, ack_rx) = mpsc::unbounded_channel();
 
         let inner = MultiplexorInner {
-            ws: locked_sink::LockedWebSocket::new(ws),
+            frame_tx,
             keepalive_interval,
             streams: Arc::new(RwLock::new(HashMap::new())),
             dropped_ports_tx,
-            ack_tx,
         };
-        let task_future =
-            inner
-                .dupe()
-                .task(datagram_tx, con_recv_stream_tx, dropped_ports_rx, ack_rx);
+        let task_future = inner.dupe().task(
+            ws,
+            datagram_tx,
+            con_recv_stream_tx,
+            frame_rx,
+            dropped_ports_rx,
+        );
         if let Some(task_joinset) = task_joinset {
             task_joinset.spawn(task_future);
         } else {
@@ -169,7 +165,7 @@ impl<S: WebSocketStream> Multiplexor<S> {
     /// inaccessible through normal means. Subsequent calls to this function
     /// will result in a new channel being established.
     #[tracing::instrument(skip(self), level = "debug")]
-    pub async fn new_stream_channel(&self, host: &[u8], port: u16) -> Result<MuxStream<S>> {
+    pub async fn new_stream_channel(&self, host: &[u8], port: u16) -> Result<MuxStream> {
         let (stream_tx, stream_rx) = oneshot::channel();
         let sport = {
             let mut streams = self.inner.streams.write().await;
@@ -181,10 +177,9 @@ impl<S: WebSocketStream> Multiplexor<S> {
         };
         trace!("sending `Con`");
         self.inner
-            .ws
-            .send_with(|| StreamFrame::new_con(host, port, sport, config::RWND).into())
-            .await
-            .map_err(Error::SendStreamFrame)?;
+            .frame_tx
+            .send(StreamFrame::new_con(host, port, sport, config::RWND).into())
+            .map_err(|_| Error::Closed)?;
         trace!("sending stream to user");
         let stream = stream_rx
             .await
@@ -207,7 +202,7 @@ impl<S: WebSocketStream> Multiplexor<S> {
     /// for a new connection, it is guaranteed that no connected stream will
     /// be lost.
     #[tracing::instrument(skip(self), level = "debug")]
-    pub async fn accept_stream_channel(&self) -> Result<MuxStream<S>> {
+    pub async fn accept_stream_channel(&self) -> Result<MuxStream> {
         self.con_recv_stream_rx
             .lock()
             .await
@@ -249,18 +244,16 @@ impl<S: WebSocketStream> Multiplexor<S> {
     #[tracing::instrument(skip(self), level = "debug")]
     #[inline]
     pub async fn send_datagram(&self, frame: DatagramFrame) -> Result<()> {
-        let payload: Bytes = Vec::<u8>::try_from(frame)?.into();
-        // Always flush datagrams immediately
+        // Always flush datagrams immediately TODO
         self.inner
-            .ws
-            .send_with(|| Message::Binary(payload.dupe()))
-            .await
-            .map_err(Error::SendDatagram)?;
+            .frame_tx
+            .send(frame.into())
+            .map_err(|_| Error::Closed)?;
         Ok(())
     }
 }
 
-impl<S> Drop for Multiplexor<S> {
+impl Drop for Multiplexor {
     fn drop(&mut self) {
         self.inner.dropped_ports_tx.send((0, 0)).ok();
     }

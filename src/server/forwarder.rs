@@ -3,9 +3,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use crate::{config, Dupe};
+use crate::config;
 use bytes::Bytes;
-use penguin_mux::DatagramFrame;
+use penguin_mux::{DatagramFrame, Dupe};
 use std::net::SocketAddr;
 use thiserror::Error;
 use tokio::net::TcpStream;

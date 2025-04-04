@@ -52,11 +52,8 @@ impl MaybeRetryableError for tokio_tungstenite::tungstenite::Error {
 impl MaybeRetryableError for penguin_mux::Error {
     fn retryable(&self) -> bool {
         match self {
-            Self::SendDatagram(e)
-            | Self::SendStreamFrame(e)
-            | Self::Next(e)
-            | Self::PingPong(e) => e.retryable(),
-            Self::Closed => true,
+            Self::SendStreamToClient | Self::Closed => true,
+            Self::WebSocket(e) => e.retryable(),
             _ => false,
         }
     }

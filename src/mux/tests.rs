@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::*;
+use bytes::Bytes;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -20,8 +21,8 @@ async fn connect_succeeds() {
     setup_logging();
     let (client, server) = crate::ws::mock::get_pair().await;
 
-    let client_mux = Multiplexor::new(client, None, None);
-    let server_mux = Multiplexor::new(server, None, None);
+    let client_mux = Multiplexor::new(client, OptionalDuration::NONE, None);
+    let server_mux = Multiplexor::new(server, OptionalDuration::NONE, None);
 
     let server_task = tokio::spawn(async move {
         let stream = server_mux.accept_stream_channel().await.unwrap();
@@ -42,8 +43,8 @@ async fn datagram_channel_passes_data() {
     setup_logging();
     let (client, server) = crate::ws::mock::get_pair().await;
 
-    let client_mux = Multiplexor::new(client, None, None);
-    let server_mux = Multiplexor::new(server, None, None);
+    let client_mux = Multiplexor::new(client, OptionalDuration::NONE, None);
+    let server_mux = Multiplexor::new(server, OptionalDuration::NONE, None);
 
     let server_task = tokio::spawn(async move {
         for _ in 0..64 {
@@ -83,8 +84,8 @@ async fn connected_stream_passes_data() {
     setup_logging();
     let (client, server) = crate::ws::mock::get_pair().await;
 
-    let client_mux = Multiplexor::new(client, None, None);
-    let server_mux = Multiplexor::new(server, None, None);
+    let client_mux = Multiplexor::new(client, OptionalDuration::NONE, None);
+    let server_mux = Multiplexor::new(server, OptionalDuration::NONE, None);
 
     let input_bytes: Vec<u8> = (0..(1024 * 1024)).map(|_| rand::random::<u8>()).collect();
     let len = input_bytes.len();
@@ -126,8 +127,8 @@ async fn test_early_eof_detected() {
     setup_logging();
     let (client, server) = crate::ws::mock::get_pair().await;
 
-    let client_mux = Multiplexor::new(client, None, None);
-    let server_mux = Multiplexor::new(server, None, None);
+    let client_mux = Multiplexor::new(client, OptionalDuration::NONE, None);
+    let server_mux = Multiplexor::new(server, OptionalDuration::NONE, None);
 
     let input_bytes: Vec<u8> = (0..1024).map(|_| rand::random::<u8>()).collect();
     let len = input_bytes.len();
@@ -162,8 +163,8 @@ async fn test_several_channels() {
     setup_logging();
     let (client, server) = crate::ws::mock::get_pair().await;
 
-    let client_mux = Multiplexor::new(client, None, None);
-    let server_mux = Multiplexor::new(server, None, None);
+    let client_mux = Multiplexor::new(client, OptionalDuration::NONE, None);
+    let server_mux = Multiplexor::new(server, OptionalDuration::NONE, None);
 
     let server_task = tokio::spawn(async move {
         let mut conn1 = server_mux.accept_stream_channel().await.unwrap();
