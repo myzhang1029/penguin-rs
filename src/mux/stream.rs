@@ -209,9 +209,20 @@ impl AsyncWrite for MuxStream {
     #[tracing::instrument(skip(_cx), level = "trace")]
     #[inline]
     fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        self.frame_tx
-            .send(StreamFrame::new_fin(self.our_port, self.their_port).into())
-            .map_err(|_| BrokenPipe)?;
+        // There is no need to send a `Fin` frame if the mux task has already removed the stream
+        // because either:
+        // 1. `MuxStream` was dropped before `poll_shutdown` is completed and the mux task should
+        //    have already sent a `Rst` frame.
+        // 2. The entire mux task has been dropped, so we will only get `BrokenPipe` error.
+        // Atomic ordering: see `inner.rs` -> `close_port`.
+        // As a summary, duplicate `Fin`/`Rst` frames are harmless.
+        if self.can_write.load(Ordering::Relaxed) {
+            self.frame_tx
+                .send(StreamFrame::new_fin(self.our_port, self.their_port).into())
+                .map_err(|_| BrokenPipe)?;
+            // Atomic ordering: see `inner.rs` -> `shutdown` and `close_port`.
+            self.can_write.store(false, Ordering::Relaxed);
+        }
         Poll::Ready(Ok(()))
     }
 }
