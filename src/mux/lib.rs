@@ -250,7 +250,6 @@ impl Multiplexor {
     #[tracing::instrument(skip(self), level = "debug")]
     #[inline]
     pub async fn send_datagram(&self, frame: DatagramFrame) -> Result<()> {
-        // Always flush datagrams immediately TODO
         self.inner
             .frame_tx
             .send(frame.into())
