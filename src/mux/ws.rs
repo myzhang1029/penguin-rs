@@ -54,80 +54,10 @@ impl WebSocketError for Error {
 }
 
 #[cfg(test)]
-#[allow(unused_imports)]
-#[allow(dead_code)]
 pub(crate) mod mock {
     use super::*;
-    use parking_lot::Mutex;
-    use std::collections::VecDeque;
-    use std::pin::Pin;
-    use std::sync::Arc;
-    use std::task::{Context, Poll};
     use tokio::io::DuplexStream;
 
-    /// A mock WebSocket stream.
-    #[derive(Debug)]
-    pub struct MockWebSocket {
-        /// Messages to send.
-        pub other_end_recv_queue: Arc<Mutex<VecDeque<Message>>>,
-        /// Messages received.
-        pub recv_queue: Arc<Mutex<VecDeque<Message>>>,
-        /// Role.
-        pub role: Role,
-    }
-
-    impl Stream for MockWebSocket {
-        type Item = std::result::Result<Message, Error>;
-
-        fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-            let mut recv_queue = self.recv_queue.lock();
-            recv_queue.pop_front().map_or_else(
-                || {
-                    cx.waker().wake_by_ref();
-                    Poll::Pending
-                },
-                |msg| Poll::Ready(Some(Ok(msg))),
-            )
-        }
-    }
-
-    impl Sink<Message> for MockWebSocket {
-        type Error = Error;
-
-        fn poll_ready(
-            self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-        ) -> Poll<Result<(), Self::Error>> {
-            Poll::Ready(Ok(()))
-        }
-
-        fn start_send(self: Pin<&mut Self>, msg: Message) -> Result<(), Self::Error> {
-            self.other_end_recv_queue.lock().push_back(msg);
-            Ok(())
-        }
-
-        fn poll_flush(
-            self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-        ) -> Poll<Result<(), Self::Error>> {
-            Poll::Ready(Ok(()))
-        }
-
-        fn poll_close(
-            self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-        ) -> Poll<Result<(), Self::Error>> {
-            Poll::Ready(Ok(()))
-        }
-    }
-
-    impl WebSocketStream for MockWebSocket {
-        fn ping_auto_pong(&self) -> bool {
-            false
-        }
-    }
-    // If we are not using `loom`, we create a pair of mock WebSocket streams
-    // from a `tokio` `DuplexStream`.
     pub async fn get_pair() -> (
         tokio_tungstenite::WebSocketStream<DuplexStream>,
         tokio_tungstenite::WebSocketStream<DuplexStream>,
