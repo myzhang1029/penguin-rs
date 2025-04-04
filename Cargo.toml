@@ -46,12 +46,11 @@ tokio = { version = "^1, >=1.23.1", features = ["macros", "rt", "sync", "time"] 
 tokio-native-tls = { version = "0.3", optional = true }
 tokio-rustls = { version = "0.26", features = ["logging", "ring", "tls12"], default-features = false, optional = true }
 tokio-tungstenite = { version = "0.26", default-features = false }
-tracing = { version = "0.1", features = ["max_level_trace", "release_max_level_debug"] }
+tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
 webpki-roots = { version = "0.26", optional = true }
 
 [dev-dependencies]
-parking_lot = "0.12"
 tempfile = "3"
 tracing-subscriber = "0.3"
 rcgen = "0.13"
@@ -74,9 +73,10 @@ tests-acme-has-pebble = ["acme"]
 default-is-ipv6 = []
 # Enabling this causes `penguin` to listen for `tokio-console` connections
 tokio-console = ["dep:console-subscriber"]
+# Statically remove some logging code. This breaks `tokio-console`
+remove-logging = ["tracing/max_level_trace", "tracing/release_max_level_debug"]
 # `parking_lot`'s deadlock detection in a separate thread
-deadlock-detection = ["parking-lot"]
-parking-lot = ["parking_lot/deadlock_detection", "tokio/parking_lot"]
+deadlock-detection = ["parking_lot/deadlock_detection", "tokio/parking_lot"]
 # obtaining certificate automatically using ACME protocol
 acme = ["penguin-binary", "dep:instant-acme", "dep:rcgen", "tokio/process"]
 # `penguin` binary
