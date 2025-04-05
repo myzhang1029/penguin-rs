@@ -289,6 +289,12 @@ async fn connected_stream_passes_data() {
 #[tokio::test]
 async fn test_early_eof_detected() {
     setup_logging();
+    for _ in 0..64 {
+        test_early_eof_detected_inner().await;
+    }
+}
+
+async fn test_early_eof_detected_inner() {
     let (client, server) = crate::ws::mock::get_pair(None).await;
 
     let client_mux = Multiplexor::new(client, Role::Client, OptionalDuration::NONE, None);
