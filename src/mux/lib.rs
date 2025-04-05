@@ -22,17 +22,14 @@ use crate::inner::MultiplexorInner;
 use crate::timing::OptionalDuration;
 use crate::ws::WebSocketStream;
 use futures_util::future::poll_fn;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use rand::distr::uniform::SampleUniform;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::oneshot;
-use tokio::{
-    sync::{mpsc, RwLock},
-    task::JoinSet,
-};
+use tokio::{sync::mpsc, task::JoinSet};
 use tracing::{error, trace, warn};
 
 pub use crate::dupe::Dupe;
@@ -212,7 +209,7 @@ impl Multiplexor {
         assert_eq!(self.inner.role, Role::Client);
         let (stream_tx, stream_rx) = oneshot::channel();
         let sport = {
-            let mut streams = self.inner.streams.write().await;
+            let mut streams = self.inner.streams.write();
             // Allocate a new port
             let sport = u16::next_available_key(&*streams);
             trace!("sport = {sport}");

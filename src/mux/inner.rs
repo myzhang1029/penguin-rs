@@ -11,11 +11,12 @@ use crate::timing::{OptionalDuration, OptionalInterval};
 use crate::ws::{Message, WebSocketStream};
 use bytes::{Buf, Bytes};
 use futures_util::{task::AtomicWaker, SinkExt, StreamExt};
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc::error::TrySendError;
-use tokio::sync::{mpsc, oneshot, RwLock};
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::MissedTickBehavior;
 use tracing::{debug, error, trace, warn};
 
@@ -202,7 +203,7 @@ impl MultiplexorInner {
     ) -> Result<()> {
         debug!("closing all connections");
         // We first make sure the streams can no longer send
-        for (_, stream_data) in self.streams.write().await.iter() {
+        for (_, stream_data) in self.streams.write().iter() {
             if let MuxStreamSlot::Established(stream_data) = stream_data {
                 // Prevent the user from writing
                 // Atomic ordering: It does not matter whether the user calls `poll_shutdown` or not,
@@ -246,13 +247,22 @@ impl MultiplexorInner {
                 .await?;
         }
         // Finally, we send EOF to all established streams.
-        for (_, stream_data) in self.streams.write().await.drain() {
-            // Make sure `self.streams` is not locked in loop body
-            if let MuxStreamSlot::Established(stream_data) = stream_data {
-                // Make sure the user receives `EOF`.
-                stream_data.sender.send(Bytes::new()).await.ok();
-            }
-            // else: just drop the sender
+        let senders = self
+            .streams
+            .write()
+            .drain()
+            .filter_map(|(_, stream_slot)| {
+                if let MuxStreamSlot::Established(stream_data) = stream_slot {
+                    Some(stream_data.sender)
+                } else {
+                    None
+                    // else: just drop the sender for `Requested` slots, and the user
+                    // will get `Error::Closed` from `client_new_stream_channel`
+                }
+            })
+            .collect::<Vec<_>>();
+        for sender in senders {
+            sender.send(Bytes::new()).await.ok();
         }
         Ok(())
     }
@@ -425,19 +435,25 @@ impl MultiplexorInner {
                 }
                 let peer_processed = data.get_u64();
                 debug!("peer processed {peer_processed} frames");
-                let streams = self.streams.read().await;
-                if let Some(MuxStreamSlot::Established(stream_data)) = streams.get(&our_port) {
-                    // Atomic ordering: as long as the value is incremented atomically,
-                    // whether a writer sees the new value or the old value is not
-                    // important. If it sees the old value and decides to return
-                    // `Poll::Pending`, it will be woken up by the `Waker` anyway.
-                    stream_data
-                        .psh_send_remaining
-                        .fetch_add(peer_processed, Ordering::Relaxed);
-                    stream_data.writer_waker.wake();
-                } else {
-                    // the port does not exist
-                    drop(streams);
+                let port_exists = {
+                    let streams = self.streams.read();
+                    if let Some(MuxStreamSlot::Established(stream_data)) = streams.get(&our_port) {
+                        // Atomic ordering: as long as the value is incremented atomically,
+                        // whether a writer sees the new value or the old value is not
+                        // important. If it sees the old value and decides to return
+                        // `Poll::Pending`, it will be woken up by the `Waker` anyway.
+                        stream_data
+                            .psh_send_remaining
+                            .fetch_add(peer_processed, Ordering::Relaxed);
+                        stream_data.writer_waker.wake();
+                        true
+                    } else {
+                        // the port does not exist
+                        false
+                    }
+                };
+                // This part is refactored out so that we don't hold the lock across await
+                if !port_exists {
                     send_rst.await;
                 }
             }
@@ -446,19 +462,31 @@ impl MultiplexorInner {
                 self.close_port(our_port, their_port, true).await;
             }
             StreamFlag::Fin => {
-                if let Some(MuxStreamSlot::Established(stream_data)) =
-                    self.streams.read().await.get(&our_port)
+                let sender = if let Some(MuxStreamSlot::Established(stream_data)) =
+                    self.streams.read().get(&our_port)
                 {
-                    // Make sure the user receives `EOF`.
-                    stream_data.sender.send(Bytes::new()).await.ok();
+                    Some(stream_data.sender.dupe())
+                } else {
+                    None
+                };
+                // Make sure the user receives `EOF`.
+                // This part is refactored out so that we don't hold the lock across await
+                if let Some(sender) = sender {
+                    sender.send(Bytes::new()).await.ok();
                 }
                 // And our end can still send
             }
             StreamFlag::Psh => {
-                if let Some(MuxStreamSlot::Established(stream_data)) =
-                    self.streams.read().await.get(&our_port)
+                let sender = if let Some(MuxStreamSlot::Established(stream_data)) =
+                    self.streams.read().get(&our_port)
                 {
-                    if stream_data.sender.send(data).await.is_ok() {
+                    Some(stream_data.sender.dupe())
+                } else {
+                    None
+                };
+                // This part is refactored out so that we don't hold the lock across await
+                if let Some(sender) = sender {
+                    if sender.send(data).await.is_ok() {
                         // The data is sent successfully
                         return Ok(());
                     }
@@ -494,30 +522,32 @@ impl MultiplexorInner {
         let can_write = Arc::new(AtomicBool::new(true));
         let psh_send_remaining = Arc::new(AtomicU64::new(peer_rwnd));
         let writer_waker = Arc::new(AtomicWaker::new());
-        // Save the TX end of the stream so we can write to it when subsequent frames arrive
-        let mut streams = self.streams.write().await;
-        let our_port = if our_port == 0 {
-            // Allocate a new port
-            let result = u16::next_available_key(&streams);
-            trace!("port {our_port} allocated");
-            result
-        } else {
-            // Check if the port is available
-            if streams.contains_key(&our_port) {
-                return Err(Error::InvalidSynPort(our_port));
-            }
-            our_port
-        };
-        streams.insert(
-            our_port,
-            MuxStreamSlot::Established(MuxStreamData {
-                sender: frame_tx,
-                can_write: can_write.dupe(),
-                psh_send_remaining: psh_send_remaining.dupe(),
-                writer_waker: writer_waker.dupe(),
-            }),
-        );
-        drop(streams);
+        // Scope the following block to reduce locked time
+        {
+            // Save the TX end of the stream so we can write to it when subsequent frames arrive
+            let mut streams = self.streams.write();
+            let our_port = if our_port == 0 {
+                // Allocate a new port
+                let result = u16::next_available_key(&streams);
+                trace!("port {our_port} allocated");
+                result
+            } else {
+                // Check if the port is available
+                if streams.contains_key(&our_port) {
+                    return Err(Error::InvalidSynPort(our_port));
+                }
+                our_port
+            };
+            streams.insert(
+                our_port,
+                MuxStreamSlot::Established(MuxStreamData {
+                    sender: frame_tx,
+                    can_write: can_write.dupe(),
+                    psh_send_remaining: psh_send_remaining.dupe(),
+                    writer_waker: writer_waker.dupe(),
+                }),
+            );
+        }
         let stream = MuxStream {
             frame_rx,
             our_port,
@@ -587,7 +617,7 @@ impl MultiplexorInner {
             rwnd_threshold: self.default_rwnd_threshold.min(peer_rwnd),
         };
         // Save the TX end of the stream so we can write to it when subsequent frames arrive
-        let mut streams = self.streams.write().await;
+        let mut streams = self.streams.write();
         assert_ne!(our_port, 0);
         let entry = streams.get_mut(&our_port).ok_or(Error::BogusSynAck)?;
         // Change the state of the port to `Established`
@@ -608,7 +638,7 @@ impl MultiplexorInner {
     #[inline]
     pub async fn close_port(&self, our_port: u16, their_port: u16, inhibit_rst: bool) {
         // Free the port for reuse
-        let removed = self.streams.write().await.remove(&our_port);
+        let removed = self.streams.write().remove(&our_port);
         if let Some(MuxStreamSlot::Established(stream_data)) = removed {
             // Make sure the user receives `EOF`.
             stream_data.sender.send(Bytes::new()).await.ok();
