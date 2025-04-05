@@ -10,6 +10,7 @@ use super::{Error, IntKey, Result, Role};
 use crate::timing::{OptionalDuration, OptionalInterval};
 use crate::ws::{Message, WebSocketStream};
 use bytes::{Buf, Bytes};
+use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{task::AtomicWaker, SinkExt, StreamExt};
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -120,75 +121,129 @@ impl MultiplexorInner {
     #[tracing::instrument(skip_all, level = "trace")]
     pub async fn task<S: WebSocketStream>(
         self,
-        mut ws: S,
+        ws: S,
         datagram_tx: mpsc::Sender<DatagramFrame>,
         con_recv_stream_tx: mpsc::Sender<MuxStream>,
         mut frame_rx: mpsc::UnboundedReceiver<Frame>,
         mut dropped_ports_rx: mpsc::UnboundedReceiver<(u16, u16)>,
     ) -> Result<()> {
-        let mut interval = OptionalInterval::from(self.keepalive_interval);
-        let mut should_drain_frame_rx = false;
-        // If we missed a tick, it is probably doing networking, so we don't need to
-        // make up for it.
-        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-        loop {
-            trace!("multiplexor task loop");
-            tokio::select! {
-                // Keepalive task
-                _ = interval.tick() => {
-                    trace!("sending ping");
-                    ws.send(Message::Ping(Bytes::new())).await?;
-                }
-                maybe_msg = ws.next() => {
-                    if self.process_ws_next(
-                        maybe_msg,
-                        &datagram_tx,
-                        &con_recv_stream_tx,
-                    ).await? {
-                        break;
-                    }
-                }
-                // Process frames from the frame receiver
-                maybe_frame = frame_rx.recv() => {
-                    // cannot happen because `Self` contains one sender unless
-                    // there is a bug in our code or `tokio` itself.
-                    let frame = maybe_frame.expect("frame receiver should not be closed (this is a bug)");
-                    // Buffer `Psh` frames, and flush everything else immediately
-                    trace!("sinking frame {frame:?}");
-                    match frame {
-                        Frame::Stream(ref sf) if sf.flag == StreamFlag::Psh => {
-                            ws.feed(Message::Binary(frame.try_into()?)).await
-                        }
-                        Frame::Flush => ws.flush().await,
-                        _ => ws.send(Message::Binary(frame.try_into()?)).await,
-                    }?;
-                }
-                req = dropped_ports_rx.recv() => {
-                    if let Some((our_port, their_port)) = req {
-                        if our_port != 0 {
-                            self.close_port(our_port, their_port, false).await;
-                            continue;
-                        }
-                        // else: `our_port` is `0`, which means the multiplexor itself is being dropped.
-                        debug!("mux dropped");
-                    }
-                    // else: only happens when the last sender (i.e. `dropped_ports_tx` in `MultiplexorInner`)
-                    // is dropped,
-                    // which can be combined with the case when the multiplexor itself is being dropped.
-                    // These are the only cases we should make some attempt to flush `frame_rx` before exiting.
-                    should_drain_frame_rx = true;
-                    break;
-                }
+        // Split the `WebSocket` stream into a `Sink` and `Stream` so we can process them concurrently
+        let (mut ws_sink, mut ws_stream) = ws.split();
+        let (e, should_drain_frame_rx) = tokio::select! {
+            r = self.process_dropped_ports_task(&mut dropped_ports_rx) => {
+                // If this returns, our end is dropped, but we should still try to flush everything we
+                // already have in the `frame_rx` before closing.
+                // we should make some attempt to flush `frame_rx` before exiting.
+                (r, true)
             }
-        }
+            r = self.process_ws_next(&mut ws_stream, &datagram_tx, &con_recv_stream_tx) => {
+                // In this case, peer already requested close, so we should not attempt to send any more frames.
+                (r, false)
+            }
+            r = self.process_frame_recv_task(&mut frame_rx, &mut ws_sink) => {
+                // This returns if we cannot sink or cannot receive from `frame_rx` anymore,
+                // in either case, it does not make sense to check `frame_rx`.
+                (r, false)
+            }
+        };
         self.wind_down(
             should_drain_frame_rx,
-            ws,
+            ws_sink
+                .reunite(ws_stream)
+                .expect("Failed to reunite sink and stream (this is a bug)"),
             datagram_tx,
             con_recv_stream_tx,
             frame_rx,
         )
-        .await
+        .await?;
+        e
+    }
+
+    /// Process dropped ports from the `dropped_ports_rx` channel.
+    /// Returns `Ok(())` when either [`MultiplexorInner`] or [`Multiplexor`] itself is dropped.
+    #[tracing::instrument(skip_all, level = "trace")]
+    pub async fn process_dropped_ports_task(
+        &self,
+        dropped_ports_rx: &mut mpsc::UnboundedReceiver<(u16, u16)>,
+    ) -> Result<()> {
+        while let Some((our_port, their_port)) = dropped_ports_rx.recv().await {
+            if our_port == 0 {
+                // `our_port` is `0`, which means the multiplexor itself is being dropped.
+                debug!("mux dropped");
+                break;
+            }
+            self.close_port(our_port, their_port, false).await;
+        }
+        // None: only happens when the last sender (i.e. `dropped_ports_tx` in `MultiplexorInner`)
+        // is dropped,
+        // which can be combined with the case when the multiplexor itself is being dropped.
+        Ok(())
+    }
+
+    /// Poll `frame_rx` and process the frame received and send keepalive pings as needed.
+    /// It never returns an `Ok(())`, and propagates errors from the `Sink` or `frame_rx` processing.
+    #[tracing::instrument(skip_all, level = "trace")]
+    async fn process_frame_recv_task<S: WebSocketStream>(
+        &self,
+        frame_rx: &mut mpsc::UnboundedReceiver<Frame>,
+        ws_sink: &mut SplitSink<S, Message>,
+    ) -> Result<()> {
+        let mut interval = OptionalInterval::from(self.keepalive_interval);
+        // If we missed a tick, it is probably doing networking, so we don't need to
+        // make up for it.
+        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    trace!("sending keepalive ping");
+                    ws_sink.send(Message::Ping(Bytes::new())).await?;
+                }
+                Some(frame) = frame_rx.recv() => {
+                    // Buffer `Psh` frames, and flush everything else immediately
+                    match frame {
+                        Frame::Stream(ref sf) if sf.flag == StreamFlag::Psh => {
+                            ws_sink.feed(Message::Binary(frame.try_into()?)).await
+                        }
+                        Frame::Flush => ws_sink.flush().await,
+                        _ => ws_sink.send(Message::Binary(frame.try_into()?)).await,
+                    }?;
+                }
+                else => {
+                    // Only happens when `frame_rx` is closed
+                    // cannot happen because `Self` contains one sender unless
+                    // there is a bug in our code or `tokio` itself.
+                    panic!("frame receiver should not be closed (this is a bug)");
+                }
+            }
+        }
+    }
+
+    /// Process the return value of `ws.next()`
+    /// Returns `Ok(())` when a `Close` message was received or the WebSocket was otherwise closed by the peer.
+    #[tracing::instrument(skip_all, level = "trace")]
+    async fn process_ws_next<S: WebSocketStream>(
+        &self,
+        ws_stream: &mut SplitStream<S>,
+        datagram_tx: &mpsc::Sender<DatagramFrame>,
+        con_recv_stream_tx: &mpsc::Sender<MuxStream>,
+    ) -> Result<()> {
+        loop {
+            match ws_stream.next().await {
+                Some(Ok(msg)) => {
+                    trace!("received message length = {}", msg.len());
+                    self.process_message(msg, datagram_tx, con_recv_stream_tx)
+                        .await?;
+                }
+                Some(Err(e)) => {
+                    error!("Failed to receive message from WebSocket: {e}");
+                    break Err(Error::WebSocket(e));
+                }
+                None => {
+                    debug!("WebSocket closed by peer");
+                    break Ok(());
+                }
+            }
+        }
     }
 
     /// Wind down the multiplexor task.
@@ -236,7 +291,7 @@ impl MultiplexorInner {
         }
         // This will flush the remaining frames already queued for sending as well
         ws.close().await.ok();
-        // The above line only closes the `Sink``. Before we terminate connections,
+        // The above line only closes the `Sink`. Before we terminate connections,
         // we dispatch the remaining frames in the `Source` to our streams.
         while let Some(Ok(msg)) = ws.next().await {
             debug!(
@@ -266,33 +321,9 @@ impl MultiplexorInner {
         }
         Ok(())
     }
+}
 
-    /// Process the return value of `ws.next()`
-    /// Returns `Ok(true)` if a `Close` message was received or the WebSocket was otherwise closed by the peer.
-    #[tracing::instrument(skip_all, level = "trace")]
-    pub async fn process_ws_next(
-        &self,
-        maybe_msg: Option<std::result::Result<Message, crate::ws::Error>>,
-        datagram_tx: &mpsc::Sender<DatagramFrame>,
-        con_recv_stream_tx: &mpsc::Sender<MuxStream>,
-    ) -> Result<bool> {
-        match maybe_msg {
-            Some(Ok(msg)) => {
-                trace!("received message length = {}", msg.len());
-                self.process_message(msg, datagram_tx, con_recv_stream_tx)
-                    .await
-            }
-            Some(Err(e)) => {
-                error!("Failed to receive message from WebSocket: {e}");
-                Err(Error::WebSocket(e))
-            }
-            None => {
-                debug!("WebSocket closed by peer");
-                Ok(true)
-            }
-        }
-    }
-
+impl MultiplexorInner {
     /// Process an incoming message
     /// Returns `Ok(true)` if a `Close` message was received.
     #[tracing::instrument(skip_all, level = "debug")]
@@ -330,8 +361,8 @@ impl MultiplexorInner {
                             .await?;
                     }
                     Frame::Flush => {
-                        // Normal code should never leak a `Flush` frame
-                        panic!("received `Flush` frame in the multiplexor task (this is a bug)");
+                        // Normal code should never leak an internal frame
+                        panic!("received internal frame type {frame:?} in the multiplexor task (this is a bug)");
                     }
                 }
                 Ok(false)
@@ -635,7 +666,7 @@ impl MultiplexorInner {
     /// and remove it from the map.
     #[tracing::instrument(skip_all, level = "debug")]
     #[inline]
-    pub async fn close_port(&self, our_port: u16, their_port: u16, inhibit_rst: bool) {
+    async fn close_port(&self, our_port: u16, their_port: u16, inhibit_rst: bool) {
         // Free the port for reuse
         let removed = self.streams.write().remove(&our_port);
         if let Some(MuxStreamSlot::Established(stream_data)) = removed {
