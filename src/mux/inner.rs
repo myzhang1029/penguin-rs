@@ -10,12 +10,16 @@ use super::{Error, IntKey, Result, Role};
 use crate::timing::{OptionalDuration, OptionalInterval};
 use crate::ws::{Message, WebSocketStream};
 use bytes::{Buf, Bytes};
+use futures_util::future::poll_fn;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{task::AtomicWaker, SinkExt, StreamExt};
 use parking_lot::RwLock;
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::task::Poll;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::MissedTickBehavior;
@@ -129,22 +133,29 @@ impl MultiplexorInner {
     ) -> Result<()> {
         // Split the `WebSocket` stream into a `Sink` and `Stream` so we can process them concurrently
         let (mut ws_sink, mut ws_stream) = ws.split();
-        let (e, should_drain_frame_rx) = tokio::select! {
-            r = self.process_dropped_ports_task(&mut dropped_ports_rx) => {
-                // If this returns, our end is dropped, but we should still try to flush everything we
-                // already have in the `frame_rx` before closing.
-                // we should make some attempt to flush `frame_rx` before exiting.
-                (r, true)
-            }
-            r = self.process_ws_next(&mut ws_stream, &datagram_tx, &con_recv_stream_tx) => {
-                // In this case, peer already requested close, so we should not attempt to send any more frames.
-                (r, false)
-            }
-            r = self.process_frame_recv_task(&mut frame_rx, &mut ws_sink) => {
-                // This returns if we cannot sink or cannot receive from `frame_rx` anymore,
-                // in either case, it does not make sense to check `frame_rx`.
-                (r, false)
-            }
+        // This is modified from an unrolled version of `tokio::try_join!` with our custom cancellation
+        // logic and to make sure that tasks are not cancelled at random points.
+        let (e, should_drain_frame_rx) = {
+            let mut process_dropped_ports_task_fut =
+                pin!(self.process_dropped_ports_task(&mut dropped_ports_rx));
+            let mut process_frame_recv_task_fut =
+                pin!(self.process_frame_recv_task(&mut frame_rx, &mut ws_sink));
+            let mut process_ws_next_fut =
+                pin!(self.process_ws_next(&mut ws_stream, &datagram_tx, &con_recv_stream_tx));
+            poll_fn(|cx| {
+                if let Poll::Ready(r) = process_dropped_ports_task_fut.as_mut().poll(cx) {
+                    let should_drain_frame_rx = r.is_ok();
+                    return Poll::Ready((r, should_drain_frame_rx));
+                }
+                if let Poll::Ready(r) = process_ws_next_fut.as_mut().poll(cx) {
+                    return Poll::Ready((r, false));
+                }
+                if let Poll::Ready(r) = process_frame_recv_task_fut.as_mut().poll(cx) {
+                    return Poll::Ready((r, false));
+                }
+                Poll::Pending
+            })
+            .await
         };
         self.wind_down(
             should_drain_frame_rx,
@@ -160,8 +171,9 @@ impl MultiplexorInner {
     }
 
     /// Process dropped ports from the `dropped_ports_rx` channel.
-    /// Returns `Ok(())` when either [`MultiplexorInner`] or [`Multiplexor`] itself is dropped.
+    /// Returns when either [`MultiplexorInner`] or [`Multiplexor`] itself is dropped.
     #[tracing::instrument(skip_all, level = "trace")]
+    #[inline]
     pub async fn process_dropped_ports_task(
         &self,
         dropped_ports_rx: &mut mpsc::UnboundedReceiver<(u16, u16)>,
@@ -177,12 +189,16 @@ impl MultiplexorInner {
         // None: only happens when the last sender (i.e. `dropped_ports_tx` in `MultiplexorInner`)
         // is dropped,
         // which can be combined with the case when the multiplexor itself is being dropped.
+        // If this returns, our end is dropped, but we should still try to flush everything we
+        // already have in the `frame_rx` before closing.
+        // we should make some attempt to flush `frame_rx` before exiting.
         Ok(())
     }
 
     /// Poll `frame_rx` and process the frame received and send keepalive pings as needed.
-    /// It never returns an `Ok(())`, and propagates errors from the `Sink` or `frame_rx` processing.
+    /// It never returns an `Ok(())`, and propagates errors from the `Sink` processing.
     #[tracing::instrument(skip_all, level = "trace")]
+    #[inline]
     async fn process_frame_recv_task<S: WebSocketStream>(
         &self,
         frame_rx: &mut mpsc::UnboundedReceiver<Frame>,
@@ -216,6 +232,8 @@ impl MultiplexorInner {
                 }
             }
         }
+        // This returns if we cannot sink or cannot receive from `frame_rx` anymore,
+        // in either case, it does not make sense to check `frame_rx`.
     }
 
     /// Process the return value of `ws.next()`
@@ -231,8 +249,13 @@ impl MultiplexorInner {
             match ws_stream.next().await {
                 Some(Ok(msg)) => {
                     trace!("received message length = {}", msg.len());
-                    self.process_message(msg, datagram_tx, con_recv_stream_tx)
-                        .await?;
+                    if self
+                        .process_message(msg, datagram_tx, con_recv_stream_tx)
+                        .await?
+                    {
+                        // Received a `Close` message
+                        break Ok(());
+                    }
                 }
                 Some(Err(e)) => {
                     error!("Failed to receive message from WebSocket: {e}");
@@ -244,6 +267,7 @@ impl MultiplexorInner {
                 }
             }
         }
+        // In this case, peer already requested close, so we should not attempt to send any more frames.
     }
 
     /// Wind down the multiplexor task.
@@ -518,21 +542,26 @@ impl MultiplexorInner {
                 };
                 // This part is refactored out so that we don't hold the lock across await
                 if let Some(sender) = sender {
-                    if sender.send(data).await.is_ok() {
-                        // The data is sent successfully
-                        return Ok(());
+                    match sender.try_send(data) {
+                        Err(TrySendError::Full(_)) => {
+                            // Peer does not respect the `rwnd` limit, this should not happen in normal circumstances.
+                            // let it fall through to send `Rst`.
+                            warn!("Peer does not respect `rwnd` limit, dropping stream {our_port} -> {their_port}");
+                            send_rst.await;
+                        }
+                        Err(TrySendError::Closed(_)) => {
+                            // Else, the corresponding `MuxStream` is dropped
+                            // The job to remove the port from the map is done by `close_port_task`,
+                            // so not being able to send is the same as not finding the port;
+                            // just timing is different.
+                            trace!("dropped `MuxStream` not yet removed from the map");
+                        }
+                        Ok(()) => (),
                     }
-                    // Else, the corresponding `MuxStream` is dropped
-                    // let it fall through to send `Rst`.
-                    // The job to remove the port from the map is done by `close_port_task`,
-                    // so not being able to send is the same as not finding the port;
-                    // just timing is different.
-                    trace!("dropped `MuxStream` not yet removed from the map");
                 } else {
                     warn!("Bogus `Psh` frame {their_port} -> {our_port}");
+                    send_rst.await;
                 }
-                // The port does not exist
-                send_rst.await;
             }
         }
         Ok(())
@@ -552,7 +581,7 @@ impl MultiplexorInner {
     ) -> Result<()> {
         assert_eq!(self.role, Role::Server);
         // `tx` is our end, `rx` is the user's end
-        let (frame_tx, frame_rx) = mpsc::channel(config::STREAM_FRAME_BUFFER_SIZE);
+        let (frame_tx, frame_rx) = mpsc::channel(config::RWND_USIZE);
         let can_write = Arc::new(AtomicBool::new(true));
         let psh_send_remaining = Arc::new(AtomicU64::new(peer_rwnd));
         let writer_waker = Arc::new(AtomicWaker::new());
@@ -621,7 +650,7 @@ impl MultiplexorInner {
     fn client_new_stream(&self, our_port: u16, their_port: u16, peer_rwnd: u64) -> Result<()> {
         assert_eq!(self.role, Role::Client);
         // `tx` is our end, `rx` is the user's end
-        let (frame_tx, frame_rx) = mpsc::channel(config::STREAM_FRAME_BUFFER_SIZE);
+        let (frame_tx, frame_rx) = mpsc::channel(config::RWND_USIZE);
         let can_write = Arc::new(AtomicBool::new(true));
         let psh_send_remaining = Arc::new(AtomicU64::new(peer_rwnd));
         let writer_waker = Arc::new(AtomicWaker::new());
