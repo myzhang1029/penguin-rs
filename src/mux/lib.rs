@@ -21,6 +21,8 @@ pub mod ws;
 use crate::inner::MultiplexorInner;
 use crate::timing::OptionalDuration;
 use crate::ws::WebSocketStream;
+use futures_util::future::poll_fn;
+use parking_lot::Mutex;
 use rand::distr::uniform::SampleUniform;
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -28,7 +30,7 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::oneshot;
 use tokio::{
-    sync::{mpsc, Mutex, RwLock},
+    sync::{mpsc, RwLock},
     task::JoinSet,
 };
 use tracing::{error, trace, warn};
@@ -246,10 +248,7 @@ impl Multiplexor {
     #[tracing::instrument(skip(self), level = "debug")]
     pub async fn server_new_stream_channel(&self) -> Result<MuxStream> {
         assert_eq!(self.inner.role, Role::Server);
-        self.server_stream_rx
-            .lock()
-            .await
-            .recv()
+        poll_fn(|cx| self.server_stream_rx.lock().poll_recv(cx))
             .await
             .ok_or(Error::Closed)
     }
@@ -265,10 +264,7 @@ impl Multiplexor {
     #[tracing::instrument(skip(self), level = "debug")]
     #[inline]
     pub async fn get_datagram(&self) -> Result<DatagramFrame> {
-        self.datagram_rx
-            .lock()
-            .await
-            .recv()
+        poll_fn(|cx| self.datagram_rx.lock().poll_recv(cx))
             .await
             .ok_or(Error::Closed)
     }
