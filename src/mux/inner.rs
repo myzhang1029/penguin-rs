@@ -118,7 +118,7 @@ impl MultiplexorInner {
     // It doesn't make sense to return a `Result` here because we can't propagate
     // the error to the user from a spawned task.
     // Instead, the user will notice when `rx` channels return `None`.
-    #[tracing::instrument(skip_all, level = "trace")]
+    #[tracing::instrument(name = "task", skip_all, fields(role = format!("{:?}", self.role)), level = "debug")]
     pub async fn task<S: WebSocketStream>(
         self,
         ws: S,
@@ -199,6 +199,7 @@ impl MultiplexorInner {
                     ws_sink.send(Message::Ping(Bytes::new())).await?;
                 }
                 Some(frame) = frame_rx.recv() => {
+                    debug!("tx processing frame {frame:?}");
                     // Buffer `Psh` frames, and flush everything else immediately
                     match frame {
                         Frame::Stream(ref sf) if sf.flag == StreamFlag::Psh => {
@@ -231,8 +232,13 @@ impl MultiplexorInner {
             match ws_stream.next().await {
                 Some(Ok(msg)) => {
                     trace!("received message length = {}", msg.len());
-                    self.process_message(msg, datagram_tx, con_recv_stream_tx)
-                        .await?;
+                    if self
+                        .process_message(msg, datagram_tx, con_recv_stream_tx)
+                        .await?
+                    {
+                        // Received a `Close` message
+                        return Ok(());
+                    }
                 }
                 Some(Err(e)) => {
                     error!("Failed to receive message from WebSocket: {e}");
@@ -279,7 +285,7 @@ impl MultiplexorInner {
                 if matches!(frame, Frame::Flush) {
                     continue;
                 }
-                debug!("sending remaining frame after mux drop");
+                debug!("sending remaining frame {frame:?} after mux drop");
                 if let Err(e) = ws.feed(Message::Binary(frame.try_into()?)).await {
                     warn!("Failed to send remaining frame after mux drop: {e}");
                     // Don't keep trying to send frames after an error
@@ -337,6 +343,7 @@ impl MultiplexorInner {
         match msg {
             Message::Binary(data) => {
                 let frame = data.try_into()?;
+                debug!("rx processing frame: {frame:?}");
                 match frame {
                     Frame::Datagram(datagram_frame) => {
                         trace!("received datagram frame: {datagram_frame:?}");

@@ -141,7 +141,9 @@ async fn connected_stream_passes_data_tiny_mtu_rwndminusone() {
         let mut conn = server_mux.server_new_stream_channel().await.unwrap();
         let mut i = 0;
         while i < input_bytes_clone.len() {
-            conn.write_all(&input_bytes_clone[i..i + 1024]).await.unwrap();
+            conn.write_all(&input_bytes_clone[i..i + 1024])
+                .await
+                .unwrap();
             i += 1024;
         }
         info!("Done send");
