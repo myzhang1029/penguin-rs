@@ -345,8 +345,7 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
                 let peer_rwnd = data.get_u64();
                 // "we" is `role == Client`
                 // "they" is `role == Server`
-                self.client_new_stream(our_port, their_port, peer_rwnd)
-                    .await?;
+                self.client_new_stream(our_port, their_port, peer_rwnd)?;
             }
             StreamFlag::Ack => {
                 trace!("received `Ack` for {our_port}");
@@ -504,7 +503,7 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
 
     /// Create a new `MuxStream` and change the state of the port to `Established`.
     #[inline]
-    async fn client_new_stream(
+    fn client_new_stream(
         &self,
         our_port: u16,
         their_port: u16,
