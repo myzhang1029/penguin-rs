@@ -348,7 +348,6 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
                 self.client_new_stream(our_port, their_port, peer_rwnd)?;
             }
             StreamFlag::Ack => {
-                trace!("received `Ack` for {our_port}");
                 if data.remaining() < 8 {
                     return Err(super::frame::Error::FrameTooShort.into());
                 }
@@ -377,6 +376,7 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
                 }
             }
             StreamFlag::Rst => {
+                debug!("`Rst` for {our_port}");
                 // `true` because we don't want to reply `Rst` with `Rst`.
                 self.close_port(our_port, their_port, true).await;
             }
@@ -392,6 +392,8 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
                 // This part is refactored out so that we don't hold the lock across await
                 if let Some(sender) = sender {
                     sender.send(Bytes::new()).await.ok();
+                } else {
+                    warn!("Bogus `Fin` frame {their_port} -> {our_port}");
                 }
                 // And our end can still send
             }
@@ -415,6 +417,8 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
                     // so not being able to send is the same as not finding the port;
                     // just timing is different.
                     trace!("dropped `MuxStream` not yet removed from the map");
+                } else {
+                    warn!("Bogus `Psh` frame {their_port} -> {our_port}");
                 }
                 // The port does not exist
                 send_rst().await?;
