@@ -442,7 +442,7 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
         let psh_send_remaining = Arc::new(AtomicU64::new(peer_rwnd));
         let writer_waker = Arc::new(AtomicWaker::new());
         // Scope the following block to reduce locked time
-        {
+        let our_port = {
             // Save the TX end of the stream so we can write to it when subsequent frames arrive
             let mut streams = self.streams.write();
             let our_port = if our_port == 0 {
@@ -466,7 +466,8 @@ impl<S: WebSocketStream> MultiplexorInner<S> {
                     writer_waker: writer_waker.dupe(),
                 }),
             );
-        }
+            our_port
+        };
         let stream = MuxStream {
             frame_rx,
             our_port,
