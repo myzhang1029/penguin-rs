@@ -325,7 +325,7 @@ impl TryFrom<Frame> for Vec<u8> {
             Frame::Datagram(frame) => frame.try_into(),
             // This variant should not be serialized by conforming code
             Frame::Flush => {
-                panic!("`Flush` frame should not be serialized to bytes (this is a bug)")
+                panic!("Internal frame type {frame:?} should not be serialized to bytes (this is a bug)")
             }
         }
     }
