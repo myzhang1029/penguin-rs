@@ -2,11 +2,11 @@ mod challenge_helper;
 
 use crate::{
     arg::ServerArgs,
-    tls::{make_tls_identity_from_rcgen_pem, reload_tls_identity_from_rcgen_pem, TlsIdentity},
+    tls::{TlsIdentity, make_tls_identity_from_rcgen_pem, reload_tls_identity_from_rcgen_pem},
 };
 use challenge_helper::Action;
 use instant_acme::{Account, AuthorizationStatus, Identifier, NewAccount, NewOrder, OrderStatus};
-use penguin_mux::{timing::Backoff, Dupe};
+use penguin_mux::{Dupe, timing::Backoff};
 use rcgen::{CertificateParams, DistinguishedName, KeyPair};
 use std::sync::OnceLock;
 use tracing::{debug, error, info};

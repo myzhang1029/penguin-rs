@@ -4,11 +4,11 @@
 
 use super::Error;
 use rustls::{
+    ClientConfig, RootCertStore, ServerConfig,
     client::danger::{ServerCertVerified, ServerCertVerifier},
     crypto::CryptoProvider,
     pki_types::{CertificateDer, PrivateKeyDer, ServerName},
     server::WebPkiClientVerifier,
-    ClientConfig, RootCertStore, ServerConfig,
 };
 use std::sync::Arc;
 
@@ -215,8 +215,8 @@ impl ServerCertVerifier for EmptyVerifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rcgen::generate_simple_self_signed;
     use rcgen::CertificateParams;
+    use rcgen::generate_simple_self_signed;
     use tempfile::tempdir;
 
     #[tokio::test]

@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
+use super::WebSocket;
 use super::forwarder::tcp_forwarder_on_channel;
 use super::forwarder::udp_forward_to;
-use super::WebSocket;
 use crate::config;
-use penguin_mux::{timing::OptionalDuration, DatagramFrame, Dupe, Multiplexor, Role};
+use penguin_mux::{DatagramFrame, Dupe, Multiplexor, Role, timing::OptionalDuration};
 use tokio::{sync::mpsc, task::JoinSet};
 use tracing::{debug, error, trace, warn};
 

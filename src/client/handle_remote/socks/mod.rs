@@ -5,8 +5,8 @@
 mod v4;
 mod v5;
 
-use super::tcp::{open_tcp_listener, request_tcp_channel};
 use super::HandlerResources;
+use super::tcp::{open_tcp_listener, request_tcp_channel};
 use crate::client::StreamCommand;
 use crate::config;
 use bytes::{Buf, Bytes};

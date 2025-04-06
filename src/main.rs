@@ -53,19 +53,21 @@ fn spawn_deadlock_detection() {
     use std::thread;
 
     // Create a background thread which checks for deadlocks every 10s
-    thread::spawn(move || loop {
-        thread::sleep(std::time::Duration::from_secs(10));
-        let deadlocks = parking_lot::deadlock::check_deadlock();
-        if deadlocks.is_empty() {
-            continue;
-        }
+    thread::spawn(move || {
+        loop {
+            thread::sleep(std::time::Duration::from_secs(10));
+            let deadlocks = parking_lot::deadlock::check_deadlock();
+            if deadlocks.is_empty() {
+                continue;
+            }
 
-        error!("{} deadlocks detected", deadlocks.len());
-        for (i, threads) in deadlocks.iter().enumerate() {
-            error!("Deadlock #{}", i);
-            for t in threads {
-                error!("Thread Id {:#?}", t.thread_id());
-                error!("{:#?}", t.backtrace());
+            error!("{} deadlocks detected", deadlocks.len());
+            for (i, threads) in deadlocks.iter().enumerate() {
+                error!("Deadlock #{}", i);
+                for t in threads {
+                    error!("Thread Id {:#?}", t.thread_id());
+                    error!("{:#?}", t.backtrace());
+                }
             }
         }
     });

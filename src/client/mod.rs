@@ -21,7 +21,7 @@ use std::time::Duration;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpStream, UdpSocket};
-use tokio::sync::{mpsc, oneshot, RwLock};
+use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio::task::JoinSet;
 use tokio::time;
 use tokio_tungstenite::MaybeTlsStream;
@@ -512,11 +512,13 @@ mod tests {
             .await;
         tokio::time::sleep(config::UDP_PRUNE_TIMEOUT).await;
         handler_resources.prune_udp_clients().await;
-        assert!(handler_resources
-            .udp_client_map
-            .read()
-            .await
-            .client_id_map
-            .is_empty());
+        assert!(
+            handler_resources
+                .udp_client_map
+                .read()
+                .await
+                .client_id_map
+                .is_empty()
+        );
     }
 }
