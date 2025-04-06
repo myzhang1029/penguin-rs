@@ -475,12 +475,10 @@ impl MultiplexorInner {
                 // Two cases:
                 // 1. Peer acknowledged `Con`
                 // 2. Peer acknowledged some `Psh` frames
-                let should_send_rst = {
-                    let streams = self.streams.read();
-                    match streams.get(&our_port) {
-                        Some(MuxStreamSlot::Established(stream_data)) => {
+                let action = self.streams.read().get(&our_port).map(|slot| {
+                    match slot {
+                        MuxStreamSlot::Established(stream_data) => {
                             // We have an established stream, so process the `Ack`
-                            debug!("peer processed {payload} frames");
                             // Atomic ordering: as long as the value is incremented atomically,
                             // whether a writer sees the new value or the old value is not
                             // important. If it sees the old value and decides to return
@@ -489,24 +487,21 @@ impl MultiplexorInner {
                                 .psh_send_remaining
                                 .fetch_add(payload, Ordering::Relaxed);
                             stream_data.writer_waker.wake();
-                            false
-                        }
-                        Some(MuxStreamSlot::Requested(_)) => {
-                            debug!(
-                                "new stream {our_port} -> {their_port} with peer rwnd {payload}"
-                            );
-                            self.ack_recv_new_stream(our_port, their_port, payload)?;
-                            false
-                        }
-                        None => {
-                            // The port does not exist, send `Rst`
-                            trace!("port {our_port} does not exist, sending `Rst`");
                             true
                         }
+                        MuxStreamSlot::Requested(_) => false,
                     }
-                };
-                if should_send_rst {
-                    send_rst.await;
+                });
+                match action {
+                    Some(true) => debug!("peer processed {payload} frames"),
+                    Some(false) => {
+                        debug!("new stream {our_port} -> {their_port} with peer rwnd {payload}");
+                        self.ack_recv_new_stream(our_port, their_port, payload)?;
+                    }
+                    None => {
+                        trace!("port {our_port} does not exist, sending `Rst`");
+                        send_rst.await;
+                    }
                 }
             }
             StreamOpCode::Fin => {
