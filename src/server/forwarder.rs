@@ -104,7 +104,7 @@ pub(super) async fn udp_forward_to(
                 trace!("UDP prune timeout");
                 break;
             }
-        };
+        }
     }
     debug!("UDP forwarding finished");
     Ok(())
