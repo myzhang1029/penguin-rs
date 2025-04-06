@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 use thiserror::Error;
 use tokio::net::TcpStream;
 use tokio::{
-    net::{lookup_host, UdpSocket},
+    net::{UdpSocket, lookup_host},
     sync::mpsc::Sender,
 };
 use tracing::{debug, trace};

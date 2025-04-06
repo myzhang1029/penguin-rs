@@ -5,11 +5,11 @@
 use crate::parse_remote::Remote;
 #[cfg(feature = "acme")]
 use crate::server::acme::ChallengeHelper;
-use clap::{arg, command, ArgAction, Args, Parser, Subcommand};
+use clap::{ArgAction, Args, Parser, Subcommand, arg, command};
 use http::{
+    HeaderValue, Uri,
     header::HeaderName,
     uri::{Authority, PathAndQuery, Scheme},
-    HeaderValue, Uri,
 };
 #[cfg(feature = "acme")]
 use instant_acme::LetsEncrypt;

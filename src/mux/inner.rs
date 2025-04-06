@@ -12,13 +12,13 @@ use crate::ws::{Message, WebSocketStream};
 use bytes::{Buf, Bytes};
 use futures_util::future::poll_fn;
 use futures_util::stream::{SplitSink, SplitStream};
-use futures_util::{task::AtomicWaker, SinkExt, StreamExt};
+use futures_util::{SinkExt, StreamExt, task::AtomicWaker};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::pin;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::task::Poll;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot};
@@ -386,7 +386,9 @@ impl MultiplexorInner {
                     }
                     Frame::Flush => {
                         // Normal code should never leak an internal frame
-                        panic!("received internal frame type {frame:?} in the multiplexor task (this is a bug)");
+                        panic!(
+                            "received internal frame type {frame:?} in the multiplexor task (this is a bug)"
+                        );
                     }
                 }
                 Ok(false)
@@ -546,7 +548,9 @@ impl MultiplexorInner {
                         Err(TrySendError::Full(_)) => {
                             // Peer does not respect the `rwnd` limit, this should not happen in normal circumstances.
                             // let it fall through to send `Rst`.
-                            warn!("Peer does not respect `rwnd` limit, dropping stream {our_port} -> {their_port}");
+                            warn!(
+                                "Peer does not respect `rwnd` limit, dropping stream {our_port} -> {their_port}"
+                            );
                             send_rst.await;
                         }
                         Err(TrySendError::Closed(_)) => {

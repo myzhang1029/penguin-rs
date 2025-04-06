@@ -5,21 +5,21 @@
 use super::websocket::handle_websocket;
 use crate::arg::BackendUrl;
 use crate::proto_version::PROTOCOL_VERSION;
-use base64::engine::general_purpose::STANDARD as B64_STANDARD_ENGINE;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as B64_STANDARD_ENGINE;
 use bytes::Bytes;
-use http::{header, HeaderValue, Method, Request, Response, StatusCode, Uri};
+use http::{HeaderValue, Method, Request, Response, StatusCode, Uri, header};
 use http_body_util::{BodyExt, Full as FullBody};
 use hyper::service::Service;
 use hyper::upgrade::OnUpgrade;
 use hyper_util::rt::TokioIo;
-use penguin_mux::{timing::OptionalDuration, Dupe};
+use penguin_mux::{Dupe, timing::OptionalDuration};
 use sha1::{Digest, Sha1};
 use std::future::Future;
 use std::pin::Pin;
 use thiserror::Error;
-use tokio_tungstenite::tungstenite::protocol::Role;
 use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::tungstenite::protocol::Role;
 use tracing::{debug, error, warn};
 
 static UPGRADE: HeaderValue = HeaderValue::from_static("upgrade");

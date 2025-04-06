@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use futures_util::{Sink, Stream};
-pub use tokio_tungstenite::tungstenite::{protocol::Role, Error, Message, Result};
+pub use tokio_tungstenite::tungstenite::{Error, Message, Result, protocol::Role};
 
 /// A generic WebSocket stream
 pub trait WebSocketStream:

@@ -6,7 +6,7 @@ use super::*;
 use bytes::Bytes;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, info};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 pub fn setup_logging() {
     tracing_subscriber::registry()
@@ -141,7 +141,9 @@ async fn connected_stream_passes_data_tiny_mtu_rwndminusone() {
         let mut conn = server_mux.server_new_stream_channel().await.unwrap();
         let mut i = 0;
         while i < input_bytes_clone.len() {
-            conn.write_all(&input_bytes_clone[i..i + 1024]).await.unwrap();
+            conn.write_all(&input_bytes_clone[i..i + 1024])
+                .await
+                .unwrap();
             i += 1024;
         }
         info!("Done send");
