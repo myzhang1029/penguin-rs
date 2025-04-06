@@ -54,7 +54,7 @@ impl Backoff {
     }
 
     /// Reset the backoff generator.
-    pub fn reset(&mut self) {
+    pub const fn reset(&mut self) {
         self.current = self.initial;
         self.count = 0;
     }
