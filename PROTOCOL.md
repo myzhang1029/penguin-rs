@@ -128,12 +128,11 @@ UDP datagrams.
   zero (0).
 
   The data of the frame MUST be a 32-bit unsigned integer in network byte order
-  (`rwnd`), a 16-bit unsigned integer in network byte order (`targer_port`),
-  and a variable-length UTF-8 string (`targer_host`).
+  (`rwnd`), a 16-bit unsigned integer in network byte order (`target_port`),
+  and a variable-length UTF-8 string (`target_host`).
 
-  `rwnd` is the maximum number of frames the client can buffer. `targer_port`
-  and `targer_host` are the target port and host of the TCP stream.
-
+  `rwnd` is the maximum number of frames the client can buffer. `target_port`
+  and `target_host` are the target port and host of the TCP stream.
   Upon receiving the `Con` frame, the server MUST send a stream frame with the
   `Ack` operation code, the destination port set to the source port of the
   `Con` frame, and the source port set to a unique 16-bit unsigned integer.
