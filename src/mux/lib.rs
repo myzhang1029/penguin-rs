@@ -52,7 +52,7 @@ pub enum Error {
 
     /// WebSocket errors
     #[error("WebSocket Error: {0}")]
-    WebSocket(#[from] crate::ws::Error),
+    WebSocket(#[from] Box<crate::ws::Error>),
 
     // These are the ones that shouldn't normally happen
     /// Datagram target host longer than 255 octets.

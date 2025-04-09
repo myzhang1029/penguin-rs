@@ -209,7 +209,7 @@ impl MultiplexorInner {
             tokio::select! {
                 _ = interval.tick() => {
                     trace!("sending keepalive ping");
-                    ws_sink.send(Message::Ping(Bytes::new())).await?;
+                    ws_sink.send(Message::Ping(Bytes::new())).await.map_err(Box::new)?;
                 }
                 Some(frame) = frame_rx.recv() => {
                     // Buffer `Psh` frames, and flush everything else immediately
@@ -220,7 +220,8 @@ impl MultiplexorInner {
                         ws_sink.flush().await
                     } else {
                         ws_sink.send(Message::Binary(frame.into())).await
-                    }?;
+                    }
+                    .map_err(Box::new)?;
                 }
                 else => {
                     // Only happens when `frame_rx` is closed
@@ -257,7 +258,7 @@ impl MultiplexorInner {
                 }
                 Some(Err(e)) => {
                     error!("Failed to receive message from WebSocket: {e}");
-                    break Err(Error::WebSocket(e));
+                    break Err(Error::WebSocket(Box::new(e)));
                 }
                 None => {
                     debug!("WebSocket closed by peer");

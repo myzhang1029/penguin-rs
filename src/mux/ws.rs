@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use futures_util::{Sink, Stream};
-pub use tokio_tungstenite::tungstenite::{Error, Message, Result, protocol::Role};
+pub use tokio_tungstenite::tungstenite::{Error, Message};
 
 /// A generic WebSocket stream
 pub trait WebSocketStream:
@@ -55,8 +55,8 @@ impl WebSocketError for Error {
 
 #[cfg(test)]
 pub(crate) mod mock {
-    use super::*;
     use tokio::io::DuplexStream;
+    use tokio_tungstenite::tungstenite::protocol::Role;
 
     pub async fn get_pair(
         link_mss: Option<usize>,
