@@ -4,8 +4,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use crate::config;
-use bytes::Bytes;
-use penguin_mux::{DatagramFrame, Dupe};
+use penguin_mux::DatagramFrame;
 use std::net::SocketAddr;
 use thiserror::Error;
 use tokio::net::TcpStream;
@@ -69,8 +68,8 @@ async fn bind_and_send(target: (&str, u16), data: &[u8]) -> Result<(UdpSocket, S
 /// in the following `UDP_PRUNE_TIMEOUT` seconds.
 #[tracing::instrument(skip(datagram_tx), level = "debug")]
 pub(super) async fn udp_forward_to(
-    datagram_frame: DatagramFrame,
-    datagram_tx: Sender<DatagramFrame>,
+    datagram_frame: DatagramFrame<'static>,
+    datagram_tx: Sender<DatagramFrame<'static>>,
 ) -> Result<(), Error> {
     trace!("got datagram frame: {datagram_frame:?}");
     let rhost = datagram_frame.target_host;
@@ -78,7 +77,7 @@ pub(super) async fn udp_forward_to(
     let rport = datagram_frame.target_port;
     let data = datagram_frame.data;
     let client_id = datagram_frame.sport;
-    let (socket, target) = bind_and_send((rhost_str, rport), &data).await?;
+    let (socket, target) = bind_and_send((rhost_str, rport), data.as_ref()).await?;
     trace!("sent UDP packet to {target}");
     loop {
         let mut buf = vec![0; config::MAX_UDP_PACKET_SIZE];
@@ -87,11 +86,11 @@ pub(super) async fn udp_forward_to(
                 trace!("got UDP response from {target}");
                 buf.truncate(len);
                 let datagram_frame = DatagramFrame {
-                    dport: client_id,
                     sport: 0,
-                    target_host: rhost.dupe(),
+                    dport: client_id,
+                    target_host: std::borrow::Cow::Owned(rhost.to_vec()),
                     target_port: rport,
-                    data: Bytes::from(buf),
+                    data: std::borrow::Cow::Owned(buf),
                 };
                 if datagram_tx.send(datagram_frame).await.is_err() {
                     // The main loop has exited, so we should exit too.
@@ -181,13 +180,7 @@ mod tests {
         let target_sock = UdpSocket::bind(("127.0.0.1", 0)).await.unwrap();
         let target_addr = target_sock.local_addr().unwrap();
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
-        let datagram_frame = DatagramFrame {
-            sport: 0,
-            dport: 0,
-            target_host: Bytes::from_static(b"127.0.0.1"),
-            target_port: target_addr.port(),
-            data: Bytes::from_static(b"hello"),
-        };
+        let datagram_frame = DatagramFrame::new(0, 0, b"127.0.0.1", target_addr.port(), b"hello");
         let forwarder = tokio::spawn(udp_forward_to(datagram_frame, tx));
         let mut buf = vec![0; 5];
         let (len, addr) = target_sock.recv_from(&mut buf).await.unwrap();
@@ -211,13 +204,7 @@ mod tests {
         let target_sock = UdpSocket::bind(("::1", 0)).await.unwrap();
         let target_addr = target_sock.local_addr().unwrap();
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
-        let datagram_frame = DatagramFrame {
-            sport: 0,
-            dport: 0,
-            target_host: Bytes::from_static(b"::1"),
-            target_port: target_addr.port(),
-            data: Bytes::from_static(b"hello"),
-        };
+        let datagram_frame = DatagramFrame::new(0, 0, b"::1", target_addr.port(), b"hello");
         let forwarder = tokio::spawn(udp_forward_to(datagram_frame, tx));
         let mut buf = vec![0; 5];
         let (len, addr) = target_sock.recv_from(&mut buf).await.unwrap();

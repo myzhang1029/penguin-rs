@@ -11,6 +11,7 @@ use crate::client::StreamCommand;
 use crate::config;
 use bytes::{Buf, Bytes};
 use penguin_mux::{DatagramFrame, Dupe};
+use std::borrow::Cow;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use tokio::io::{AsyncBufRead, BufStream};
@@ -285,11 +286,11 @@ async fn udp_relay(
             .add_udp_client((src, sport).into(), socket.dupe(), true)
             .await;
         let datagram_frame = DatagramFrame {
-            target_host: dst,
+            target_host: Cow::Owned(dst.into()),
             target_port: dport,
             sport: client_id,
             dport: 0,
-            data,
+            data: Cow::Owned(data.into()),
         };
         // This fails only if main has exited, which is a fatal error.
         handler_resources

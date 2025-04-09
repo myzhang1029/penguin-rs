@@ -5,8 +5,8 @@
 use super::FatalError;
 use crate::client::HandlerResources;
 use crate::config;
-use bytes::Bytes;
 use penguin_mux::{DatagramFrame, Dupe};
+use std::borrow::Cow;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::UdpSocket;
@@ -45,11 +45,11 @@ pub(super) async fn handle_udp(
             .add_udp_client(addr, socket.dupe(), false)
             .await;
         let frame = DatagramFrame {
-            target_host: Bytes::from_static(rhost.as_bytes()),
+            target_host: Cow::Borrowed(rhost.as_bytes()),
             target_port: rport,
             sport: client_id,
             dport: 0,
-            data: Bytes::from(buf),
+            data: Cow::Owned(buf),
         };
         // This fails only if main has exited, which is a fatal error.
         handler_resources
@@ -76,12 +76,13 @@ pub(super) async fn handle_udp_stdio(
             .read_line(&mut line)
             .await
             .map_err(FatalError::ClientIo)?;
+        let line: Vec<u8> = line.into();
         let frame = DatagramFrame {
-            target_host: Bytes::from_static(rhost.as_bytes()),
+            target_host: Cow::Borrowed(rhost.as_bytes()),
             target_port: rport,
             sport: 0,
             dport: 0,
-            data: line.into(),
+            data: Cow::Owned(line),
         };
         // This fails only if main has exited, which is a fatal error.
         handler_resources
@@ -120,9 +121,9 @@ mod tests {
         socket.connect("127.0.0.1:14196").await.unwrap();
         socket.send(b"hello").await.unwrap();
         let frame = datagram_rx.recv().await.unwrap();
-        assert_eq!(frame.target_host, Bytes::from_static(RHOST.as_bytes()));
+        assert_eq!(frame.target_host, RHOST.as_bytes());
         assert_eq!(frame.target_port, 255);
-        assert_eq!(frame.data, Bytes::from("hello"));
+        assert_eq!(*frame.data, *b"hello");
         let client_id = *udp_client_map
             .read()
             .await

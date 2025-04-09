@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use super::frame::{Frame, StreamFrame};
+use crate::frame::FinalizedFrame;
+
+use super::frame::StreamFrame;
 use bytes::Bytes;
 use futures_util::task::AtomicWaker;
 use std::io;
@@ -39,7 +41,7 @@ pub struct MuxStream {
     /// Remaining bytes to be read
     pub(super) buf: Bytes,
     /// See `MultiplexorInner`.
-    pub(super) frame_tx: mpsc::UnboundedSender<Frame>,
+    pub(super) frame_tx: mpsc::UnboundedSender<FinalizedFrame>,
     /// See `MultiplexorInner`.
     pub(super) dropped_ports_tx: mpsc::UnboundedSender<(u16, u16)>,
     /// Number of `Psh` frames between `Ack`s:
@@ -117,7 +119,8 @@ impl AsyncRead for MuxStream {
                 debug!("sending `Ack` of {amount_to_ack} frames");
                 self.frame_tx
                     .send(
-                        StreamFrame::new_ack(self.our_port, self.their_port, amount_to_ack).into(),
+                        StreamFrame::new_ack(self.our_port, self.their_port, amount_to_ack)
+                            .finalize(),
                     )
                     .ok();
                 // If the previous line fails, the task has exited.
@@ -173,7 +176,9 @@ impl AsyncWrite for MuxStream {
                 // We have reached the congestion window limit. Wait for an `Ack`
                 debug!("waiting for `Ack`");
                 // Make sure queued frames are flushed
-                self.frame_tx.send(Frame::Flush).map_err(|_| BrokenPipe)?;
+                self.frame_tx
+                    .send(FinalizedFrame::FLUSH)
+                    .map_err(|_| BrokenPipe)?;
                 self.writer_waker.register(cx.waker());
                 // Since all writes start with `poll_flush`, we don't need to
                 // flush here. There is actually no way to `poll_flush` without
@@ -192,9 +197,7 @@ impl AsyncWrite for MuxStream {
             }
             trace!("congestion window race condition, retrying");
         }
-        let frame =
-            StreamFrame::new_psh(self.our_port, self.their_port, Bytes::copy_from_slice(buf))
-                .into();
+        let frame = StreamFrame::new_psh(self.our_port, self.their_port, buf).finalize();
         self.frame_tx.send(frame).map_err(|_| BrokenPipe)?;
         trace!("sent a frame");
         Poll::Ready(Ok(buf.len()))
@@ -203,7 +206,9 @@ impl AsyncWrite for MuxStream {
     #[tracing::instrument(skip(_cx), level = "trace")]
     #[inline]
     fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        self.frame_tx.send(Frame::Flush).map_err(|_| BrokenPipe)?;
+        self.frame_tx
+            .send(FinalizedFrame::FLUSH)
+            .map_err(|_| BrokenPipe)?;
         Poll::Ready(Ok(()))
     }
 
@@ -222,7 +227,7 @@ impl AsyncWrite for MuxStream {
         // As a summary, duplicate `Fin`/`Rst` frames are harmless.
         if self.can_write.load(Ordering::Relaxed) {
             self.frame_tx
-                .send(StreamFrame::new_fin(self.our_port, self.their_port).into())
+                .send(StreamFrame::new_fin(self.our_port, self.their_port).finalize())
                 .map_err(|_| BrokenPipe)?;
             // Atomic ordering: see `inner.rs` -> `shutdown` and `close_port`.
             self.can_write.store(false, Ordering::Relaxed);

@@ -21,11 +21,13 @@ pub mod ws;
 use crate::inner::MultiplexorInner;
 use crate::timing::OptionalDuration;
 use crate::ws::WebSocketStream;
+use frame::FinalizedFrame;
 use futures_util::future::poll_fn;
 use parking_lot::{Mutex, RwLock};
 use rand::distr::uniform::SampleUniform;
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::num::TryFromIntError;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::oneshot;
@@ -55,7 +57,7 @@ pub enum Error {
     // These are the ones that shouldn't normally happen
     /// Datagram target host longer than 255 octets.
     #[error("Datagram target host longer than 255 octets")]
-    DatagramHostTooLong(#[from] <Vec<u8> as TryFrom<DatagramFrame>>::Error),
+    DatagramHostTooLong(#[from] TryFromIntError),
     /// Received an invalid frame.
     #[error("Invalid frame: {0}")]
     InvalidFrame(#[from] frame::Error),
@@ -79,16 +81,16 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub struct Multiplexor {
     inner: MultiplexorInner,
     /// Channel of received datagram frames for processing.
-    datagram_rx: Mutex<mpsc::Receiver<DatagramFrame>>,
+    datagram_rx: Mutex<mpsc::Receiver<DatagramFrame<'static>>>,
     /// Channel for a `Multiplexor` to receive newly
     /// established streams after the peer requests one.
     con_recv_stream_rx: Mutex<mpsc::Receiver<MuxStream>>,
 }
 /// Internal type used for spawning the multiplexor task.
 type TaskData = (
-    mpsc::Sender<DatagramFrame>,
+    mpsc::Sender<DatagramFrame<'static>>,
     mpsc::Sender<MuxStream>,
-    mpsc::UnboundedReceiver<Frame>,
+    mpsc::UnboundedReceiver<FinalizedFrame>,
     mpsc::UnboundedReceiver<(u16, u16)>,
 );
 
@@ -204,7 +206,7 @@ impl Multiplexor {
         trace!("sending `Con`");
         self.inner
             .frame_tx
-            .send(StreamFrame::new_con(host, port, sport, config::RWND).into())
+            .send(StreamFrame::new_con(host, port, sport, config::RWND).finalize())
             .map_err(|_| Error::Closed)?;
         trace!("sending stream to user");
         let stream = stream_rx
@@ -244,7 +246,7 @@ impl Multiplexor {
     /// for a datagram, it is guaranteed that no datagram will be lost.
     #[tracing::instrument(skip(self), level = "debug")]
     #[inline]
-    pub async fn get_datagram(&self) -> Result<DatagramFrame> {
+    pub async fn get_datagram(&self) -> Result<DatagramFrame<'static>> {
         poll_fn(|cx| self.datagram_rx.lock().poll_recv(cx))
             .await
             .ok_or(Error::Closed)
@@ -263,10 +265,10 @@ impl Multiplexor {
     /// guaranteed that the datagram has not been sent.
     #[tracing::instrument(skip(self), level = "debug")]
     #[inline]
-    pub async fn send_datagram(&self, frame: DatagramFrame) -> Result<()> {
+    pub async fn send_datagram<'data>(&self, frame: DatagramFrame<'data>) -> Result<()> {
         self.inner
             .frame_tx
-            .send(frame.into())
+            .send(frame.finalize()?)
             .map_err(|_| Error::Closed)?;
         Ok(())
     }

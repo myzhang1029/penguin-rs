@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::*;
-use bytes::Bytes;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, info};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
@@ -56,16 +55,10 @@ async fn datagram_channel_passes_data_tiny_mtu() {
     });
 
     for _ in 0..64 {
-        let payload: Bytes = (0..32768).map(|_| rand::random::<u8>()).collect();
+        let payload: Vec<u8> = (0..32768).map(|_| rand::random::<u8>()).collect();
         debug!("Client sending datagram");
         client_mux
-            .send_datagram(DatagramFrame {
-                sport: 1,
-                dport: 0,
-                target_host: Bytes::from_static(b"example.com"),
-                target_port: 53,
-                data: payload.clone(),
-            })
+            .send_datagram(DatagramFrame::new(1, 0, b"example.com", 53, &payload))
             .await
             .unwrap();
         debug!("Client awaiting datagram");
@@ -97,16 +90,10 @@ async fn datagram_channel_passes_data() {
     });
 
     for _ in 0..64 {
-        let payload: Bytes = (0..32768).map(|_| rand::random::<u8>()).collect();
+        let payload: Vec<u8> = (0..32768).map(|_| rand::random::<u8>()).collect();
         debug!("Client sending datagram");
         client_mux
-            .send_datagram(DatagramFrame {
-                sport: 1,
-                dport: 0,
-                target_host: Bytes::from_static(b"example.com"),
-                target_port: 53,
-                data: payload.clone(),
-            })
+            .send_datagram(DatagramFrame::new(1, 0, b"example.com", 53, &payload))
             .await
             .unwrap();
         debug!("Client awaiting datagram");

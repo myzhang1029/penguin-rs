@@ -20,7 +20,7 @@ pub async fn handle_websocket(ws_stream: WebSocket) {
     let mut jobs = JoinSet::new();
     // Channel for listeners to send UDP datagrams to the main loop
     let (datagram_send_tx, mut datagram_send_rx) =
-        mpsc::channel::<DatagramFrame>(config::INCOMING_DATAGRAM_BUFFER_SIZE);
+        mpsc::channel::<DatagramFrame<'static>>(config::INCOMING_DATAGRAM_BUFFER_SIZE);
     loop {
         trace!("server WebSocket loop");
         tokio::select! {

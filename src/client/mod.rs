@@ -65,7 +65,7 @@ struct HandlerResources {
     /// Send a request for a TCP channel to the main loop
     stream_command_tx: mpsc::Sender<StreamCommand>,
     /// Send a UDP datagram to the main loop
-    datagram_tx: mpsc::Sender<DatagramFrame>,
+    datagram_tx: mpsc::Sender<DatagramFrame<'static>>,
     /// The map of client IDs to UDP sockets and the map of client addresses to client IDs
     udp_client_map: Arc<RwLock<ClientIdMaps>>,
 }
@@ -164,23 +164,23 @@ impl ClientIdMaps {
     async fn send_datagram(
         lock_self: &RwLock<Self>,
         client_id: u16,
-        data: Bytes,
+        data: &[u8],
     ) -> Option<std::io::Result<()>> {
         if client_id == 0 {
             // Used for stdio
-            Some(tokio::io::stdout().write_all(&data).await)
+            Some(tokio::io::stdout().write_all(data).await)
         } else if let Some(information) = lock_self.read().await.client_id_map.get(&client_id) {
             let send_result = if information.socks5 {
                 handle_remote::socks::send_udp_relay_response(
                     &information.socket,
                     &information.peer_addr,
-                    &data,
+                    data,
                 )
                 .await
             } else {
                 information
                     .socket
-                    .send_to(&data, &information.peer_addr)
+                    .send_to(data, &information.peer_addr)
                     .await
             }
             .map(|_| ());
@@ -238,10 +238,9 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
     }
     // Channel for listeners to request TCP channels the main loop
     let (stream_command_tx, mut stream_command_rx) =
-        mpsc::channel::<StreamCommand>(config::STREAM_REQUEST_COMMAND_SIZE);
+        mpsc::channel(config::STREAM_REQUEST_COMMAND_SIZE);
     // Channel for listeners to send UDP datagrams to the main loop
-    let (datagram_tx, mut datagram_rx) =
-        mpsc::channel::<DatagramFrame>(config::INCOMING_DATAGRAM_BUFFER_SIZE);
+    let (datagram_tx, mut datagram_rx) = mpsc::channel(config::INCOMING_DATAGRAM_BUFFER_SIZE);
     // Map of client IDs to `ClientIdMapEntry`
     let udp_client_map = Arc::new(RwLock::new(ClientIdMaps::new()));
     let handler_resources = HandlerResources {
@@ -339,7 +338,7 @@ async fn on_connected(
     ws_stream: tokio_tungstenite::WebSocketStream<MaybeTlsStream<TcpStream>>,
     stream_command_rx: &mut mpsc::Receiver<StreamCommand>,
     failed_stream_request: &mut Option<StreamCommand>,
-    datagram_rx: &mut mpsc::Receiver<DatagramFrame>,
+    datagram_rx: &mut mpsc::Receiver<DatagramFrame<'static>>,
     udp_client_map: Arc<RwLock<ClientIdMaps>>,
     keepalive: OptionalDuration,
     channel_timeout: Duration,
@@ -368,7 +367,7 @@ async fn on_connected(
             Ok(dgram_frame) = mux.get_datagram() => {
                 let client_id = dgram_frame.dport;
                 let data = dgram_frame.data;
-                match ClientIdMaps::send_datagram(&udp_client_map, client_id, data).await {
+                match ClientIdMaps::send_datagram(&udp_client_map, client_id, data.as_ref()).await {
                     Some(Ok(())) => {
                         trace!("sent datagram to client {client_id}");
                     }
