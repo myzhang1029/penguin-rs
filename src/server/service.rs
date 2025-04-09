@@ -405,7 +405,7 @@ mod tests {
     #[tokio::test]
     async fn test_backend() {
         static BACKEND: LazyLock<BackendUrl> =
-            LazyLock::new(|| BackendUrl::from_str("http://httpbin.org").unwrap());
+            LazyLock::new(|| BackendUrl::from_str("http://httpbin.io").unwrap());
         crate::tests::setup_logging();
         // Test that the backend is actually working
         let state = State::new(
@@ -445,7 +445,7 @@ mod tests {
     async fn test_backend_tls() {
         // Check that this test makes sense: remove TLS deps of `reqwest`
         static BACKEND: LazyLock<BackendUrl> =
-            LazyLock::new(|| BackendUrl::from_str("https://httpbin.org").unwrap());
+            LazyLock::new(|| BackendUrl::from_str("https://httpbin.io").unwrap());
         crate::tests::setup_logging();
         // Test that the backend is actually working
         let state = State::new(
