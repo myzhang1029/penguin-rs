@@ -33,6 +33,7 @@ http-body-util = { version = "0.1", optional = true }
 hyper = { version = "1", features = ["server", "http1", "http2"], optional = true }
 hyper-util = { version = "0.1", features = ["server", "server-auto", "tokio"], optional = true }
 instant-acme = { version = "0.7", features = ["ring", "hyper-rustls"], default-features = false, optional = true }
+log = { version = "*", optional = true }
 parking_lot = "0.12"
 rand = "0.9"
 rcgen = { version = "0.13", optional = true }
@@ -74,7 +75,7 @@ default-is-ipv6 = []
 # Enabling this causes `penguin` to listen for `tokio-console` connections
 tokio-console = ["dep:console-subscriber"]
 # Statically remove some logging code. This breaks `tokio-console`
-remove-logging = ["tracing/max_level_trace", "tracing/release_max_level_debug"]
+remove-logging = ["tracing/max_level_trace", "tracing/release_max_level_debug", "log/max_level_trace", "log/release_max_level_debug"]
 # `parking_lot`'s deadlock detection in a separate thread
 deadlock-detection = ["parking_lot/deadlock_detection", "tokio/parking_lot"]
 # obtaining certificate automatically using ACME protocol
