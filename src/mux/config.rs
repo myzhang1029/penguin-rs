@@ -8,7 +8,9 @@ pub const DATAGRAM_BUFFER_SIZE: usize = 1 << 9;
 /// Number of `MuxStream`s to buffer in the channels on the receiving end.
 /// Since there is a handshake to obtain `MuxStream`s, there should be no
 /// need to have a crazy high buffer size.
-pub const STREAM_BUFFER_SIZE: usize = 1 << 5;
+pub const STREAM_BUFFER_SIZE: usize = 1 << 4;
+/// Number of `Bnd` requests to buffer in the channels on the receiving end.
+pub const BND_BUFFER_SIZE: usize = 1 << 4;
 
 /// Needs to be the same as `RWND` but as `usize`
 pub const RWND_USIZE: usize = RWND as usize;

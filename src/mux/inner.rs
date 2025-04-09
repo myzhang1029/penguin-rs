@@ -72,7 +72,7 @@ impl MuxStreamSlot {
 /// Multiplexor inner
 pub struct MultiplexorInner {
     /// Where tasks queue frames to be sent
-    pub frame_tx: mpsc::UnboundedSender<FinalizedFrame>,
+    pub tx_frame_tx: mpsc::UnboundedSender<FinalizedFrame>,
     /// Interval between keepalive `Ping`s
     pub keepalive_interval: OptionalDuration,
     /// Open stream channels: `our_port` -> `MuxStreamData`
@@ -92,6 +92,7 @@ impl std::fmt::Debug for MultiplexorInner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MultiplexorInner")
             .field("keepalive_interval", &self.keepalive_interval)
+            .field("default_rwnd_threshold", &self.default_rwnd_threshold)
             .finish_non_exhaustive()
     }
 }
@@ -100,7 +101,7 @@ impl Dupe for MultiplexorInner {
     #[inline]
     fn dupe(&self) -> Self {
         Self {
-            frame_tx: self.frame_tx.dupe(),
+            tx_frame_tx: self.tx_frame_tx.dupe(),
             keepalive_interval: self.keepalive_interval,
             streams: self.streams.dupe(),
             dropped_ports_tx: self.dropped_ports_tx.dupe(),
@@ -120,14 +121,14 @@ impl MultiplexorInner {
     // the error to the user from a spawned task.
     // Instead, the user will notice when `rx` channels return `None`.
     #[tracing::instrument(skip_all, level = "trace")]
-    pub async fn task<S: WebSocketStream>(
-        self,
-        ws: S,
-        datagram_tx: mpsc::Sender<DatagramFrame<'static>>,
-        con_recv_stream_tx: mpsc::Sender<MuxStream>,
-        mut frame_rx: mpsc::UnboundedReceiver<FinalizedFrame>,
-        mut dropped_ports_rx: mpsc::UnboundedReceiver<(u16, u16)>,
-    ) -> Result<()> {
+    pub async fn task<S: WebSocketStream>(self, ws: S, taskdata: super::TaskData) -> Result<()> {
+        let super::TaskData {
+            datagram_tx,
+            con_recv_stream_tx,
+            mut tx_frame_rx,
+            bnd_request_tx,
+            mut dropped_ports_rx,
+        } = taskdata;
         // Split the `WebSocket` stream into a `Sink` and `Stream` so we can process them concurrently
         let (mut ws_sink, mut ws_stream) = ws.split();
         // This is modified from an unrolled version of `tokio::try_join!` with our custom cancellation
@@ -136,9 +137,13 @@ impl MultiplexorInner {
             let mut process_dropped_ports_task_fut =
                 pin!(self.process_dropped_ports_task(&mut dropped_ports_rx));
             let mut process_frame_recv_task_fut =
-                pin!(self.process_frame_recv_task(&mut frame_rx, &mut ws_sink));
-            let mut process_ws_next_fut =
-                pin!(self.process_ws_next(&mut ws_stream, &datagram_tx, &con_recv_stream_tx));
+                pin!(self.process_frame_recv_task(&mut tx_frame_rx, &mut ws_sink));
+            let mut process_ws_next_fut = pin!(self.process_ws_next(
+                &mut ws_stream,
+                &datagram_tx,
+                &con_recv_stream_tx,
+                bnd_request_tx.as_ref()
+            ));
             poll_fn(|cx| {
                 if let Poll::Ready(r) = process_dropped_ports_task_fut.as_mut().poll(cx) {
                     let should_drain_frame_rx = r.is_ok();
@@ -161,7 +166,7 @@ impl MultiplexorInner {
                 .expect("Failed to reunite sink and stream (this is a bug)"),
             datagram_tx,
             con_recv_stream_tx,
-            frame_rx,
+            tx_frame_rx,
         )
         .await?;
         e
@@ -243,13 +248,14 @@ impl MultiplexorInner {
         ws_stream: &mut SplitStream<S>,
         datagram_tx: &mpsc::Sender<DatagramFrame<'static>>,
         con_recv_stream_tx: &mpsc::Sender<MuxStream>,
+        bnd_request_tx: Option<&mpsc::Sender<(Bytes, u16)>>,
     ) -> Result<()> {
         loop {
             match ws_stream.next().await {
                 Some(Ok(msg)) => {
                     trace!("received message length = {}", msg.len());
                     if self
-                        .process_message(msg, datagram_tx, con_recv_stream_tx)
+                        .process_message(msg, datagram_tx, con_recv_stream_tx, bnd_request_tx)
                         .await?
                     {
                         // Received a `Close` message
@@ -318,7 +324,7 @@ impl MultiplexorInner {
                 "processing remaining message after closure length = {}",
                 msg.len()
             );
-            self.process_message(msg, &datagram_tx, &con_recv_stream_tx)
+            self.process_message(msg, &datagram_tx, &con_recv_stream_tx, None)
                 .await?;
         }
         // Finally, we send EOF to all established streams.
@@ -353,6 +359,7 @@ impl MultiplexorInner {
         msg: Message,
         datagram_tx: &mpsc::Sender<DatagramFrame<'static>>,
         con_recv_stream_tx: &mpsc::Sender<MuxStream>,
+        bnd_request_tx: Option<&mpsc::Sender<(Bytes, u16)>>,
     ) -> Result<bool> {
         match msg {
             Message::Binary(data) => {
@@ -377,7 +384,7 @@ impl MultiplexorInner {
                     }
                     Frame::Stream(stream_frame) => {
                         trace!("received stream frame: {stream_frame:?}");
-                        self.process_stream_frame(stream_frame, con_recv_stream_tx)
+                        self.process_stream_frame(stream_frame, con_recv_stream_tx, bnd_request_tx)
                             .await?;
                     }
                 }
@@ -408,11 +415,15 @@ impl MultiplexorInner {
 
     /// Process a stream frame
     /// Does the following:
-    /// - If `flag` is `Syn`,
+    /// - If `flag` is `Con`,
     ///   - Find an available `dport` and send a `Ack`.
     ///   - Create a new `MuxStream` and send it to the `stream_tx` channel.
     /// - If `flag` is `Ack`,
-    ///   - Create a `MuxStream` and send it to the `stream_tx` channel.
+    ///   - Existing stream with the matching `dport`: increment the `psh_send_remaining` counter.
+    ///   - New stream: create a `MuxStream` and send it to the `stream_tx` channel.
+    /// - If `flag` is `Bnd`,
+    ///   - Send the request to the user if we are accepting `Bnd` requests and reply `Fin`.
+    ///   - Otherwise, send back a `Rst` frame.
     /// - Otherwise, we find the sender with the matching `dport` and
     ///   - Send the data to the sender.
     ///   - If the receiver is closed or the port does not exist, send back a
@@ -423,6 +434,7 @@ impl MultiplexorInner {
         &self,
         stream_frame: StreamFrame<'static>,
         con_recv_stream_tx: &mpsc::Sender<MuxStream>,
+        bnd_request_tx: Option<&mpsc::Sender<(Bytes, u16)>>,
     ) -> Result<()> {
         let StreamFrame {
             dport: our_port,
@@ -430,7 +442,7 @@ impl MultiplexorInner {
             payload,
         } = stream_frame;
         let send_rst = async {
-            self.frame_tx
+            self.tx_frame_tx
                 .send(StreamFrame::new_rst(our_port, their_port).finalize())
                 .ok()
             // Error only happens if the `frame_tx` channel is closed, at which point
@@ -547,8 +559,25 @@ impl MultiplexorInner {
                     send_rst.await;
                 }
             }
-            StreamPayload::Bnd { .. } => {
-                todo!()
+            StreamPayload::Bnd {
+                target_host,
+                target_port,
+            } => {
+                if let Some(sender) = bnd_request_tx {
+                    let target_host = Bytes::from(target_host.into_owned());
+                    debug!("received `Bnd` request: [{target_host:?}]:{target_port}");
+                    if let Err(e) = sender.send((target_host, target_port)).await {
+                        warn!("Failed to send `Bnd` request: {e}");
+                    }
+                    self.tx_frame_tx
+                        .send(StreamFrame::new_fin(our_port, their_port).finalize())
+                        .ok();
+                } else {
+                    trace!("received `Bnd` request but not accepting, sending `Rst`");
+                    self.tx_frame_tx
+                        .send(StreamFrame::new_rst(our_port, their_port).finalize())
+                        .ok();
+                }
             }
         }
         Ok(())
@@ -600,7 +629,7 @@ impl MultiplexorInner {
             psh_recvd_since: AtomicU32::new(0),
             writer_waker,
             buf: Bytes::new(),
-            frame_tx: self.frame_tx.dupe(),
+            frame_tx: self.tx_frame_tx.dupe(),
             dropped_ports_tx: self.dropped_ports_tx.dupe(),
             rwnd_threshold: self.default_rwnd_threshold.min(peer_rwnd),
         };
@@ -608,7 +637,7 @@ impl MultiplexorInner {
         // Make sure `Ack` is sent before the stream is sent to the user
         // so that the stream is `Established` when the user uses it.
         trace!("sending `Ack`");
-        self.frame_tx
+        self.tx_frame_tx
             .send(StreamFrame::new_ack(our_port, their_port, config::RWND).finalize())
             .map_err(|_| Error::Closed)?;
         // At the con_recv side, we use `con_recv_stream_tx` to send the new stream to the
@@ -648,7 +677,7 @@ impl MultiplexorInner {
             psh_recvd_since: AtomicU32::new(0),
             writer_waker,
             buf: Bytes::new(),
-            frame_tx: self.frame_tx.dupe(),
+            frame_tx: self.tx_frame_tx.dupe(),
             dropped_ports_tx: self.dropped_ports_tx.dupe(),
             rwnd_threshold: self.default_rwnd_threshold.min(peer_rwnd),
         };
@@ -688,7 +717,7 @@ impl MultiplexorInner {
             let old = stream_data.can_write.swap(false, Ordering::Relaxed);
             if old && !inhibit_rst {
                 // If the user did not call `poll_shutdown`, we need to send a `Rst` frame
-                self.frame_tx
+                self.tx_frame_tx
                     .send(StreamFrame::new_rst(our_port, their_port).finalize())
                     .ok();
             }

@@ -21,6 +21,7 @@ pub mod ws;
 use crate::inner::MultiplexorInner;
 use crate::timing::OptionalDuration;
 use crate::ws::WebSocketStream;
+use bytes::Bytes;
 use frame::FinalizedFrame;
 use futures_util::future::poll_fn;
 use parking_lot::{Mutex, RwLock};
@@ -49,6 +50,12 @@ pub enum Error {
     /// The multiplexor is closed.
     #[error("Mux is already closed")]
     Closed,
+    /// The peer does not support the requested operation.
+    #[error("Peer does not support requested operation")]
+    PeerUnsupportedOperation,
+    /// This `Multiplexor` is not configured for this operation.
+    #[error("Unsupported operation")]
+    UnsupportedOperation,
 
     /// WebSocket errors
     #[error("WebSocket Error: {0}")]
@@ -85,14 +92,18 @@ pub struct Multiplexor {
     /// Channel for a `Multiplexor` to receive newly
     /// established streams after the peer requests one.
     con_recv_stream_rx: Mutex<mpsc::Receiver<MuxStream>>,
+    /// Channel for `Bnd` requests.
+    bnd_request_rx: Option<Mutex<mpsc::Receiver<(Bytes, u16)>>>,
 }
+
 /// Internal type used for spawning the multiplexor task.
-type TaskData = (
-    mpsc::Sender<DatagramFrame<'static>>,
-    mpsc::Sender<MuxStream>,
-    mpsc::UnboundedReceiver<FinalizedFrame>,
-    mpsc::UnboundedReceiver<(u16, u16)>,
-);
+struct TaskData {
+    datagram_tx: mpsc::Sender<DatagramFrame<'static>>,
+    con_recv_stream_tx: mpsc::Sender<MuxStream>,
+    tx_frame_rx: mpsc::UnboundedReceiver<FinalizedFrame>,
+    dropped_ports_rx: mpsc::UnboundedReceiver<(u16, u16)>,
+    bnd_request_tx: Option<mpsc::Sender<(Bytes, u16)>>,
+}
 
 impl Multiplexor {
     /// Create a new `Multiplexor`.
@@ -110,27 +121,35 @@ impl Multiplexor {
     pub fn new<S: WebSocketStream>(
         ws: S,
         keepalive_interval: OptionalDuration,
+        accept_bnd: bool,
         task_joinset: Option<&mut JoinSet<Result<()>>>,
     ) -> Self {
-        let (mux, taskdata) = Self::new_no_task(keepalive_interval);
+        let (mux, taskdata) = Self::new_no_task(keepalive_interval, accept_bnd);
         mux.spawn_task(ws, taskdata, task_joinset);
         mux
     }
 
     /// Create a new `Multiplexor` without spawning the task.
     #[inline]
-    fn new_no_task(keepalive_interval: OptionalDuration) -> (Self, TaskData) {
+    fn new_no_task(keepalive_interval: OptionalDuration, accept_bnd: bool) -> (Self, TaskData) {
         let (datagram_tx, datagram_rx) = mpsc::channel(config::DATAGRAM_BUFFER_SIZE);
         let (con_recv_stream_tx, con_recv_stream_rx) = mpsc::channel(config::STREAM_BUFFER_SIZE);
         // This one is unbounded because the protocol provides its own flow control for `Psh` frames
         // and other frame types are to be immediately processed without any backpressure,
         // so they are ok to be unbounded channels.
-        let (frame_tx, frame_rx) = mpsc::unbounded_channel();
+        let (tx_frame_tx, tx_frame_rx) = mpsc::unbounded_channel();
         // This one cannot be bounded because it needs to be used in Drop
         let (dropped_ports_tx, dropped_ports_rx) = mpsc::unbounded_channel();
 
+        let (bnd_request_tx, bnd_request_rx) = if accept_bnd {
+            let (tx, rx) = mpsc::channel(config::BND_BUFFER_SIZE);
+            (Some(tx), Some(rx))
+        } else {
+            (None, None)
+        };
+
         let inner = MultiplexorInner {
-            frame_tx,
+            tx_frame_tx,
             keepalive_interval,
             streams: Arc::new(RwLock::new(HashMap::new())),
             dropped_ports_tx,
@@ -141,8 +160,15 @@ impl Multiplexor {
             inner,
             datagram_rx: Mutex::new(datagram_rx),
             con_recv_stream_rx: Mutex::new(con_recv_stream_rx),
+            bnd_request_rx: bnd_request_rx.map(Mutex::new),
         };
-        let taskdata = (datagram_tx, con_recv_stream_tx, frame_rx, dropped_ports_rx);
+        let taskdata = TaskData {
+            datagram_tx,
+            con_recv_stream_tx,
+            tx_frame_rx,
+            dropped_ports_rx,
+            bnd_request_tx,
+        };
         (mux, taskdata)
     }
 
@@ -155,14 +181,7 @@ impl Multiplexor {
         taskdata: TaskData,
         task_joinset: Option<&mut JoinSet<Result<()>>>,
     ) {
-        let (datagram_tx, con_recv_stream_tx, frame_rx, dropped_ports_rx) = taskdata;
-        let task_future = self.inner.dupe().task(
-            ws,
-            datagram_tx,
-            con_recv_stream_tx,
-            frame_rx,
-            dropped_ports_rx,
-        );
+        let task_future = self.inner.dupe().task(ws, taskdata);
         if let Some(task_joinset) = task_joinset {
             task_joinset.spawn(task_future);
         } else {
@@ -205,7 +224,7 @@ impl Multiplexor {
         };
         trace!("sending `Con`");
         self.inner
-            .frame_tx
+            .tx_frame_tx
             .send(StreamFrame::new_con(host, port, sport, config::RWND).finalize())
             .map_err(|_| Error::Closed)?;
         trace!("sending stream to user");
@@ -267,10 +286,47 @@ impl Multiplexor {
     #[inline]
     pub async fn send_datagram<'data>(&self, frame: DatagramFrame<'data>) -> Result<()> {
         self.inner
-            .frame_tx
+            .tx_frame_tx
             .send(frame.finalize()?)
             .map_err(|_| Error::Closed)?;
         Ok(())
+    }
+
+    /// Request a `Bnd` for `host` and `port`.
+    ///
+    /// # Arguments
+    /// * `host`: The local address or host to bind to. Hostname resolution might
+    /// not be supported by the remote peer.
+    /// * `port`: The local port to bind to.
+    ///
+    /// # Cancel Safety
+    /// TODO
+    #[tracing::instrument(skip(self), level = "debug")]
+    #[inline]
+    pub async fn request_bnd(&self, host: &[u8], port: u16, request_id: u16) -> Result<()> {
+        let bnd_frame = StreamFrame::new_bnd(request_id, host, port).finalize();
+        self.inner
+            .tx_frame_tx
+            .send(bnd_frame)
+            .map_err(|_| Error::Closed)?;
+        // TODO: await response
+        Ok(())
+    }
+
+    /// Accept a `Bnd` request from the remote peer.
+    ///
+    /// # Cancel Safety
+    /// This function is cancel safe. If the task is cancelled while waiting
+    /// for a `Bnd` request, it is guaranteed that no request will be lost.
+    #[tracing::instrument(skip(self), level = "debug")]
+    pub async fn accept_bnd_request(&self) -> Result<(Bytes, u16)> {
+        if let Some(rx) = self.bnd_request_rx.as_ref() {
+            poll_fn(|cx| rx.lock().poll_recv(cx))
+                .await
+                .ok_or(Error::Closed)
+        } else {
+            Err(Error::UnsupportedOperation)
+        }
     }
 }
 
