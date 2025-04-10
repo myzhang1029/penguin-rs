@@ -31,7 +31,7 @@ pub struct MuxStream {
     pub(super) psh_send_remaining: Arc<AtomicU32>,
     /// Number of `Push` frames received after sending the previous `Acknowledge` frame
     /// `rwnd - psh_recvd_since` is approximately the peer's `psh_send_remaining`
-    pub(super) psh_recvd_since: AtomicU32,
+    pub(super) psh_recvd_since: u32,
     /// Waker to wake up the task that sends frames
     pub(super) writer_waker: Arc<AtomicWaker>,
     /// Remaining bytes to be read
@@ -98,22 +98,16 @@ impl AsyncRead for MuxStream {
                 return Poll::Ready(Ok(()));
             }
             self.buf = next.unwrap();
-            // Atomic ordering: as long as we atomically increment the counter,
-            // the counter is correct. If another reader reads the new value here,
-            // before we reset the counter, both of us will send an `Acknowledge` frame.
-            // However, one of us will send an `Acknowledge` frame with a value of 0,
-            // which is harmless.
-            let new = self.psh_recvd_since.fetch_add(1, Ordering::Relaxed) + 1;
+            let new = self.psh_recvd_since + 1;
+            self.psh_recvd_since = new;
+            debug!("received a frame, psh_recvd_since: {new}");
             if new >= self.rwnd_threshold {
                 // Reset the counter
-                // Atomic ordering: as long as we use the atomically-fetched value
-                // to send an `Acknowledge` frame, the net amount
-                // `Push` frames received - `Acknowledge`d amount is correct.
-                let amount_to_ack = self.psh_recvd_since.swap(0, Ordering::Relaxed);
+                self.psh_recvd_since = 0;
                 // Send an `Acknowledge` frame
-                debug!("sending `Acknowledge` of {amount_to_ack} frames");
+                debug!("sending `Acknowledge` of {new} frames");
                 self.frame_tx
-                    .send(Frame::new_acknowledge(self.flow_id, amount_to_ack).finalize())
+                    .send(Frame::new_acknowledge(self.flow_id, new).finalize())
                     .ok();
                 // If the previous line fails, the task has exited.
                 // In this case, we don't care about the `Acknowledge` frame and the
@@ -225,5 +219,76 @@ impl AsyncWrite for MuxStream {
             self.can_write.store(false, Ordering::Relaxed);
         }
         Poll::Ready(Ok(()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::setup_logging;
+    use std::pin::pin;
+
+    #[tokio::test]
+    async fn test_mux_stream_read() {
+        setup_logging();
+        let (rx_frame_tx, rx_frame_rx) = mpsc::channel(10);
+        let (tx_frame_tx, mut tx_frame_rx) = mpsc::unbounded_channel();
+        let (dropped_ports_tx, _) = mpsc::unbounded_channel();
+        let stream = MuxStream {
+            frame_rx: rx_frame_rx,
+            flow_id: 1,
+            dest_host: Bytes::new(),
+            dest_port: 8080,
+            can_write: Arc::new(AtomicBool::new(true)),
+            psh_send_remaining: Arc::new(AtomicU32::new(2)),
+            psh_recvd_since: 0,
+            writer_waker: Arc::new(AtomicWaker::new()),
+            frame_tx: tx_frame_tx,
+            buf: Bytes::new(),
+            dropped_ports_tx,
+            rwnd_threshold: 2,
+        };
+        let mut stream = pin!(stream);
+        let mut buf = vec![0u8; 5];
+        let mut read_buf = tokio::io::ReadBuf::new(&mut buf);
+        let waker = futures_util::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        let rs = stream.as_mut().poll_read(&mut cx, &mut read_buf);
+        assert!(matches!(rs, Poll::Pending));
+
+        rx_frame_tx.send(Bytes::from("hello")).await.unwrap();
+        let rs = stream.as_mut().poll_read(&mut cx, &mut read_buf);
+        assert!(matches!(rs, Poll::Ready(Ok(()))));
+        assert_eq!(read_buf.filled().len(), 5);
+        assert_eq!(&read_buf.filled()[..], b"hello");
+        read_buf.clear();
+
+        let rs = stream.as_mut().poll_read(&mut cx, &mut read_buf);
+        assert!(matches!(rs, Poll::Pending));
+
+        rx_frame_tx.send(Bytes::from("world")).await.unwrap();
+        let rs = stream.as_mut().poll_read(&mut cx, &mut read_buf);
+        assert!(matches!(rs, Poll::Ready(Ok(()))));
+        assert_eq!(read_buf.filled().len(), 5);
+        assert_eq!(&read_buf.filled()[..], b"world");
+        read_buf.clear();
+
+        // There should be an `Acknowledge` frame waiting for us now
+        let frame = tx_frame_rx.recv().await.unwrap();
+        assert_eq!(frame.opcode().unwrap(), crate::frame::OpCode::Acknowledge);
+        let frame = Frame::try_from(frame).unwrap();
+        assert_eq!(frame.id, 1);
+        if let crate::frame::Payload::Acknowledge(ack) = frame.payload {
+            assert_eq!(ack, 2);
+        } else {
+            panic!("Expected an `Acknowledge` frame");
+        }
+
+        // Try EOF
+        rx_frame_tx.send(Bytes::new()).await.unwrap();
+        let rs = stream.as_mut().poll_read(&mut cx, &mut read_buf);
+        assert!(matches!(rs, Poll::Ready(Ok(()))));
+        assert_eq!(read_buf.filled().len(), 0);
+        assert!(rx_frame_tx.is_closed());
     }
 }
