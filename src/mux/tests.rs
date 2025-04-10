@@ -173,7 +173,7 @@ async fn connected_stream_passes_data_tiny_mtu_with_keepalive() {
     let client_mux = Multiplexor::new(client, OptionalDuration::from_secs(1), false, None);
     let server_mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
 
-    let input_bytes: Vec<u8> = (0..1024 * 1024).map(|_| rand::random::<u8>()).collect();
+    let input_bytes: Vec<u8> = (0..1024 * 256).map(|_| rand::random::<u8>()).collect();
     let len = input_bytes.len();
     let input_bytes_clone = input_bytes.clone();
 

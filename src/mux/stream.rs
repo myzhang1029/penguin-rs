@@ -291,4 +291,78 @@ mod tests {
         assert_eq!(read_buf.filled().len(), 0);
         assert!(rx_frame_tx.is_closed());
     }
+
+    #[tokio::test]
+    async fn test_mux_stream_write() {
+        setup_logging();
+        let (_, rx_frame_rx) = mpsc::channel(10);
+        let (tx_frame_tx, mut tx_frame_rx) = mpsc::unbounded_channel();
+        let (dropped_ports_tx, _) = mpsc::unbounded_channel();
+        let stream = MuxStream {
+            frame_rx: rx_frame_rx,
+            flow_id: 1,
+            dest_host: Bytes::new(),
+            dest_port: 8080,
+            can_write: Arc::new(AtomicBool::new(true)),
+            psh_send_remaining: Arc::new(AtomicU32::new(2)),
+            psh_recvd_since: 0,
+            writer_waker: Arc::new(AtomicWaker::new()),
+            frame_tx: tx_frame_tx,
+            buf: Bytes::new(),
+            dropped_ports_tx,
+            rwnd_threshold: 2,
+        };
+        let mut stream = pin!(stream);
+        let waker = futures_util::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        let rs = stream.as_mut().poll_write(&mut cx, b"hello");
+        assert!(matches!(rs, Poll::Ready(Ok(5))));
+        let rs = stream.as_mut().poll_write(&mut cx, b"world");
+        assert!(matches!(rs, Poll::Ready(Ok(5))));
+
+        // Check the frame sent
+        let frame1 = tx_frame_rx.recv().await.unwrap();
+        assert_eq!(frame1.opcode().unwrap(), crate::frame::OpCode::Push);
+        let frame1 = Frame::try_from(frame1).unwrap();
+        assert_eq!(frame1.id, 1);
+        if let crate::frame::Payload::Push(push) = frame1.payload {
+            assert_eq!(&push.as_ref(), b"hello");
+        } else {
+            panic!("Expected a `Push` frame");
+        }
+        let frame2 = tx_frame_rx.recv().await.unwrap();
+        assert_eq!(frame2.opcode().unwrap(), crate::frame::OpCode::Push);
+        let frame2 = Frame::try_from(frame2).unwrap();
+        assert_eq!(frame2.id, 1);
+        if let crate::frame::Payload::Push(push) = frame2.payload {
+            assert_eq!(&push.as_ref(), b"world");
+        } else {
+            panic!("Expected a `Push` frame");
+        }
+
+        // Try to write again
+        let rs = stream.as_mut().poll_write(&mut cx, b"maybe");
+        assert!(matches!(rs, Poll::Pending));
+
+        // Check attempt to flush
+        let frame3 = tx_frame_rx.recv().await.unwrap();
+        assert_eq!(frame3, FinalizedFrame::FLUSH);
+
+        // Simulate `Acknowledge`
+        stream.psh_send_remaining.fetch_add(1, Ordering::Release);
+
+        let rs = stream.as_mut().poll_write(&mut cx, b"maybe");
+        assert!(matches!(rs, Poll::Ready(Ok(5))));
+
+        let frame4 = tx_frame_rx.recv().await.unwrap();
+        assert_eq!(frame4.opcode().unwrap(), crate::frame::OpCode::Push);
+        let frame4 = Frame::try_from(frame4).unwrap();
+        assert_eq!(frame4.id, 1);
+        if let crate::frame::Payload::Push(push) = frame4.payload {
+            assert_eq!(&push.as_ref(), b"maybe");
+        } else {
+            panic!("Expected a `Push` frame");
+        }
+    }
 }
