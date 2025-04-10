@@ -7,7 +7,7 @@ use crate::frame::{BindPayload, ConnectPayload, FinalizedFrame, Frame, OpCode, P
 use crate::stream::MuxStream;
 use crate::timing::{OptionalDuration, OptionalInterval};
 use crate::{Datagram, Message, WebSocketStream, config};
-use crate::{Error, Result};
+use crate::{Error, Result, WsError};
 use bytes::Bytes;
 use futures_util::future::poll_fn;
 use futures_util::stream::{SplitSink, SplitStream};
@@ -118,7 +118,11 @@ impl MultiplexorInner {
     // the error to the user from a spawned task.
     // Instead, the user will notice when `rx` channels return `None`.
     #[tracing::instrument(skip_all, level = "trace")]
-    pub async fn task<S: WebSocketStream>(self, ws: S, taskdata: super::TaskData) -> Result<()> {
+    pub async fn task<S: WebSocketStream<WsError>>(
+        self,
+        ws: S,
+        taskdata: super::TaskData,
+    ) -> Result<()> {
         let super::TaskData {
             datagram_tx,
             con_recv_stream_tx,
@@ -201,7 +205,7 @@ impl MultiplexorInner {
     /// It never returns an `Ok(())`, and propagates errors from the `Sink` processing.
     #[tracing::instrument(skip_all, level = "trace")]
     #[inline]
-    async fn process_frame_recv_task<S: WebSocketStream>(
+    async fn process_frame_recv_task<S: WebSocketStream<WsError>>(
         &self,
         frame_rx: &mut mpsc::UnboundedReceiver<FinalizedFrame>,
         ws_sink: &mut SplitSink<S, Message>,
@@ -243,7 +247,7 @@ impl MultiplexorInner {
     /// Process the return value of `ws.next()`
     /// Returns `Ok(())` when a `Close` message was received or the WebSocket was otherwise closed by the peer.
     #[tracing::instrument(skip_all, level = "trace")]
-    async fn process_ws_next<S: WebSocketStream>(
+    async fn process_ws_next<S: WebSocketStream<WsError>>(
         &self,
         ws_stream: &mut SplitStream<S>,
         datagram_tx: &mpsc::Sender<Datagram>,
@@ -277,7 +281,7 @@ impl MultiplexorInner {
 
     /// Wind down the multiplexor task.
     #[tracing::instrument(skip_all, level = "trace")]
-    async fn wind_down<S: WebSocketStream>(
+    async fn wind_down<S: WebSocketStream<WsError>>(
         &self,
         should_drain_frame_rx: bool,
         mut ws: S,

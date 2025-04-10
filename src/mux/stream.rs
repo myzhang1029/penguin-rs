@@ -64,7 +64,7 @@ impl std::fmt::Debug for MuxStream {
 impl Drop for MuxStream {
     // Dropping the port should act like `close()` has been called.
     // Since `drop` is not async, this is handled by the mux task.
-    /// Close the stream by instructing the mux task to send a [`Reset`](frame::OpCode::Reset) frame if
+    /// Close the stream by instructing the mux task to send a [`Reset`](crate::frame::OpCode::Reset) frame if
     /// the stream is still open. The associated port will be freed for reuse.
     fn drop(&mut self) {
         // Notify the task that this port is no longer in use
@@ -133,7 +133,7 @@ impl AsyncRead for MuxStream {
 
 impl AsyncWrite for MuxStream {
     /// Write data to the stream. Each invocation of this method will send a
-    /// separate frame in a new [`Message`](crate::ws::Message), so it may be
+    /// separate frame in a new [`Message`](crate::Message), so it may be
     /// beneficial to wrap it in a [`BufWriter`](tokio::io::BufWriter) where
     /// appropriate.
     #[tracing::instrument(skip(cx, buf), level = "trace")]

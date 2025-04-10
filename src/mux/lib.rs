@@ -22,16 +22,15 @@ use crate::frame::{BindPayload, BindType, FinalizedFrame, Frame};
 use crate::inner::MultiplexorInner;
 use crate::timing::OptionalDuration;
 use bytes::Bytes;
-use futures_util::future::poll_fn;
-use futures_util::{Sink, Stream};
+use futures_util::{Sink, Stream, future::poll_fn};
 use parking_lot::{Mutex, RwLock};
 use rand::distr::uniform::SampleUniform;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
 use thiserror::Error;
-use tokio::sync::oneshot;
-use tokio::{sync::mpsc, task::JoinSet};
+use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinSet;
 use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 use tracing::{error, trace, warn};
 
@@ -106,7 +105,7 @@ impl Multiplexor {
     ///   that the caller can notice if the task exits. If it is `None`, the
     ///   task will be spawned by `tokio::spawn` and errors will be logged.
     #[tracing::instrument(skip_all, level = "debug")]
-    pub fn new<S: WebSocketStream>(
+    pub fn new<S: WebSocketStream<WsError>>(
         ws: S,
         keepalive_interval: OptionalDuration,
         accept_bnd: bool,
@@ -163,7 +162,7 @@ impl Multiplexor {
     /// Spawn the multiplexor task.
     /// This function and [`new_no_task`] are implementation details and not exposed in the public API.
     #[inline]
-    fn spawn_task<S: WebSocketStream>(
+    fn spawn_task<S: WebSocketStream<WsError>>(
         &self,
         ws: S,
         taskdata: TaskData,
@@ -356,16 +355,18 @@ pub struct Datagram {
 }
 
 /// A generic WebSocket stream
-pub trait WebSocketStream:
-    Stream<Item = std::result::Result<Message, WsError>>
-    + Sink<Message, Error = WsError>
-    + Send
-    + Unpin
-    + 'static
+pub trait WebSocketStream<E>
+where
+    Self: Stream<Item = std::result::Result<Message, E>>
+        + Sink<Message, Error = E>
+        + Send
+        + Unpin
+        + 'static,
+    Box<E>: Into<Error>,
 {
 }
 
-impl<RW> WebSocketStream for tokio_tungstenite::WebSocketStream<RW> where
+impl<RW> WebSocketStream<WsError> for tokio_tungstenite::WebSocketStream<RW> where
     RW: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static
 {
 }
