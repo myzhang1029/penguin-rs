@@ -48,25 +48,27 @@ async fn datagram_channel_passes_data_tiny_mtu() {
 
     let server_task = tokio::spawn(async move {
         for _ in 0..64 {
-            let (flow_id, dgram) = server_mux.get_datagram().await.unwrap();
+            let dgram = server_mux.get_datagram().await.unwrap();
             debug!("Server got datagram");
-            server_mux
-                .send_datagram(flow_id, &dgram.target_host, dgram.target_port, &dgram.data)
-                .await
-                .unwrap();
+            server_mux.send_datagram(dgram).await.unwrap();
         }
     });
 
     for _ in 0..64 {
-        let payload: Vec<u8> = (0..32768).map(|_| rand::random::<u8>()).collect();
+        let payload: Bytes = (0..32768).map(|_| rand::random::<u8>()).collect();
         debug!("Client sending datagram");
         client_mux
-            .send_datagram(1, b"example.com", 53, &payload)
+            .send_datagram(Datagram {
+                flow_id: 1,
+                target_host: Bytes::from_static(b"example.com"),
+                target_port: 53,
+                data: payload.clone(),
+            })
             .await
             .unwrap();
         debug!("Client awaiting datagram");
-        let (flow_id, recvd) = client_mux.get_datagram().await.unwrap();
-        assert_eq!(flow_id, 1);
+        let recvd = client_mux.get_datagram().await.unwrap();
+        assert_eq!(recvd.flow_id, 1);
         assert_eq!(*recvd.target_host, *b"example.com");
         assert_eq!(recvd.target_port, 53);
         assert_eq!(recvd.data, payload);
@@ -85,27 +87,29 @@ async fn datagram_channel_passes_data() {
 
     let server_task = tokio::spawn(async move {
         for _ in 0..64 {
-            let (flow_id, dgram) = server_mux.get_datagram().await.unwrap();
+            let dgram = server_mux.get_datagram().await.unwrap();
             debug!("Server got datagram");
-            server_mux
-                .send_datagram(flow_id, &dgram.target_host, dgram.target_port, &dgram.data)
-                .await
-                .unwrap();
+            server_mux.send_datagram(dgram).await.unwrap();
         }
     });
 
     for _ in 0..64 {
-        let payload: Vec<u8> = (0..32768).map(|_| rand::random::<u8>()).collect();
+        let payload: Bytes = (0..32768).map(|_| rand::random::<u8>()).collect();
         debug!("Client sending datagram");
         client_mux
-            .send_datagram(1, b"example.com", 53, &payload)
+            .send_datagram(Datagram {
+                flow_id: 1,
+                target_host: Bytes::from_static(b"example.com"),
+                target_port: 53,
+                data: payload.clone(),
+            })
             .await
             .unwrap();
         debug!("Client awaiting datagram");
-        let (flow_id, recvd) = client_mux.get_datagram().await.unwrap();
+        let recvd = client_mux.get_datagram().await.unwrap();
         assert_eq!(*recvd.target_host, *b"example.com");
         assert_eq!(recvd.target_port, 53);
-        assert_eq!(flow_id, 1);
+        assert_eq!(recvd.flow_id, 1);
         assert_eq!(recvd.data, payload);
     }
     debug!("Waiting for server task to finish");

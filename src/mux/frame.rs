@@ -9,9 +9,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use crate::proto_version;
+use crate::{Dupe, proto_version};
 use bytes::{Buf, BufMut, Bytes};
-use std::{borrow::Cow, fmt::Debug, mem::size_of};
+use std::{fmt::Debug, mem::size_of};
 use thiserror::Error;
 
 /// Errors that can occur when parsing a frame.
@@ -25,6 +25,60 @@ pub enum Error {
     InvalidOpCode(u8),
     #[error("Invalid `Bind` type: {0}")]
     InvalidBindType(u8),
+}
+
+/// A special version of `std::borrow::Cow` using `Bytes`
+#[derive(Clone, Debug)]
+pub enum CowBytes<'data> {
+    Borrowed(&'data [u8]),
+    Owned(Bytes),
+}
+
+impl<'data> PartialEq for CowBytes<'data> {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.as_ref() == other.as_ref()
+    }
+}
+
+impl<'data> Eq for CowBytes<'data> {}
+
+impl Dupe for CowBytes<'_> {
+    #[inline]
+    fn dupe(&self) -> Self {
+        match self {
+            Self::Borrowed(data) => Self::Borrowed(data),
+            Self::Owned(bytes) => Self::Owned(bytes.dupe()),
+        }
+    }
+}
+
+impl<'data> AsRef<[u8]> for CowBytes<'data> {
+    #[inline]
+    fn as_ref(&self) -> &[u8] {
+        match self {
+            Self::Borrowed(data) => data,
+            Self::Owned(bytes) => bytes.as_ref(),
+        }
+    }
+}
+
+impl<'data> CowBytes<'data> {
+    #[inline]
+    pub fn into_owned(self) -> Bytes {
+        match self {
+            Self::Borrowed(data) => Bytes::from(data.to_vec()),
+            Self::Owned(bytes) => bytes,
+        }
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Borrowed(data) => data.len(),
+            Self::Owned(bytes) => bytes.len(),
+        }
+    }
 }
 
 /// Type codes for a `Bind` operation
@@ -96,7 +150,7 @@ pub struct ConnectPayload<'data> {
     /// The destination port to forward to (client), or the local port (server)
     pub target_port: u16,
     /// The destination host to forward to (client), or the local address (server)
-    pub target_host: Cow<'data, [u8]>,
+    pub target_host: CowBytes<'data>,
 }
 
 /// Payload for a [`Payload::Bind`] variant
@@ -107,7 +161,7 @@ pub struct BindPayload<'data> {
     /// The local port to bind to
     pub target_port: u16,
     /// The local address to bind to
-    pub target_host: Cow<'data, [u8]>,
+    pub target_host: CowBytes<'data>,
 }
 
 /// Payload for a [`Payload::Datagram`] variant
@@ -116,9 +170,9 @@ pub struct DatagramPayload<'data> {
     /// The port of the forwarding target
     pub target_port: u16,
     /// The host of the forwarding target
-    pub target_host: Cow<'data, [u8]>,
+    pub target_host: CowBytes<'data>,
     /// The data to send
-    pub data: Cow<'data, [u8]>,
+    pub data: CowBytes<'data>,
 }
 
 /// Frame payload
@@ -136,7 +190,7 @@ pub enum Payload<'data> {
     /// `Finish` has no payload
     Finish,
     /// `Push` payload
-    Push(Cow<'data, [u8]>),
+    Push(CowBytes<'data>),
     /// `Bind` payload. See [`BindPayload`]
     Bind(BindPayload<'data>),
     /// `Datagram` payload. See [`DatagramPayload`]
@@ -218,7 +272,7 @@ impl<'data> Frame<'data> {
         let payload = Payload::Connect(ConnectPayload {
             rwnd,
             target_port,
-            target_host: Cow::Borrowed(target_host),
+            target_host: CowBytes::Borrowed(target_host),
         });
         Self { id, payload }
     }
@@ -269,17 +323,17 @@ impl<'data> Frame<'data> {
     pub const fn new_push(id: u32, data: &'data [u8]) -> Self {
         Self {
             id,
-            payload: Payload::Push(Cow::Borrowed(data)),
+            payload: Payload::Push(CowBytes::Borrowed(data)),
         }
     }
 
     /// Create a new [`StreamFlag::Push`] frame with owned data.
     #[must_use]
     #[inline]
-    pub const fn new_push_owned(id: u32, data: Vec<u8>) -> Self {
+    pub const fn new_push_owned(id: u32, data: Bytes) -> Self {
         Self {
             id,
-            payload: Payload::Push(Cow::Owned(data)),
+            payload: Payload::Push(CowBytes::Owned(data)),
         }
     }
 
@@ -301,7 +355,7 @@ impl<'data> Frame<'data> {
         let payload = Payload::Bind(BindPayload {
             bind_type,
             target_port,
-            target_host: Cow::Borrowed(target_host),
+            target_host: CowBytes::Borrowed(target_host),
         });
         Self { id, payload }
     }
@@ -322,9 +376,9 @@ impl<'data> Frame<'data> {
         data: &'data [u8],
     ) -> Self {
         let payload = Payload::Datagram(DatagramPayload {
-            target_host: Cow::Borrowed(target_host),
+            target_host: CowBytes::Borrowed(target_host),
             target_port,
-            data: Cow::Borrowed(data),
+            data: CowBytes::Borrowed(data),
         });
         Self { id, payload }
     }
@@ -334,14 +388,14 @@ impl<'data> Frame<'data> {
     #[inline]
     pub const fn new_datagram_owned(
         id: u32,
-        target_host: Vec<u8>,
+        target_host: Bytes,
         target_port: u16,
-        data: Vec<u8>,
+        data: Bytes,
     ) -> Self {
         let payload = Payload::Datagram(DatagramPayload {
-            target_host: Cow::Owned(target_host),
+            target_host: CowBytes::Owned(target_host),
             target_port,
-            data: Cow::Owned(data),
+            data: CowBytes::Owned(data),
         });
         Self { id, payload }
     }
@@ -362,7 +416,7 @@ macro_rules! check_remaining {
     };
 }
 
-impl TryFrom<Bytes> for Frame<'_> {
+impl TryFrom<Bytes> for Frame<'static> {
     type Error = Error;
 
     #[inline]
@@ -384,7 +438,7 @@ impl TryFrom<Bytes> for Frame<'_> {
                 Payload::Connect(ConnectPayload {
                     rwnd,
                     target_port,
-                    target_host: Cow::Owned(target_host.into()),
+                    target_host: CowBytes::Owned(target_host),
                 })
             }
             OpCode::Acknowledge => {
@@ -394,7 +448,7 @@ impl TryFrom<Bytes> for Frame<'_> {
             }
             OpCode::Reset => Payload::Reset,
             OpCode::Finish => Payload::Finish,
-            OpCode::Push => Payload::Push(Cow::Owned(data.into())),
+            OpCode::Push => Payload::Push(CowBytes::Owned(data)),
             OpCode::Bind => {
                 check_remaining!(data, size_of::<u8>() + size_of::<u16>());
                 let bind_type = BindType::try_from(data.get_u8())?;
@@ -402,7 +456,7 @@ impl TryFrom<Bytes> for Frame<'_> {
                 Payload::Bind(BindPayload {
                     bind_type,
                     target_port,
-                    target_host: Cow::Owned(data.into()),
+                    target_host: CowBytes::Owned(data),
                 })
             }
             OpCode::Datagram => {
@@ -413,8 +467,8 @@ impl TryFrom<Bytes> for Frame<'_> {
                 let target_host = data.split_to(host_len);
                 Payload::Datagram(DatagramPayload {
                     target_port,
-                    target_host: Cow::Owned(target_host.into()),
-                    data: Cow::Owned(data.into()),
+                    target_host: CowBytes::Owned(target_host),
+                    data: CowBytes::Owned(data),
                 })
             }
         };
@@ -533,19 +587,35 @@ impl TryFrom<FinalizedFrame> for Frame<'_> {
 
 impl From<Bytes> for FinalizedFrame {
     fn from(bytes: Bytes) -> Self {
-        Self(bytes.into())
+        Self(bytes)
     }
 }
 
 impl From<FinalizedFrame> for Bytes {
     fn from(frame: FinalizedFrame) -> Self {
-        frame.0.into()
+        frame.0
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_cow_bytes() {
+        crate::tests::setup_logging();
+        let cow1 = CowBytes::Borrowed(&[1, 2, 3]);
+        let cow2 = cow1.dupe();
+        assert_eq!(cow1, cow2);
+        assert_eq!(cow1.len(), 3);
+        assert_eq!(cow2.len(), 3);
+        let cow3 = cow1.into_owned();
+        assert_eq!(cow3.as_ref(), cow2.as_ref());
+        let bytes = Bytes::from(vec![4, 5, 6]);
+        let cow4 = CowBytes::Owned(bytes.clone());
+        assert_eq!(cow4.as_ref(), bytes.as_ref());
+        assert_eq!(cow4.len(), 3);
+    }
 
     #[test]
     fn test_frames() {
@@ -558,7 +628,7 @@ mod tests {
                 payload: Payload::Connect(ConnectPayload {
                     rwnd: 128,
                     target_port: 5678,
-                    target_host: Cow::Borrowed(&[]),
+                    target_host: CowBytes::Borrowed(&[]),
                 })
             }
         );
@@ -569,9 +639,9 @@ mod tests {
         let frame = Frame {
             id: 5678,
             payload: Payload::Datagram(DatagramPayload {
-                target_host: Cow::Borrowed(&[1, 2, 3, 4]),
+                target_host: CowBytes::Borrowed(&[1, 2, 3, 4]),
                 target_port: 1234,
-                data: Cow::Borrowed(&[1, 2, 3, 4]),
+                data: CowBytes::Borrowed(&[1, 2, 3, 4]),
             }),
         };
         let bytes = Bytes::try_from(&frame).unwrap();

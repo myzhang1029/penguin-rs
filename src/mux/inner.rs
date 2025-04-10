@@ -2,14 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use crate::config;
 use crate::dupe::Dupe;
-use crate::frame::{
-    BindPayload, ConnectPayload, DatagramPayload, FinalizedFrame, Frame, OpCode, Payload,
-};
+use crate::frame::{BindPayload, ConnectPayload, FinalizedFrame, Frame, OpCode, Payload};
 use crate::stream::MuxStream;
 use crate::timing::{OptionalDuration, OptionalInterval};
 use crate::ws::{Message, WebSocketStream};
+use crate::{Datagram, config};
 use crate::{Error, Result};
 use bytes::Bytes;
 use futures_util::future::poll_fn;
@@ -249,7 +247,7 @@ impl MultiplexorInner {
     async fn process_ws_next<S: WebSocketStream>(
         &self,
         ws_stream: &mut SplitStream<S>,
-        datagram_tx: &mpsc::Sender<(u32, DatagramPayload<'static>)>,
+        datagram_tx: &mpsc::Sender<Datagram>,
         con_recv_stream_tx: &mpsc::Sender<MuxStream>,
         bnd_request_tx: Option<&mpsc::Sender<BindPayload<'static>>>,
     ) -> Result<()> {
@@ -284,7 +282,7 @@ impl MultiplexorInner {
         &self,
         should_drain_frame_rx: bool,
         mut ws: S,
-        datagram_tx: mpsc::Sender<(u32, DatagramPayload<'static>)>,
+        datagram_tx: mpsc::Sender<Datagram>,
         con_recv_stream_tx: mpsc::Sender<MuxStream>,
         mut frame_rx: mpsc::UnboundedReceiver<FinalizedFrame>,
     ) -> Result<()> {
@@ -360,7 +358,7 @@ impl MultiplexorInner {
     async fn process_message(
         &self,
         msg: Message,
-        datagram_tx: &mpsc::Sender<(u32, DatagramPayload<'static>)>,
+        datagram_tx: &mpsc::Sender<Datagram>,
         con_recv_stream_tx: &mpsc::Sender<MuxStream>,
         bnd_request_tx: Option<&mpsc::Sender<BindPayload<'static>>>,
     ) -> Result<bool> {
@@ -415,7 +413,7 @@ impl MultiplexorInner {
     async fn process_frame(
         &self,
         frame: Frame<'static>,
-        datagram_tx: &mpsc::Sender<(u32, DatagramPayload<'static>)>,
+        datagram_tx: &mpsc::Sender<Datagram>,
         con_recv_stream_tx: &mpsc::Sender<MuxStream>,
         bnd_request_tx: Option<&mpsc::Sender<BindPayload<'static>>>,
     ) -> Result<()> {
@@ -559,7 +557,13 @@ impl MultiplexorInner {
                 // The first case means the multiplexor itself is dropped;
                 // In the second case, we just drop the frame to avoid blocking.
                 // It is UDP, after all.
-                if let Err(e) = datagram_tx.try_send((flow_id, payload)) {
+                let datagram = Datagram {
+                    flow_id,
+                    target_host: payload.target_host.into_owned(),
+                    target_port: payload.target_port,
+                    data: payload.data.into_owned(),
+                };
+                if let Err(e) = datagram_tx.try_send(datagram) {
                     match e {
                         TrySendError::Full(_) => {
                             warn!("dropped datagram frame: {e}");

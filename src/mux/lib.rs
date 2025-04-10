@@ -19,10 +19,11 @@ mod tests;
 pub mod timing;
 pub mod ws;
 
-use crate::frame::{DatagramPayload, FinalizedFrame, Frame};
+use crate::frame::{BindPayload, FinalizedFrame, Frame};
 use crate::inner::MultiplexorInner;
 use crate::timing::OptionalDuration;
 use crate::ws::WebSocketStream;
+use bytes::Bytes;
 use futures_util::future::poll_fn;
 use parking_lot::{Mutex, RwLock};
 use rand::distr::uniform::SampleUniform;
@@ -35,7 +36,7 @@ use tokio::{sync::mpsc, task::JoinSet};
 use tracing::{error, trace, warn};
 
 pub use crate::dupe::Dupe;
-pub use crate::frame::{BindPayload, BindType};
+pub use crate::frame::BindType;
 pub use crate::proto_version::{PROTOCOL_VERSION, PROTOCOL_VERSION_NUMBER};
 pub use crate::stream::MuxStream;
 
@@ -85,7 +86,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub struct Multiplexor {
     inner: MultiplexorInner,
     /// Channel of received datagram frames for processing.
-    datagram_rx: Mutex<mpsc::Receiver<(u32, DatagramPayload<'static>)>>,
+    datagram_rx: Mutex<mpsc::Receiver<Datagram>>,
     /// Channel for a `Multiplexor` to receive newly
     /// established streams after the peer requests one.
     con_recv_stream_rx: Mutex<mpsc::Receiver<MuxStream>>,
@@ -93,13 +94,27 @@ pub struct Multiplexor {
     bnd_request_rx: Option<Mutex<mpsc::Receiver<BindPayload<'static>>>>,
 }
 
-/// Internal type used for spawning the multiplexor task.
+/// Internal type used for spawning the multiplexor task
+#[derive(Debug)]
 struct TaskData {
-    datagram_tx: mpsc::Sender<(u32, DatagramPayload<'static>)>,
+    datagram_tx: mpsc::Sender<Datagram>,
     con_recv_stream_tx: mpsc::Sender<MuxStream>,
     tx_frame_rx: mpsc::UnboundedReceiver<FinalizedFrame>,
     dropped_ports_rx: mpsc::UnboundedReceiver<u32>,
     bnd_request_tx: Option<mpsc::Sender<BindPayload<'static>>>,
+}
+
+/// Datagram frame data
+#[derive(Clone, Debug)]
+pub struct Datagram {
+    /// Flow ID
+    pub flow_id: u32,
+    /// Target host
+    pub target_host: Bytes,
+    /// Target port
+    pub target_port: u16,
+    /// Data
+    pub data: Bytes,
 }
 
 impl Multiplexor {
@@ -262,7 +277,7 @@ impl Multiplexor {
     /// for a datagram, it is guaranteed that no datagram will be lost.
     #[tracing::instrument(skip(self), level = "debug")]
     #[inline]
-    pub async fn get_datagram(&self) -> Result<(u32, DatagramPayload<'static>)> {
+    pub async fn get_datagram(&self) -> Result<Datagram> {
         poll_fn(|cx| self.datagram_rx.lock().poll_recv(cx))
             .await
             .ok_or(Error::Closed)
@@ -281,17 +296,16 @@ impl Multiplexor {
     /// guaranteed that the datagram has not been sent.
     #[tracing::instrument(skip(self), level = "debug")]
     #[inline]
-    pub async fn send_datagram<'data>(
-        &self,
-        flow_id: u32,
-        target_host: &[u8],
-        target_port: u16,
-        data: &[u8],
-    ) -> Result<()> {
-        if target_host.len() > 255 {
+    pub async fn send_datagram(&self, datagram: Datagram) -> Result<()> {
+        if datagram.target_host.len() > 255 {
             return Err(Error::DatagramHostTooLong);
         }
-        let frame = Frame::new_datagram(flow_id, target_host, target_port, data);
+        let frame = Frame::new_datagram_owned(
+            datagram.flow_id,
+            datagram.target_host,
+            datagram.target_port,
+            datagram.data,
+        );
         self.inner
             .tx_frame_tx
             .send(frame.finalize())

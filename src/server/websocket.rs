@@ -6,11 +6,11 @@ use super::WebSocket;
 use super::forwarder::tcp_forwarder_on_channel;
 use super::forwarder::udp_forward_to;
 use crate::config;
-use penguin_mux::{DatagramFrame, Dupe, Multiplexor, timing::OptionalDuration};
+use penguin_mux::{Datagram, Dupe, Multiplexor, timing::OptionalDuration};
 use tokio::{sync::mpsc, task::JoinSet};
 use tracing::{debug, error, trace, warn};
 
-pub(super) type MuxStream = penguin_mux::MuxStream;
+pub use penguin_mux::MuxStream;
 
 /// Multiplex the `WebSocket` connection and handle the forwarding requests.
 #[tracing::instrument(skip(ws_stream), level = "debug")]
@@ -20,7 +20,7 @@ pub async fn handle_websocket(ws_stream: WebSocket) {
     let mut jobs = JoinSet::new();
     // Channel for listeners to send UDP datagrams to the main loop
     let (datagram_send_tx, mut datagram_send_rx) =
-        mpsc::channel::<DatagramFrame<'static>>(config::INCOMING_DATAGRAM_BUFFER_SIZE);
+        mpsc::channel::<Datagram>(config::INCOMING_DATAGRAM_BUFFER_SIZE);
     loop {
         trace!("server WebSocket loop");
         tokio::select! {

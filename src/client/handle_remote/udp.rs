@@ -5,8 +5,8 @@
 use super::FatalError;
 use crate::client::HandlerResources;
 use crate::config;
-use penguin_mux::{DatagramFrame, Dupe};
-use std::borrow::Cow;
+use bytes::Bytes;
+use penguin_mux::{Datagram, Dupe};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::UdpSocket;
@@ -44,12 +44,11 @@ pub(super) async fn handle_udp(
         let client_id = handler_resources
             .add_udp_client(addr, socket.dupe(), false)
             .await;
-        let frame = DatagramFrame {
-            target_host: Cow::Borrowed(rhost.as_bytes()),
+        let frame = Datagram {
+            target_host: Bytes::from(rhost),
             target_port: rport,
-            sport: client_id,
-            dport: 0,
-            data: Cow::Owned(buf),
+            flow_id: client_id,
+            data: Bytes::from(buf),
         };
         // This fails only if main has exited, which is a fatal error.
         handler_resources
@@ -76,13 +75,12 @@ pub(super) async fn handle_udp_stdio(
             .read_line(&mut line)
             .await
             .map_err(FatalError::ClientIo)?;
-        let line: Vec<u8> = line.into();
-        let frame = DatagramFrame {
-            target_host: Cow::Borrowed(rhost.as_bytes()),
+        let frame = Datagram {
+            target_host: Bytes::from_static(rhost.as_bytes()),
             target_port: rport,
-            sport: 0,
-            dport: 0,
-            data: Cow::Owned(line),
+            // TODO: fix this flow id
+            flow_id: 0,
+            data: Bytes::from(line),
         };
         // This fails only if main has exited, which is a fatal error.
         handler_resources
@@ -130,7 +128,7 @@ mod tests {
             .client_addr_map
             .get(&(local_addr, ([127, 0, 0, 1], 14196).into()))
             .unwrap();
-        assert_eq!(frame.sport, client_id);
+        assert_eq!(frame.flow_id, client_id);
         forwarding_task.abort();
     }
 }

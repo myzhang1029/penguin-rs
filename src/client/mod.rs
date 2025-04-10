@@ -12,7 +12,7 @@ use crate::arg::ClientArgs;
 use crate::config;
 use bytes::Bytes;
 use penguin_mux::timing::{Backoff, OptionalDuration};
-use penguin_mux::{DatagramFrame, Dupe, IntKey, Multiplexor};
+use penguin_mux::{Datagram, Dupe, IntKey, Multiplexor, MuxStream};
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -46,8 +46,6 @@ pub enum Error {
     RemoteDisconnected,
 }
 
-type MuxStream = penguin_mux::MuxStream;
-
 // Send the information about how to send the stream to the listener
 /// Type that local listeners send to the main loop to request a connection
 #[derive(Debug)]
@@ -65,7 +63,7 @@ struct HandlerResources {
     /// Send a request for a TCP channel to the main loop
     stream_command_tx: mpsc::Sender<StreamCommand>,
     /// Send a UDP datagram to the main loop
-    datagram_tx: mpsc::Sender<DatagramFrame<'static>>,
+    datagram_tx: mpsc::Sender<Datagram>,
     /// The map of client IDs to UDP sockets and the map of client addresses to client IDs
     udp_client_map: Arc<RwLock<ClientIdMaps>>,
 }
@@ -88,7 +86,7 @@ impl HandlerResources {
         addr: SocketAddr,
         socket: Arc<UdpSocket>,
         socks5: bool,
-    ) -> u16 {
+    ) -> u32 {
         // `expect`: at this point `socket` should be bound. Otherwise, it's a bug.
         let our_addr = socket
             .local_addr()
@@ -106,7 +104,7 @@ impl HandlerResources {
             *client_id
         } else {
             // The client doesn't exist, add it to the maps
-            let client_id = u16::next_available_key(client_id_map);
+            let client_id = u32::next_available_key(client_id_map);
             client_id_map.insert(
                 client_id,
                 ClientIdMapEntry::new(addr, our_addr, socket, socks5),
@@ -144,11 +142,11 @@ impl HandlerResources {
 #[allow(clippy::module_name_repetitions)]
 pub struct ClientIdMaps {
     /// Client ID -> Client ID map entry
-    client_id_map: HashMap<u16, ClientIdMapEntry>,
+    client_id_map: HashMap<u32, ClientIdMapEntry>,
     /// (client address, our address) -> client ID
     /// We need our address to make sure we send replies with the correct source address
     /// because different remotes and socks5 associations use different listners
-    client_addr_map: HashMap<(SocketAddr, SocketAddr), u16>,
+    client_addr_map: HashMap<(SocketAddr, SocketAddr), u32>,
 }
 
 impl ClientIdMaps {
@@ -163,7 +161,7 @@ impl ClientIdMaps {
     /// Send a datagram to a client
     async fn send_datagram(
         lock_self: &RwLock<Self>,
-        client_id: u16,
+        client_id: u32,
         data: &[u8],
     ) -> Option<std::io::Result<()>> {
         if client_id == 0 {
@@ -338,7 +336,7 @@ async fn on_connected(
     ws_stream: tokio_tungstenite::WebSocketStream<MaybeTlsStream<TcpStream>>,
     stream_command_rx: &mut mpsc::Receiver<StreamCommand>,
     failed_stream_request: &mut Option<StreamCommand>,
-    datagram_rx: &mut mpsc::Receiver<DatagramFrame<'static>>,
+    datagram_rx: &mut mpsc::Receiver<Datagram>,
     udp_client_map: Arc<RwLock<ClientIdMaps>>,
     keepalive: OptionalDuration,
     channel_timeout: Duration,
@@ -365,7 +363,7 @@ async fn on_connected(
                 }
             }
             Ok(dgram_frame) = mux.get_datagram() => {
-                let client_id = dgram_frame.dport;
+                let client_id = dgram_frame.flow_id;
                 let data = dgram_frame.data;
                 match ClientIdMaps::send_datagram(&udp_client_map, client_id, data.as_ref()).await {
                     Some(Ok(())) => {
