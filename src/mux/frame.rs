@@ -349,7 +349,7 @@ impl<'data> Frame<'data> {
     /// Copy the frame into a [`FinalizedFrame`]
     #[must_use]
     #[inline]
-    pub(crate) fn finalize(self) -> FinalizedFrame {
+    pub(crate) fn finalize(&self) -> FinalizedFrame {
         FinalizedFrame(Bytes::from(Vec::from(self)))
     }
 }
@@ -422,7 +422,7 @@ impl TryFrom<Bytes> for Frame<'_> {
     }
 }
 
-impl From<Frame<'_>> for Vec<u8> {
+impl From<&Frame<'_>> for Vec<u8> {
     /// Encode a [`Frame`] to bytes
     ///
     /// # Panics
@@ -430,25 +430,25 @@ impl From<Frame<'_>> for Vec<u8> {
     /// but the `target_host` field is longer than 255 octets.
     #[tracing::instrument(level = "trace")]
     #[inline]
-    fn from(frame: Frame<'_>) -> Self {
+    fn from(frame: &Frame<'_>) -> Self {
         let size = size_of::<u8>() + size_of::<u32>() + frame.payload.len();
         let opcode = OpCode::from(&frame.payload) as u8;
         let firstbyte = opcode | (proto_version::PROTOCOL_VERSION_NUMBER << 4);
         let mut encoded = Self::with_capacity(size);
         encoded.put_u8(firstbyte);
         encoded.put_u32(frame.id);
-        match frame.payload {
+        match &frame.payload {
             Payload::Connect(ConnectPayload {
                 rwnd,
                 target_port,
                 target_host,
             }) => {
-                encoded.put_u32(rwnd);
-                encoded.put_u16(target_port);
+                encoded.put_u32(*rwnd);
+                encoded.put_u16(*target_port);
                 encoded.extend(target_host.as_ref());
             }
             Payload::Acknowledge(psh_recvd_since) => {
-                encoded.put_u32(psh_recvd_since);
+                encoded.put_u32(*psh_recvd_since);
             }
             Payload::Reset | Payload::Finish => {}
             Payload::Push(data) => {
@@ -459,8 +459,8 @@ impl From<Frame<'_>> for Vec<u8> {
                 target_port,
                 target_host,
             }) => {
-                encoded.put_u8(bind_type as u8);
-                encoded.put_u16(target_port);
+                encoded.put_u8(*bind_type as u8);
+                encoded.put_u16(*target_port);
                 encoded.extend(target_host.as_ref());
             }
             Payload::Datagram(DatagramPayload {
@@ -471,7 +471,7 @@ impl From<Frame<'_>> for Vec<u8> {
                 let len_u8 =
                     u8::try_from(target_host.len()).expect("Datagram target host too long");
                 encoded.put_u8(len_u8);
-                encoded.put_u16(target_port);
+                encoded.put_u16(*target_port);
                 encoded.extend(target_host.as_ref());
                 encoded.extend(data.as_ref());
             }
@@ -480,9 +480,9 @@ impl From<Frame<'_>> for Vec<u8> {
     }
 }
 
-impl From<Frame<'_>> for Bytes {
+impl From<&Frame<'_>> for Bytes {
     #[inline]
-    fn from(frame: Frame<'_>) -> Self {
+    fn from(frame: &Frame<'_>) -> Self {
         Bytes::from(Vec::from(frame))
     }
 }
@@ -516,9 +516,9 @@ impl Debug for FinalizedFrame {
     }
 }
 
-impl<'data> From<Frame<'data>> for FinalizedFrame {
+impl<'data> From<&Frame<'data>> for FinalizedFrame {
     #[inline]
-    fn from(frame: Frame<'data>) -> Self {
+    fn from(frame: &Frame<'data>) -> Self {
         Self(Vec::from(frame).into())
     }
 }
@@ -562,7 +562,7 @@ mod tests {
                 })
             }
         );
-        let bytes = Bytes::try_from(frame.clone()).unwrap();
+        let bytes = Bytes::try_from(&frame).unwrap();
         let decoded = Frame::try_from(bytes).unwrap();
         assert_eq!(frame, decoded);
 
@@ -574,7 +574,7 @@ mod tests {
                 data: Cow::Borrowed(&[1, 2, 3, 4]),
             }),
         };
-        let bytes = Bytes::try_from(frame.clone()).unwrap();
+        let bytes = Bytes::try_from(&frame).unwrap();
         let decoded = Frame::try_from(bytes).unwrap();
         assert_eq!(frame, decoded);
     }
@@ -585,7 +585,7 @@ mod tests {
     fn test_frame_repr() {
         crate::tests::setup_logging();
         let frame = Frame::new_connect(&[0x01, 0x02, 0x03], 5678, 1234, 512);
-        let bytes = Vec::try_from(frame).unwrap();
+        let bytes = Vec::try_from(&frame).unwrap();
         assert_eq!(
             bytes,
             vec![
@@ -598,7 +598,7 @@ mod tests {
         );
 
         let frame = Frame::new_acknowledge(5678, 128);
-        let bytes = Vec::try_from(frame).unwrap();
+        let bytes = Vec::try_from(&frame).unwrap();
         assert_eq!(
             bytes,
             vec![
@@ -609,7 +609,7 @@ mod tests {
         );
 
         let frame = Frame::new_reset(1291);
-        let bytes = Vec::try_from(frame).unwrap();
+        let bytes = Vec::try_from(&frame).unwrap();
         assert_eq!(
             bytes,
             vec![
@@ -619,7 +619,7 @@ mod tests {
         );
 
         let frame = Frame::new_finish(21324);
-        let bytes = Vec::try_from(frame).unwrap();
+        let bytes = Vec::try_from(&frame).unwrap();
         assert_eq!(
             bytes,
             vec![
@@ -629,7 +629,7 @@ mod tests {
         );
 
         let frame = Frame::new_push(123443131, &[1, 2, 3, 4]);
-        let bytes = Vec::try_from(frame).unwrap();
+        let bytes = Vec::try_from(&frame).unwrap();
         assert_eq!(
             bytes,
             vec![
@@ -640,7 +640,7 @@ mod tests {
         );
 
         let frame = Frame::new_bind(42132, BindType::Datagram, &[1, 2, 3, 4], 1234);
-        let bytes = Vec::try_from(frame).unwrap();
+        let bytes = Vec::try_from(&frame).unwrap();
         assert_eq!(
             bytes,
             vec![
@@ -653,7 +653,7 @@ mod tests {
         );
 
         let frame = Frame::new_bind(42134111, BindType::Stream, &[4, 2, 3, 4], 1234);
-        let bytes = Vec::try_from(frame).unwrap();
+        let bytes = Vec::try_from(&frame).unwrap();
         assert_eq!(
             bytes,
             vec![
@@ -666,7 +666,7 @@ mod tests {
         );
 
         let frame = Frame::new_datagram(2134, &[1, 2, 3, 4], 1234, &[1, 2, 3, 4]);
-        let bytes = Vec::try_from(frame).unwrap();
+        let bytes = Vec::try_from(&frame).unwrap();
         assert_eq!(
             bytes,
             vec![
