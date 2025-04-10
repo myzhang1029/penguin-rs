@@ -72,9 +72,9 @@ pub enum Error {
     /// "The client and server MUST NOT use other WebSocket data frame types"
     #[error("Received `Text` message")]
     TextMessage,
-    /// A `SynAck` frame that does not match any pending `Syn` request.
-    #[error("Bogus `SynAck` frame")]
-    BogusSynAck,
+    /// A `Acknowledge` frame that does not match any pending `Connect` request.
+    #[error("Bogus `Acknowledge` frame")]
+    ConnAckGone,
 }
 
 /// A variant of [`std::result::Result`] with [`enum@Error`] as the error type.

@@ -685,7 +685,7 @@ mod tests {
         const COMMON_OVERHEAD_SIZE: usize = size_of::<u8>() + size_of::<u32>();
         crate::tests::setup_logging();
         let frame = Frame::new_connect(&[0x01, 0x02, 0x03], 5678, 1234, 128);
-        let payload_len  = frame.payload.len();
+        let payload_len = frame.payload.len();
         let finalized = frame.finalize();
         assert_eq!(finalized.0.len(), COMMON_OVERHEAD_SIZE + payload_len);
         assert_eq!(finalized.opcode().unwrap(), OpCode::Connect);
@@ -693,7 +693,7 @@ mod tests {
         assert_eq!(frame, decoded);
 
         let frame = Frame::new_datagram(2134, &[1, 2, 3, 4], 1234, &[1, 2, 3, 4]);
-        let payload_len  = frame.payload.len();
+        let payload_len = frame.payload.len();
         let finalized = frame.finalize();
         assert_eq!(finalized.0.len(), COMMON_OVERHEAD_SIZE + payload_len);
         assert_eq!(finalized.opcode().unwrap(), OpCode::Datagram);

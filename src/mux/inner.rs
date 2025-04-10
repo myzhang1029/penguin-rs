@@ -33,13 +33,13 @@ pub struct MuxStreamData {
     sender: mpsc::Sender<Bytes>,
     /// Whether writes should succeed.
     /// There are two cases for `false`:
-    /// 1. `Fin` has been sent.
+    /// 1. `Finish` has been sent.
     /// 2. The stream has been removed from `inner.streams`.
     // In general, our `Atomic*` types don't need more than `Relaxed` ordering
     // because we are not protecting memory accesses, but rather counting the
     // frames we have sent and received.
     can_write: Arc<AtomicBool>,
-    /// Number of `Psh` frames we are allowed to send before waiting for a `Ack` frame.
+    /// Number of `Psh` frames we are allowed to send before waiting for a `Acknowledge` frame.
     psh_send_remaining: Arc<AtomicU32>,
     /// Waker to wake up the task that sends frames because their `psh_send_remaining`
     /// has increased.
@@ -81,10 +81,10 @@ pub struct MultiplexorInner {
     /// Channel for notifying the task of a dropped `MuxStream` (to send the flow ID)
     /// Sending 0 means that the multiplexor is being dropped and the
     /// task should exit.
-    /// The reason we need `their_port` is to ensure the connection is `Rst`ed
+    /// The reason we need `their_port` is to ensure the connection is `Reset`ted
     /// if the user did not call `poll_shutdown` on the `MuxStream`.
     pub dropped_ports_tx: mpsc::UnboundedSender<u32>,
-    /// Default threshold for `Ack` replies. See [`MuxStream`] for more details.
+    /// Default threshold for `Acknowledge` replies. See [`MuxStream`] for more details.
     pub default_rwnd_threshold: u32,
 }
 
@@ -220,7 +220,7 @@ impl MultiplexorInner {
                     ws_sink.send(Message::Ping(Bytes::new())).await.map_err(Box::new)?;
                 }
                 Some(frame) = frame_rx.recv() => {
-                    // Buffer `Psh` frames, and flush everything else immediately
+                    // Buffer `Push` frames, and flush everything else immediately
                     if frame.is_empty() {
                         // Flush
                         ws_sink.flush().await
@@ -296,7 +296,7 @@ impl MultiplexorInner {
                 // Atomic ordering: It does not matter whether the user calls `poll_shutdown` or not,
                 // the stream is shut down and the final value of `can_write` is `false`.
                 stream_data.can_write.store(false, Ordering::Relaxed);
-                // If there is a writer waiting for `Ack`, wake it up because it will never receive one.
+                // If there is a writer waiting for `Acknowledge`, wake it up because it will never receive one.
                 // Waking it here and the user should receive a `BrokenPipe` error.
                 stream_data.writer_waker.wake();
             }
@@ -428,7 +428,7 @@ impl MultiplexorInner {
                 .send(Frame::new_reset(flow_id).finalize())
                 .ok()
             // Error only happens if the `frame_tx` channel is closed, at which point
-            // we don't care about sending a `Rst` frame anymore
+            // we don't care about sending a `Reset` frame anymore
         };
         match payload {
             Payload::Connect(ConnectPayload {
@@ -454,7 +454,7 @@ impl MultiplexorInner {
                 let action = self.streams.read().get(&flow_id).map(|slot| {
                     match slot {
                         MuxStreamSlot::Established(stream_data) => {
-                            // We have an established stream, so process the `Ack`
+                            // We have an established stream, so process the `Acknowledge`
                             // Atomic ordering: as long as the value is incremented atomically,
                             // whether a writer sees the new value or the old value is not
                             // important. If it sees the old value and decides to return
@@ -475,7 +475,7 @@ impl MultiplexorInner {
                         self.ack_recv_new_stream(flow_id, payload)?;
                     }
                     None => {
-                        trace!("port {flow_id} does not exist, sending `Rst`");
+                        trace!("port {flow_id} does not exist, sending `Reset`");
                         send_rst.await;
                     }
                 }
@@ -499,7 +499,7 @@ impl MultiplexorInner {
             }
             Payload::Reset => {
                 debug!("`Reset` for {flow_id}");
-                // `true` because we don't want to reply `Rst` with `Rst`.
+                // `true` because we don't want to reply `Reset` with `Reset`.
                 self.close_port(flow_id, true).await;
             }
             Payload::Push(data) => {
@@ -516,7 +516,7 @@ impl MultiplexorInner {
                     match sender.try_send(Bytes::from(data.into_owned())) {
                         Err(TrySendError::Full(_)) => {
                             // Peer does not respect the `rwnd` limit, this should not happen in normal circumstances.
-                            // let it fall through to send `Rst`.
+                            // let it fall through to send `Reset`.
                             warn!("Peer does not respect `rwnd` limit, dropping stream {flow_id}");
                             send_rst.await;
                         }
@@ -574,8 +574,8 @@ impl MultiplexorInner {
         Ok(())
     }
 
-    /// Create a new stream because this end received a `Con` frame.
-    /// Create a new `MuxStream`, add it to the map, and send an `Ack` frame.
+    /// Create a new stream because this end received a `Connect` frame.
+    /// Create a new `MuxStream`, add it to the map, and send an `Acknowledge` frame.
     /// If `our_port` is 0, a new port will be allocated.
     #[inline]
     async fn con_recv_new_stream(
@@ -628,10 +628,10 @@ impl MultiplexorInner {
             dropped_ports_tx: self.dropped_ports_tx.dupe(),
             rwnd_threshold: self.default_rwnd_threshold.min(peer_rwnd),
         };
-        // Send a `Ack`
-        // Make sure `Ack` is sent before the stream is sent to the user
+        // Send a `Acknowledge`
+        // Make sure `Acknowledge` is sent before the stream is sent to the user
         // so that the stream is `Established` when the user uses it.
-        trace!("sending `Ack`");
+        trace!("sending `Acknowledge`");
         self.tx_frame_tx
             .send(Frame::new_acknowledge(flow_id, config::RWND).finalize())
             .map_err(|_| Error::Closed)?;
@@ -677,10 +677,10 @@ impl MultiplexorInner {
         };
         // Save the TX end of the stream so we can write to it when subsequent frames arrive
         let mut streams = self.streams.write();
-        let entry = streams.get_mut(&flow_id).ok_or(Error::BogusSynAck)?;
+        let entry = streams.get_mut(&flow_id).ok_or(Error::ConnAckGone)?;
         // Change the state of the port to `Established`
         let Some(sender) = entry.establish(stream_data) else {
-            return Err(Error::BogusSynAck);
+            return Err(Error::ConnAckGone);
         };
         drop(streams);
         // Send the stream to the user
@@ -690,7 +690,7 @@ impl MultiplexorInner {
         Ok(())
     }
 
-    /// Close a port. That is, send `Rst` if `Fin` is not sent,
+    /// Close a port. That is, send `Reset` if `Finish` is not sent,
     /// and remove it from the map.
     #[tracing::instrument(skip_all, level = "info")]
     #[inline]
@@ -703,18 +703,18 @@ impl MultiplexorInner {
             // Atomic ordering:
             // Load part:
             // If the user calls `poll_shutdown`, but we see `true` here,
-            // the other end will receive a bogus `Rst` frame, which is fine.
+            // the other end will receive a bogus `Reset` frame, which is fine.
             // Store part:
             // It does not matter whether the user calls `poll_shutdown` or not,
             // the stream is shut down and the final value of `can_write` is `false`.
             let old = stream_data.can_write.swap(false, Ordering::Relaxed);
             if old && !inhibit_rst {
-                // If the user did not call `poll_shutdown`, we need to send a `Rst` frame
+                // If the user did not call `poll_shutdown`, we need to send a `Reset` frame
                 self.tx_frame_tx
                     .send(Frame::new_reset(flow_id).finalize())
                     .ok();
             }
-            // If there is a writer waiting for `Ack`, wake it up because it will never receive one.
+            // If there is a writer waiting for `Acknowledge`, wake it up because it will never receive one.
             // Waking it here and the user should receive a `BrokenPipe` error.
             stream_data.writer_waker.wake();
         }
