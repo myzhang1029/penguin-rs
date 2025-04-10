@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::*;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
+use tokio_tungstenite::tungstenite::protocol::Role;
 use tracing::{debug, info};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -15,10 +16,24 @@ pub fn setup_logging() {
         .ok();
 }
 
+async fn get_pair(
+    link_mss: Option<usize>,
+) -> (
+    tokio_tungstenite::WebSocketStream<DuplexStream>,
+    tokio_tungstenite::WebSocketStream<DuplexStream>,
+) {
+    let (client, server) = tokio::io::duplex(link_mss.unwrap_or(2048));
+    let client =
+        tokio_tungstenite::WebSocketStream::from_raw_socket(client, Role::Client, None).await;
+    let server =
+        tokio_tungstenite::WebSocketStream::from_raw_socket(server, Role::Server, None).await;
+    (client, server)
+}
+
 #[tokio::test]
 async fn connect_succeeds() {
     setup_logging();
-    let (client, server) = crate::ws::mock::get_pair(None).await;
+    let (client, server) = get_pair(None).await;
 
     let client_mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
     let server_mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
@@ -41,7 +56,7 @@ async fn connect_succeeds() {
 async fn datagram_channel_passes_data_tiny_mtu() {
     setup_logging();
     // 8 bytes is the IPv4 minimum segment size. Let's try that
-    let (client, server) = crate::ws::mock::get_pair(Some(8)).await;
+    let (client, server) = get_pair(Some(8)).await;
 
     let client_mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
     let server_mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
@@ -80,7 +95,7 @@ async fn datagram_channel_passes_data_tiny_mtu() {
 #[tokio::test]
 async fn datagram_channel_passes_data() {
     setup_logging();
-    let (client, server) = crate::ws::mock::get_pair(None).await;
+    let (client, server) = get_pair(None).await;
 
     let client_mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
     let server_mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
@@ -119,7 +134,7 @@ async fn datagram_channel_passes_data() {
 #[tokio::test]
 async fn connected_stream_passes_data_tiny_mtu_rwndminusone() {
     setup_logging();
-    let (client, server) = crate::ws::mock::get_pair(Some(8)).await;
+    let (client, server) = get_pair(Some(8)).await;
 
     let (mut client_mux, taskdata_client) = Multiplexor::new_no_task(OptionalDuration::NONE, false);
     let (mut server_mux, taskdata_server) = Multiplexor::new_no_task(OptionalDuration::NONE, false);
@@ -168,7 +183,7 @@ async fn connected_stream_passes_data_tiny_mtu_rwndminusone() {
 #[tokio::test]
 async fn connected_stream_passes_data_tiny_mtu_with_keepalive() {
     setup_logging();
-    let (client, server) = crate::ws::mock::get_pair(Some(1)).await;
+    let (client, server) = get_pair(Some(1)).await;
 
     let client_mux = Multiplexor::new(client, OptionalDuration::from_secs(1), false, None);
     let server_mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
@@ -202,7 +217,7 @@ async fn connected_stream_passes_data_tiny_mtu_with_keepalive() {
 #[tokio::test]
 async fn connected_stream_passes_data_tiny_mtu() {
     setup_logging();
-    let (client, server) = crate::ws::mock::get_pair(Some(8)).await;
+    let (client, server) = get_pair(Some(8)).await;
 
     let client_mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
     let server_mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
@@ -245,7 +260,7 @@ async fn connected_stream_passes_data_tiny_mtu() {
 #[tokio::test]
 async fn connected_stream_passes_data() {
     setup_logging();
-    let (client, server) = crate::ws::mock::get_pair(None).await;
+    let (client, server) = get_pair(None).await;
 
     let client_mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
     let server_mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
@@ -294,7 +309,7 @@ async fn test_early_eof_detected() {
 }
 
 async fn test_early_eof_detected_inner() {
-    let (client, server) = crate::ws::mock::get_pair(None).await;
+    let (client, server) = get_pair(None).await;
 
     let client_mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
     let server_mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
@@ -330,7 +345,7 @@ async fn test_early_eof_detected_inner() {
 #[tokio::test]
 async fn test_several_channels() {
     setup_logging();
-    let (client, server) = crate::ws::mock::get_pair(None).await;
+    let (client, server) = get_pair(None).await;
 
     let client_mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
     let server_mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);

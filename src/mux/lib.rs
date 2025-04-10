@@ -17,14 +17,13 @@ mod stream;
 #[cfg(test)]
 mod tests;
 pub mod timing;
-pub mod ws;
 
 use crate::frame::{BindPayload, BindType, FinalizedFrame, Frame};
 use crate::inner::MultiplexorInner;
 use crate::timing::OptionalDuration;
-use crate::ws::WebSocketStream;
 use bytes::Bytes;
 use futures_util::future::poll_fn;
+use futures_util::{Sink, Stream};
 use parking_lot::{Mutex, RwLock};
 use rand::distr::uniform::SampleUniform;
 use std::collections::HashMap;
@@ -33,6 +32,7 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::oneshot;
 use tokio::{sync::mpsc, task::JoinSet};
+use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 use tracing::{error, trace, warn};
 
 pub use crate::dupe::Dupe;
@@ -59,7 +59,7 @@ pub enum Error {
 
     /// WebSocket errors
     #[error("WebSocket Error: {0}")]
-    WebSocket(#[from] Box<crate::ws::Error>),
+    WebSocket(#[from] Box<WsError>),
 
     // These are the ones that shouldn't normally happen
     /// A `Datagram` frame with a target host longer than 255 octets.
@@ -91,29 +91,6 @@ pub struct Multiplexor {
     con_recv_stream_rx: Mutex<mpsc::Receiver<MuxStream>>,
     /// Channel for `Bnd` requests.
     bnd_request_rx: Option<Mutex<mpsc::Receiver<BindPayload<'static>>>>,
-}
-
-/// Internal type used for spawning the multiplexor task
-#[derive(Debug)]
-struct TaskData {
-    datagram_tx: mpsc::Sender<Datagram>,
-    con_recv_stream_tx: mpsc::Sender<MuxStream>,
-    tx_frame_rx: mpsc::UnboundedReceiver<FinalizedFrame>,
-    dropped_ports_rx: mpsc::UnboundedReceiver<u32>,
-    bnd_request_tx: Option<mpsc::Sender<BindPayload<'static>>>,
-}
-
-/// Datagram frame data
-#[derive(Clone, Debug)]
-pub struct Datagram {
-    /// Flow ID
-    pub flow_id: u32,
-    /// Target host
-    pub target_host: Bytes,
-    /// Target port
-    pub target_port: u16,
-    /// Data
-    pub data: Bytes,
 }
 
 impl Multiplexor {
@@ -353,6 +330,44 @@ impl Drop for Multiplexor {
     fn drop(&mut self) {
         self.inner.dropped_ports_tx.send(0).ok();
     }
+}
+
+/// Internal type used for spawning the multiplexor task
+#[derive(Debug)]
+struct TaskData {
+    datagram_tx: mpsc::Sender<Datagram>,
+    con_recv_stream_tx: mpsc::Sender<MuxStream>,
+    tx_frame_rx: mpsc::UnboundedReceiver<FinalizedFrame>,
+    dropped_ports_rx: mpsc::UnboundedReceiver<u32>,
+    bnd_request_tx: Option<mpsc::Sender<BindPayload<'static>>>,
+}
+
+/// Datagram frame data
+#[derive(Clone, Debug)]
+pub struct Datagram {
+    /// Flow ID
+    pub flow_id: u32,
+    /// Target host
+    pub target_host: Bytes,
+    /// Target port
+    pub target_port: u16,
+    /// Data
+    pub data: Bytes,
+}
+
+/// A generic WebSocket stream
+pub trait WebSocketStream:
+    Stream<Item = std::result::Result<Message, WsError>>
+    + Sink<Message, Error = WsError>
+    + Send
+    + Unpin
+    + 'static
+{
+}
+
+impl<RW> WebSocketStream for tokio_tungstenite::WebSocketStream<RW> where
+    RW: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static
+{
 }
 
 /// Randomly generate a new number

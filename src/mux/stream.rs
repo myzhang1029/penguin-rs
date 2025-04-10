@@ -260,7 +260,7 @@ mod tests {
         let rs = stream.as_mut().poll_read(&mut cx, &mut read_buf);
         assert!(matches!(rs, Poll::Ready(Ok(()))));
         assert_eq!(read_buf.filled().len(), 5);
-        assert_eq!(&read_buf.filled()[..], b"hello");
+        assert_eq!(read_buf.filled(), b"hello");
         read_buf.clear();
 
         let rs = stream.as_mut().poll_read(&mut cx, &mut read_buf);
@@ -270,7 +270,7 @@ mod tests {
         let rs = stream.as_mut().poll_read(&mut cx, &mut read_buf);
         assert!(matches!(rs, Poll::Ready(Ok(()))));
         assert_eq!(read_buf.filled().len(), 5);
-        assert_eq!(&read_buf.filled()[..], b"world");
+        assert_eq!(read_buf.filled(), b"world");
         read_buf.clear();
 
         // There should be an `Acknowledge` frame waiting for us now
