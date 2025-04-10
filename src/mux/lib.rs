@@ -12,23 +12,22 @@ mod config;
 mod dupe;
 mod frame;
 mod inner;
+mod proto_version;
 mod stream;
 #[cfg(test)]
 mod tests;
 pub mod timing;
 pub mod ws;
 
+use crate::frame::{DatagramPayload, FinalizedFrame, Frame};
 use crate::inner::MultiplexorInner;
 use crate::timing::OptionalDuration;
 use crate::ws::WebSocketStream;
-use bytes::Bytes;
-use frame::FinalizedFrame;
 use futures_util::future::poll_fn;
 use parking_lot::{Mutex, RwLock};
 use rand::distr::uniform::SampleUniform;
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::num::TryFromIntError;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::oneshot;
@@ -36,7 +35,8 @@ use tokio::{sync::mpsc, task::JoinSet};
 use tracing::{error, trace, warn};
 
 pub use crate::dupe::Dupe;
-pub use crate::frame::{DatagramFrame, Frame, StreamFrame, StreamOpCode};
+pub use crate::frame::{BindPayload, BindType};
+pub use crate::proto_version::{PROTOCOL_VERSION, PROTOCOL_VERSION_NUMBER};
 pub use crate::stream::MuxStream;
 
 /// Multiplexor error
@@ -62,9 +62,9 @@ pub enum Error {
     WebSocket(#[from] Box<crate::ws::Error>),
 
     // These are the ones that shouldn't normally happen
-    /// Datagram target host longer than 255 octets.
+    /// A `Datagram` frame with a target host longer than 255 octets.
     #[error("Datagram target host longer than 255 octets")]
-    DatagramHostTooLong(#[from] TryFromIntError),
+    DatagramHostTooLong,
     /// Received an invalid frame.
     #[error("Invalid frame: {0}")]
     InvalidFrame(#[from] frame::Error),
@@ -72,9 +72,6 @@ pub enum Error {
     /// "The client and server MUST NOT use other WebSocket data frame types"
     #[error("Received `Text` message")]
     TextMessage,
-    /// A `Con` frame carrying a non-zero-dport.
-    #[error("Received `Con` frame with non-zero dport ({0})")]
-    ConWithDport(u16),
     /// A `SynAck` frame that does not match any pending `Syn` request.
     #[error("Bogus `SynAck` frame")]
     BogusSynAck,
@@ -88,21 +85,21 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub struct Multiplexor {
     inner: MultiplexorInner,
     /// Channel of received datagram frames for processing.
-    datagram_rx: Mutex<mpsc::Receiver<DatagramFrame<'static>>>,
+    datagram_rx: Mutex<mpsc::Receiver<(u32, DatagramPayload<'static>)>>,
     /// Channel for a `Multiplexor` to receive newly
     /// established streams after the peer requests one.
     con_recv_stream_rx: Mutex<mpsc::Receiver<MuxStream>>,
     /// Channel for `Bnd` requests.
-    bnd_request_rx: Option<Mutex<mpsc::Receiver<(Bytes, u16)>>>,
+    bnd_request_rx: Option<Mutex<mpsc::Receiver<BindPayload<'static>>>>,
 }
 
 /// Internal type used for spawning the multiplexor task.
 struct TaskData {
-    datagram_tx: mpsc::Sender<DatagramFrame<'static>>,
+    datagram_tx: mpsc::Sender<(u32, DatagramPayload<'static>)>,
     con_recv_stream_tx: mpsc::Sender<MuxStream>,
     tx_frame_rx: mpsc::UnboundedReceiver<FinalizedFrame>,
-    dropped_ports_rx: mpsc::UnboundedReceiver<(u16, u16)>,
-    bnd_request_tx: Option<mpsc::Sender<(Bytes, u16)>>,
+    dropped_ports_rx: mpsc::UnboundedReceiver<u32>,
+    bnd_request_tx: Option<mpsc::Sender<BindPayload<'static>>>,
 }
 
 impl Multiplexor {
@@ -214,18 +211,18 @@ impl Multiplexor {
     #[tracing::instrument(skip(self), level = "debug")]
     pub async fn new_stream_channel(&self, host: &[u8], port: u16) -> Result<MuxStream> {
         let (stream_tx, stream_rx) = oneshot::channel();
-        let sport = {
+        let flow_id = {
             let mut streams = self.inner.streams.write();
             // Allocate a new port
-            let sport = u16::next_available_key(&*streams);
-            trace!("sport = {sport}");
-            streams.insert(sport, inner::MuxStreamSlot::Requested(stream_tx));
-            sport
+            let flow_id = u32::next_available_key(&*streams);
+            trace!("flow_id = {flow_id}");
+            streams.insert(flow_id, inner::MuxStreamSlot::Requested(stream_tx));
+            flow_id
         };
-        trace!("sending `Con`");
+        trace!("sending `Connect`");
         self.inner
             .tx_frame_tx
-            .send(StreamFrame::new_con(host, port, sport, config::RWND).finalize())
+            .send(Frame::new_connect(host, port, flow_id, config::RWND).finalize())
             .map_err(|_| Error::Closed)?;
         trace!("sending stream to user");
         let stream = stream_rx
@@ -265,7 +262,7 @@ impl Multiplexor {
     /// for a datagram, it is guaranteed that no datagram will be lost.
     #[tracing::instrument(skip(self), level = "debug")]
     #[inline]
-    pub async fn get_datagram(&self) -> Result<DatagramFrame<'static>> {
+    pub async fn get_datagram(&self) -> Result<(u32, DatagramPayload<'static>)> {
         poll_fn(|cx| self.datagram_rx.lock().poll_recv(cx))
             .await
             .ok_or(Error::Closed)
@@ -284,10 +281,20 @@ impl Multiplexor {
     /// guaranteed that the datagram has not been sent.
     #[tracing::instrument(skip(self), level = "debug")]
     #[inline]
-    pub async fn send_datagram<'data>(&self, frame: DatagramFrame<'data>) -> Result<()> {
+    pub async fn send_datagram<'data>(
+        &self,
+        flow_id: u32,
+        target_host: &[u8],
+        target_port: u16,
+        data: &[u8],
+    ) -> Result<()> {
+        if target_host.len() > 255 {
+            return Err(Error::DatagramHostTooLong);
+        }
+        let frame = Frame::new_datagram(flow_id, target_host, target_port, data);
         self.inner
             .tx_frame_tx
-            .send(frame.finalize()?)
+            .send(frame.finalize())
             .map_err(|_| Error::Closed)?;
         Ok(())
     }
@@ -303,8 +310,14 @@ impl Multiplexor {
     /// TODO
     #[tracing::instrument(skip(self), level = "debug")]
     #[inline]
-    pub async fn request_bnd(&self, host: &[u8], port: u16, request_id: u16) -> Result<()> {
-        let bnd_frame = StreamFrame::new_bnd(request_id, host, port).finalize();
+    pub async fn request_bnd(
+        &self,
+        host: &[u8],
+        port: u16,
+        request_id: u32,
+        bind_type: BindType,
+    ) -> Result<()> {
+        let bnd_frame = Frame::new_bind(request_id, bind_type, host, port).finalize();
         self.inner
             .tx_frame_tx
             .send(bnd_frame)
@@ -319,7 +332,7 @@ impl Multiplexor {
     /// This function is cancel safe. If the task is cancelled while waiting
     /// for a `Bnd` request, it is guaranteed that no request will be lost.
     #[tracing::instrument(skip(self), level = "debug")]
-    pub async fn accept_bnd_request(&self) -> Result<(Bytes, u16)> {
+    pub async fn accept_bnd_request(&self) -> Result<BindPayload<'static>> {
         if let Some(rx) = self.bnd_request_rx.as_ref() {
             poll_fn(|cx| rx.lock().poll_recv(cx))
                 .await
@@ -332,7 +345,7 @@ impl Multiplexor {
 
 impl Drop for Multiplexor {
     fn drop(&mut self) {
-        self.inner.dropped_ports_tx.send((0, 0)).ok();
+        self.inner.dropped_ports_tx.send(0).ok();
     }
 }
 

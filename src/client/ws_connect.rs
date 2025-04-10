@@ -3,10 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use crate::arg::ClientArgs;
-use crate::proto_version::PROTOCOL_VERSION;
 use crate::tls::make_tls_connector;
 use http::header::HeaderValue;
-use penguin_mux::Dupe;
+use penguin_mux::{Dupe, PROTOCOL_VERSION};
 use thiserror::Error;
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, handshake::client::Request};

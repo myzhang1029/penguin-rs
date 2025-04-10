@@ -2,9 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use crate::frame::FinalizedFrame;
-
-use super::frame::StreamFrame;
+use crate::frame::{FinalizedFrame, Frame};
 use bytes::Bytes;
 use futures_util::task::AtomicWaker;
 use std::io;
@@ -21,10 +19,8 @@ use tracing::{debug, trace, warn};
 pub struct MuxStream {
     /// Receive stream frames
     pub(super) frame_rx: mpsc::Receiver<Bytes>,
-    /// Our port
-    pub(super) our_port: u16,
-    /// Port of the other end
-    pub(super) their_port: u16,
+    /// Flow ID
+    pub(super) flow_id: u32,
     /// Forwarding destination. Only used on `Role::Server`
     pub dest_host: Bytes,
     /// Forwarding destination port. Only used on `Role::Server`
@@ -43,7 +39,7 @@ pub struct MuxStream {
     /// See `MultiplexorInner`.
     pub(super) frame_tx: mpsc::UnboundedSender<FinalizedFrame>,
     /// See `MultiplexorInner`.
-    pub(super) dropped_ports_tx: mpsc::UnboundedSender<(u16, u16)>,
+    pub(super) dropped_ports_tx: mpsc::UnboundedSender<u32>,
     /// Number of `Psh` frames between `Ack`s:
     /// If too low, `Ack`s will consume too much bandwidth;
     /// If too high, writers may block.
@@ -53,8 +49,7 @@ pub struct MuxStream {
 impl std::fmt::Debug for MuxStream {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MuxStream")
-            .field("our_port", &self.our_port)
-            .field("their_port", &self.their_port)
+            .field("flow_id", &self.flow_id)
             .field("dest_host", &self.dest_host)
             .field("dest_port", &self.dest_port)
             .field("can_write", &self.can_write)
@@ -74,7 +69,7 @@ impl Drop for MuxStream {
     fn drop(&mut self) {
         // Notify the task that this port is no longer in use
         self.dropped_ports_tx
-            .send((self.our_port, self.their_port))
+            .send(self.flow_id)
             // Maybe the task has already exited, who knows
             .ok();
     }
@@ -105,26 +100,23 @@ impl AsyncRead for MuxStream {
             self.buf = next.unwrap();
             // Atomic ordering: as long as we atomically increment the counter,
             // the counter is correct. If another reader reads the new value here,
-            // before we reset the counter, both of us will send an `Ack` frame.
-            // However, one of us will send an `Ack` frame with a value of 0,
+            // before we reset the counter, both of us will send an `Acknowledge` frame.
+            // However, one of us will send an `Acknowledge` frame with a value of 0,
             // which is harmless.
             let new = self.psh_recvd_since.fetch_add(1, Ordering::Relaxed) + 1;
             if new >= self.rwnd_threshold {
                 // Reset the counter
                 // Atomic ordering: as long as we use the atomically-fetched value
-                // to send an `Ack` frame, the net amount
-                // `Psh` frames received - `Ack`ed amount is correct.
+                // to send an `Acknowledge` frame, the net amount
+                // `Push` frames received - `Acknowledge`d amount is correct.
                 let amount_to_ack = self.psh_recvd_since.swap(0, Ordering::Relaxed);
-                // Send an `Ack` frame
-                debug!("sending `Ack` of {amount_to_ack} frames");
+                // Send an `Acknowledge` frame
+                debug!("sending `Acknowledge` of {amount_to_ack} frames");
                 self.frame_tx
-                    .send(
-                        StreamFrame::new_ack(self.our_port, self.their_port, amount_to_ack)
-                            .finalize(),
-                    )
+                    .send(Frame::new_acknowledge(self.flow_id, amount_to_ack).finalize())
                     .ok();
                 // If the previous line fails, the task has exited.
-                // In this case, we don't care about the `Ack` frame and the
+                // In this case, we don't care about the `Acknowledge` frame and the
                 // user will discover the error when they try to write or read
                 // to EOF.
             }
@@ -197,7 +189,7 @@ impl AsyncWrite for MuxStream {
             }
             trace!("congestion window race condition, retrying");
         }
-        let frame = StreamFrame::new_psh(self.our_port, self.their_port, buf).finalize();
+        let frame = Frame::new_push(self.flow_id, buf).finalize();
         self.frame_tx.send(frame).map_err(|_| BrokenPipe)?;
         trace!("sent a frame");
         Poll::Ready(Ok(buf.len()))
@@ -213,21 +205,21 @@ impl AsyncWrite for MuxStream {
     }
 
     /// Close the write end of the stream (`shutdown(SHUT_WR)`).
-    /// This function will send a [`Fin`](crate::frame::StreamFlag::Fin) frame
+    /// This function will send a [`Finish`](crate::frame::OpCode::Finish) frame
     /// to the remote peer.
     #[tracing::instrument(skip(_cx), level = "trace")]
     #[inline]
     fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        // There is no need to send a `Fin` frame if the mux task has already removed the stream
+        // There is no need to send a `Finish` frame if the mux task has already removed the stream
         // because either:
         // 1. `MuxStream` was dropped before `poll_shutdown` is completed and the mux task should
-        //    have already sent a `Rst` frame.
+        //    have already sent a `Reset` frame.
         // 2. The entire mux task has been dropped, so we will only get `BrokenPipe` error.
         // Atomic ordering: see `inner.rs` -> `close_port`.
-        // As a summary, duplicate `Fin`/`Rst` frames are harmless.
+        // As a summary, duplicate `Finish`/`Reset` frames are harmless.
         if self.can_write.load(Ordering::Relaxed) {
             self.frame_tx
-                .send(StreamFrame::new_fin(self.our_port, self.their_port).finalize())
+                .send(Frame::new_finish(self.flow_id).finalize())
                 .map_err(|_| BrokenPipe)?;
             // Atomic ordering: see `inner.rs` -> `shutdown` and `close_port`.
             self.can_write.store(false, Ordering::Relaxed);

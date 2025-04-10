@@ -54,33 +54,35 @@ WebSocket control frames MAY be used as specified in RFC 6455.
 
 The payload of a WebSocket binary frame MUST be a Penguin frame.
 
-#### Stream Frame
-A stream frame is used to tunnel a TCP stream.
-
-Stream Frame Format:
+Frame Format:
 ```
 0                   1                   2                   3
 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-| Type (1 byte) |  Op (1 byte)  |     Source Port (2 bytes)     |
+|  Ver  |  Op   |              Flow ID (4 bytes)                |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|   Destination Port (2 bytes)  |         Data (variable)       |
+|   continued   |                Data (variable)                |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
 
-- Type: `0x01` for a stream frame.
+- Ver: 4 bits, the version of the Penguin protocol. The current version is `0x07`.
 
-- Operation code: `0x00` is a `Con` frame, `0x02` is an `Ack` frame,
-  `0x03` is a `Rst` frame, `0x04` is a `Fin` frame, `0x05` is a `Psh` frame,
-  `0x06` is a `Bnd` frame. `0x01` is reserved for compatibility.
+- Op: 4 bits, the operation code of the frame.
+  - `0x00`: `Connection` frame
+  - `0x01`: `Acknowledge` frame
+  - `0x02`: `Reset` frame
+  - `0x03`: `Finish` frame
+  - `0x04`: `Push` frame
+  - `0x05`: `Bind` frame
+  - `0x06`: `Datagram` frame
 
-- Source Port: a 16-bit unsigned integer in network byte order chosen by the
-  initiator of the stream.
+- Flow ID: a 32-bit unsigned integer in network byte order uniquely identifying
+  the logical stream or datagram. Stream, datagram, and Bind operations share
+  the same flow ID space.
 
-- Destination Port: a 16-bit unsigned integer in network byte order chosen
-  by the other end of the stream.
+- Data: the payload of the frame, which varies based on the operation code.
 
-- Data: the payload of the frame.
+
 
 #### Datagram Frame
 A datagram frame is used to forward a UDP datagram.

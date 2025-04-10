@@ -2,14 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use super::config;
-use super::dupe::Dupe;
-use super::frame::{DatagramFrame, Frame, StreamFrame, StreamOpCode};
-use super::stream::MuxStream;
-use super::{Error, IntKey, Result};
-use crate::frame::{FinalizedFrame, StreamPayload};
+use crate::config;
+use crate::dupe::Dupe;
+use crate::frame::{
+    BindPayload, ConnectPayload, DatagramPayload, FinalizedFrame, Frame, OpCode, Payload,
+};
+use crate::stream::MuxStream;
 use crate::timing::{OptionalDuration, OptionalInterval};
 use crate::ws::{Message, WebSocketStream};
+use crate::{Error, Result};
 use bytes::Bytes;
 use futures_util::future::poll_fn;
 use futures_util::stream::{SplitSink, SplitStream};
@@ -24,7 +25,7 @@ use std::task::Poll;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::MissedTickBehavior;
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 #[derive(Debug)]
 pub struct MuxStreamData {
@@ -75,15 +76,14 @@ pub struct MultiplexorInner {
     pub tx_frame_tx: mpsc::UnboundedSender<FinalizedFrame>,
     /// Interval between keepalive `Ping`s
     pub keepalive_interval: OptionalDuration,
-    /// Open stream channels: `our_port` -> `MuxStreamData`
-    pub streams: Arc<RwLock<HashMap<u16, MuxStreamSlot>>>,
-    /// Channel for notifying the task of a dropped `MuxStream`
-    /// (in the form (`our_port`, `their_port`)).
-    /// Sending (0, _) means that the multiplexor is being dropped and the
+    /// Open stream channels: `flow_id` -> `MuxStreamData`
+    pub streams: Arc<RwLock<HashMap<u32, MuxStreamSlot>>>,
+    /// Channel for notifying the task of a dropped `MuxStream` (to send the flow ID)
+    /// Sending 0 means that the multiplexor is being dropped and the
     /// task should exit.
     /// The reason we need `their_port` is to ensure the connection is `Rst`ed
     /// if the user did not call `poll_shutdown` on the `MuxStream`.
-    pub dropped_ports_tx: mpsc::UnboundedSender<(u16, u16)>,
+    pub dropped_ports_tx: mpsc::UnboundedSender<u32>,
     /// Default threshold for `Ack` replies. See [`MuxStream`] for more details.
     pub default_rwnd_threshold: u32,
 }
@@ -147,12 +147,15 @@ impl MultiplexorInner {
             poll_fn(|cx| {
                 if let Poll::Ready(r) = process_dropped_ports_task_fut.as_mut().poll(cx) {
                     let should_drain_frame_rx = r.is_ok();
+                    debug!("mux dropped ports task finished: {r:?}");
                     return Poll::Ready((r, should_drain_frame_rx));
                 }
                 if let Poll::Ready(r) = process_ws_next_fut.as_mut().poll(cx) {
+                    debug!("mux ws next task finished: {r:?}");
                     return Poll::Ready((r, false));
                 }
                 if let Poll::Ready(r) = process_frame_recv_task_fut.as_mut().poll(cx) {
+                    debug!("mux frame recv task finished: {r:?}");
                     return Poll::Ready((r, false));
                 }
                 Poll::Pending
@@ -178,15 +181,15 @@ impl MultiplexorInner {
     #[inline]
     pub async fn process_dropped_ports_task(
         &self,
-        dropped_ports_rx: &mut mpsc::UnboundedReceiver<(u16, u16)>,
+        dropped_ports_rx: &mut mpsc::UnboundedReceiver<u32>,
     ) -> Result<()> {
-        while let Some((our_port, their_port)) = dropped_ports_rx.recv().await {
-            if our_port == 0 {
+        while let Some(flow_id) = dropped_ports_rx.recv().await {
+            if flow_id == 0 {
                 // `our_port` is `0`, which means the multiplexor itself is being dropped.
                 debug!("mux dropped");
                 break;
             }
-            self.close_port(our_port, their_port, false).await;
+            self.close_port(flow_id, false).await;
         }
         // None: only happens when the last sender (i.e. `dropped_ports_tx` in `MultiplexorInner`)
         // is dropped,
@@ -218,7 +221,7 @@ impl MultiplexorInner {
                 }
                 Some(frame) = frame_rx.recv() => {
                     // Buffer `Psh` frames, and flush everything else immediately
-                    if frame.is_stream_with_opcode(StreamOpCode::Psh) {
+                    if frame.opcode()? == OpCode::Push {
                         ws_sink.feed(Message::Binary(frame.into())).await
                     } else if frame.is_empty() {
                         // Flush
@@ -246,9 +249,9 @@ impl MultiplexorInner {
     async fn process_ws_next<S: WebSocketStream>(
         &self,
         ws_stream: &mut SplitStream<S>,
-        datagram_tx: &mpsc::Sender<DatagramFrame<'static>>,
+        datagram_tx: &mpsc::Sender<(u32, DatagramPayload<'static>)>,
         con_recv_stream_tx: &mpsc::Sender<MuxStream>,
-        bnd_request_tx: Option<&mpsc::Sender<(Bytes, u16)>>,
+        bnd_request_tx: Option<&mpsc::Sender<BindPayload<'static>>>,
     ) -> Result<()> {
         loop {
             match ws_stream.next().await {
@@ -281,7 +284,7 @@ impl MultiplexorInner {
         &self,
         should_drain_frame_rx: bool,
         mut ws: S,
-        datagram_tx: mpsc::Sender<DatagramFrame<'static>>,
+        datagram_tx: mpsc::Sender<(u32, DatagramPayload<'static>)>,
         con_recv_stream_tx: mpsc::Sender<MuxStream>,
         mut frame_rx: mpsc::UnboundedReceiver<FinalizedFrame>,
     ) -> Result<()> {
@@ -357,37 +360,16 @@ impl MultiplexorInner {
     async fn process_message(
         &self,
         msg: Message,
-        datagram_tx: &mpsc::Sender<DatagramFrame<'static>>,
+        datagram_tx: &mpsc::Sender<(u32, DatagramPayload<'static>)>,
         con_recv_stream_tx: &mpsc::Sender<MuxStream>,
-        bnd_request_tx: Option<&mpsc::Sender<(Bytes, u16)>>,
+        bnd_request_tx: Option<&mpsc::Sender<BindPayload<'static>>>,
     ) -> Result<bool> {
         match msg {
             Message::Binary(data) => {
                 let frame = data.try_into()?;
-                match frame {
-                    Frame::Datagram(datagram_frame) => {
-                        trace!("received datagram frame: {datagram_frame:?}");
-                        // Only fails if the receiver is dropped or the queue is full.
-                        // The first case means the multiplexor itself is dropped;
-                        // In the second case, we just drop the frame to avoid blocking.
-                        // It is UDP, after all.
-                        if let Err(e) = datagram_tx.try_send(datagram_frame) {
-                            match e {
-                                TrySendError::Full(_) => {
-                                    warn!("dropped datagram frame: {e}");
-                                }
-                                TrySendError::Closed(_) => {
-                                    return Err(Error::Closed);
-                                }
-                            }
-                        }
-                    }
-                    Frame::Stream(stream_frame) => {
-                        trace!("received stream frame: {stream_frame:?}");
-                        self.process_stream_frame(stream_frame, con_recv_stream_tx, bnd_request_tx)
-                            .await?;
-                    }
-                }
+                trace!("received stream frame: {frame:?}");
+                self.process_frame(frame, datagram_tx, con_recv_stream_tx, bnd_request_tx)
+                    .await?;
                 Ok(false)
             }
             Message::Ping(_data) => {
@@ -415,53 +397,48 @@ impl MultiplexorInner {
 
     /// Process a stream frame
     /// Does the following:
-    /// - If `flag` is `Con`,
-    ///   - Find an available `dport` and send a `Ack`.
+    /// - If `flag` is `Connect`,
+    ///   - Find an available `dport` and send a `Acknowledge`.
     ///   - Create a new `MuxStream` and send it to the `stream_tx` channel.
-    /// - If `flag` is `Ack`,
+    /// - If `flag` is `Acknowledge`,
     ///   - Existing stream with the matching `dport`: increment the `psh_send_remaining` counter.
     ///   - New stream: create a `MuxStream` and send it to the `stream_tx` channel.
-    /// - If `flag` is `Bnd`,
-    ///   - Send the request to the user if we are accepting `Bnd` requests and reply `Fin`.
-    ///   - Otherwise, send back a `Rst` frame.
+    /// - If `flag` is `Bind`,
+    ///   - Send the request to the user if we are accepting `Bind` requests and reply `Finish`.
+    ///   - Otherwise, send back a `Reset` frame.
     /// - Otherwise, we find the sender with the matching `dport` and
     ///   - Send the data to the sender.
     ///   - If the receiver is closed or the port does not exist, send back a
-    ///     `Rst` frame.
+    ///     `Reset` frame.
     #[tracing::instrument(skip_all, level = "trace")]
     #[inline]
-    async fn process_stream_frame(
+    async fn process_frame(
         &self,
-        stream_frame: StreamFrame<'static>,
+        frame: Frame<'static>,
+        datagram_tx: &mpsc::Sender<(u32, DatagramPayload<'static>)>,
         con_recv_stream_tx: &mpsc::Sender<MuxStream>,
-        bnd_request_tx: Option<&mpsc::Sender<(Bytes, u16)>>,
+        bnd_request_tx: Option<&mpsc::Sender<BindPayload<'static>>>,
     ) -> Result<()> {
-        let StreamFrame {
-            dport: our_port,
-            sport: their_port,
+        let Frame {
+            id: flow_id,
             payload,
-        } = stream_frame;
+        } = frame;
         let send_rst = async {
             self.tx_frame_tx
-                .send(StreamFrame::new_rst(our_port, their_port).finalize())
+                .send(Frame::new_reset(flow_id).finalize())
                 .ok()
             // Error only happens if the `frame_tx` channel is closed, at which point
             // we don't care about sending a `Rst` frame anymore
         };
         match payload {
-            StreamPayload::Con {
+            Payload::Connect(ConnectPayload {
                 rwnd: peer_rwnd,
                 target_host,
                 target_port,
-            } => {
-                if our_port != 0 {
-                    error!("Received `Con` with non-zero dport {our_port}");
-                    // just bail because this is a protocol violation
-                    return Err(Error::ConWithDport(our_port));
-                }
+            }) => {
                 // In this case, `target_host` is always owned already
                 self.con_recv_new_stream(
-                    their_port,
+                    flow_id,
                     Bytes::from(target_host.into_owned()),
                     target_port,
                     peer_rwnd,
@@ -469,12 +446,12 @@ impl MultiplexorInner {
                 )
                 .await?;
             }
-            StreamPayload::Ack(payload) => {
-                trace!("received `Ack` for {our_port}");
+            Payload::Acknowledge(payload) => {
+                trace!("received `Acknowledge` for {flow_id}");
                 // Two cases:
                 // 1. Peer acknowledged `Con`
                 // 2. Peer acknowledged some `Psh` frames
-                let action = self.streams.read().get(&our_port).map(|slot| {
+                let action = self.streams.read().get(&flow_id).map(|slot| {
                     match slot {
                         MuxStreamSlot::Established(stream_data) => {
                             // We have an established stream, so process the `Ack`
@@ -494,18 +471,18 @@ impl MultiplexorInner {
                 match action {
                     Some(true) => debug!("peer processed {payload} frames"),
                     Some(false) => {
-                        debug!("new stream {our_port} -> {their_port} with peer rwnd {payload}");
-                        self.ack_recv_new_stream(our_port, their_port, payload)?;
+                        debug!("new stream {flow_id} with peer rwnd {payload}");
+                        self.ack_recv_new_stream(flow_id, payload)?;
                     }
                     None => {
-                        trace!("port {our_port} does not exist, sending `Rst`");
+                        trace!("port {flow_id} does not exist, sending `Rst`");
                         send_rst.await;
                     }
                 }
             }
-            StreamPayload::Fin => {
+            Payload::Finish => {
                 let sender = if let Some(MuxStreamSlot::Established(stream_data)) =
-                    self.streams.read().get(&our_port)
+                    self.streams.read().get(&flow_id)
                 {
                     Some(stream_data.sender.dupe())
                 } else {
@@ -516,18 +493,18 @@ impl MultiplexorInner {
                 if let Some(sender) = sender {
                     sender.send(Bytes::new()).await.ok();
                 } else {
-                    warn!("Bogus `Fin` frame {their_port} -> {our_port}");
+                    warn!("Bogus `Finish` frame {flow_id}");
                 }
                 // And our end can still send
             }
-            StreamPayload::Rst => {
-                debug!("`Rst` for {our_port}");
+            Payload::Reset => {
+                debug!("`Reset` for {flow_id}");
                 // `true` because we don't want to reply `Rst` with `Rst`.
-                self.close_port(our_port, their_port, true).await;
+                self.close_port(flow_id, true).await;
             }
-            StreamPayload::Psh(data) => {
+            Payload::Push(data) => {
                 let sender = if let Some(MuxStreamSlot::Established(stream_data)) =
-                    self.streams.read().get(&our_port)
+                    self.streams.read().get(&flow_id)
                 {
                     Some(stream_data.sender.dupe())
                 } else {
@@ -540,9 +517,7 @@ impl MultiplexorInner {
                         Err(TrySendError::Full(_)) => {
                             // Peer does not respect the `rwnd` limit, this should not happen in normal circumstances.
                             // let it fall through to send `Rst`.
-                            warn!(
-                                "Peer does not respect `rwnd` limit, dropping stream {our_port} -> {their_port}"
-                            );
+                            warn!("Peer does not respect `rwnd` limit, dropping stream {flow_id}");
                             send_rst.await;
                         }
                         Err(TrySendError::Closed(_)) => {
@@ -555,28 +530,44 @@ impl MultiplexorInner {
                         Ok(()) => (),
                     }
                 } else {
-                    warn!("Bogus `Psh` frame {their_port} -> {our_port}");
+                    warn!("Bogus `Push` frame {flow_id}");
                     send_rst.await;
                 }
             }
-            StreamPayload::Bnd {
-                target_host,
-                target_port,
-            } => {
+            Payload::Bind(payload) => {
                 if let Some(sender) = bnd_request_tx {
-                    let target_host = Bytes::from(target_host.into_owned());
-                    debug!("received `Bnd` request: [{target_host:?}]:{target_port}");
-                    if let Err(e) = sender.send((target_host, target_port)).await {
-                        warn!("Failed to send `Bnd` request: {e}");
+                    debug!(
+                        "received `Bind` request: [{:?}]:{}",
+                        payload.target_host, payload.target_port
+                    );
+                    if let Err(e) = sender.send(payload).await {
+                        warn!("Failed to send `Bind` request: {e}");
                     }
                     self.tx_frame_tx
-                        .send(StreamFrame::new_fin(our_port, their_port).finalize())
+                        .send(Frame::new_finish(flow_id).finalize())
                         .ok();
                 } else {
-                    trace!("received `Bnd` request but not accepting, sending `Rst`");
+                    info!("Received `Bind` request but configured to not accept such requests");
                     self.tx_frame_tx
-                        .send(StreamFrame::new_rst(our_port, their_port).finalize())
+                        .send(Frame::new_reset(flow_id).finalize())
                         .ok();
+                }
+            }
+            Payload::Datagram(payload) => {
+                trace!("received datagram frame with flow_id {flow_id}: {payload:?}");
+                // Only fails if the receiver is dropped or the queue is full.
+                // The first case means the multiplexor itself is dropped;
+                // In the second case, we just drop the frame to avoid blocking.
+                // It is UDP, after all.
+                if let Err(e) = datagram_tx.try_send((flow_id, payload)) {
+                    match e {
+                        TrySendError::Full(_) => {
+                            warn!("dropped datagram frame: {e}");
+                        }
+                        TrySendError::Closed(_) => {
+                            return Err(Error::Closed);
+                        }
+                    }
                 }
             }
         }
@@ -589,7 +580,7 @@ impl MultiplexorInner {
     #[inline]
     async fn con_recv_new_stream(
         &self,
-        their_port: u16,
+        flow_id: u32,
         dest_host: Bytes,
         dest_port: u16,
         peer_rwnd: u32,
@@ -601,14 +592,20 @@ impl MultiplexorInner {
         let psh_send_remaining = Arc::new(AtomicU32::new(peer_rwnd));
         let writer_waker = Arc::new(AtomicWaker::new());
         // Scope the following block to reduce locked time
-        let our_port = {
+        {
             // Save the TX end of the stream so we can write to it when subsequent frames arrive
             let mut streams = self.streams.write();
-            // Allocate a new port
-            let our_port = u16::next_available_key(&streams);
-            trace!("port {our_port} allocated");
+            if streams.contains_key(&flow_id) {
+                debug!("resetting `Connnect` with in-use flow_id {flow_id}");
+                self.tx_frame_tx
+                    .send(Frame::new_reset(flow_id).finalize())
+                    .ok();
+                // The existing connection at the same `flow_id` is not affected
+                // TODO: test this case
+                return Ok(());
+            }
             streams.insert(
-                our_port,
+                flow_id,
                 MuxStreamSlot::Established(MuxStreamData {
                     sender: frame_tx,
                     can_write: can_write.dupe(),
@@ -616,12 +613,10 @@ impl MultiplexorInner {
                     writer_waker: writer_waker.dupe(),
                 }),
             );
-            our_port
         };
         let stream = MuxStream {
             frame_rx,
-            our_port,
-            their_port,
+            flow_id,
             dest_host,
             dest_port,
             can_write,
@@ -638,7 +633,7 @@ impl MultiplexorInner {
         // so that the stream is `Established` when the user uses it.
         trace!("sending `Ack`");
         self.tx_frame_tx
-            .send(StreamFrame::new_ack(our_port, their_port, config::RWND).finalize())
+            .send(Frame::new_acknowledge(flow_id, config::RWND).finalize())
             .map_err(|_| Error::Closed)?;
         // At the con_recv side, we use `con_recv_stream_tx` to send the new stream to the
         // user.
@@ -654,7 +649,7 @@ impl MultiplexorInner {
     /// Create a new `MuxStream` by finalizing a Con/Ack handshsake and
     /// change the state of the port to `Established`.
     #[inline]
-    fn ack_recv_new_stream(&self, our_port: u16, their_port: u16, peer_rwnd: u32) -> Result<()> {
+    fn ack_recv_new_stream(&self, flow_id: u32, peer_rwnd: u32) -> Result<()> {
         // `tx` is our end, `rx` is the user's end
         let (frame_tx, frame_rx) = mpsc::channel(config::RWND_USIZE);
         let can_write = Arc::new(AtomicBool::new(true));
@@ -668,8 +663,7 @@ impl MultiplexorInner {
         };
         let stream = MuxStream {
             frame_rx,
-            our_port,
-            their_port,
+            flow_id,
             dest_host: Bytes::new(),
             dest_port: 0,
             can_write,
@@ -683,8 +677,7 @@ impl MultiplexorInner {
         };
         // Save the TX end of the stream so we can write to it when subsequent frames arrive
         let mut streams = self.streams.write();
-        assert_ne!(our_port, 0);
-        let entry = streams.get_mut(&our_port).ok_or(Error::BogusSynAck)?;
+        let entry = streams.get_mut(&flow_id).ok_or(Error::BogusSynAck)?;
         // Change the state of the port to `Established`
         let Some(sender) = entry.establish(stream_data) else {
             return Err(Error::BogusSynAck);
@@ -699,11 +692,11 @@ impl MultiplexorInner {
 
     /// Close a port. That is, send `Rst` if `Fin` is not sent,
     /// and remove it from the map.
-    #[tracing::instrument(skip_all, level = "debug")]
+    #[tracing::instrument(skip_all, level = "info")]
     #[inline]
-    async fn close_port(&self, our_port: u16, their_port: u16, inhibit_rst: bool) {
+    async fn close_port(&self, flow_id: u32, inhibit_rst: bool) {
         // Free the port for reuse
-        let removed = self.streams.write().remove(&our_port);
+        let removed = self.streams.write().remove(&flow_id);
         if let Some(MuxStreamSlot::Established(stream_data)) = removed {
             // Make sure the user receives `EOF`.
             stream_data.sender.send(Bytes::new()).await.ok();
@@ -718,13 +711,13 @@ impl MultiplexorInner {
             if old && !inhibit_rst {
                 // If the user did not call `poll_shutdown`, we need to send a `Rst` frame
                 self.tx_frame_tx
-                    .send(StreamFrame::new_rst(our_port, their_port).finalize())
+                    .send(Frame::new_reset(flow_id).finalize())
                     .ok();
             }
             // If there is a writer waiting for `Ack`, wake it up because it will never receive one.
             // Waking it here and the user should receive a `BrokenPipe` error.
             stream_data.writer_waker.wake();
         }
-        debug!("freed connection {our_port} -> {their_port}");
+        debug!("freed connection {flow_id}");
     }
 }

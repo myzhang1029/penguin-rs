@@ -4,7 +4,6 @@
 
 use super::websocket::handle_websocket;
 use crate::arg::BackendUrl;
-use crate::proto_version::PROTOCOL_VERSION;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64_STANDARD_ENGINE;
 use bytes::Bytes;
@@ -13,7 +12,7 @@ use http_body_util::{BodyExt, Full as FullBody};
 use hyper::service::Service;
 use hyper::upgrade::OnUpgrade;
 use hyper_util::rt::TokioIo;
-use penguin_mux::{Dupe, timing::OptionalDuration};
+use penguin_mux::{Dupe, PROTOCOL_VERSION, timing::OptionalDuration};
 use sha1::{Digest, Sha1};
 use std::future::Future;
 use std::pin::Pin;

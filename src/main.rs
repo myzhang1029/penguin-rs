@@ -8,7 +8,6 @@ mod arg;
 mod client;
 mod config;
 mod parse_remote;
-mod proto_version;
 mod server;
 #[cfg(test)]
 mod tests;
