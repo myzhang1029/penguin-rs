@@ -37,7 +37,7 @@ pub struct MuxStreamData {
     // because we are not protecting memory accesses, but rather counting the
     // frames we have sent and received.
     can_write: Arc<AtomicBool>,
-    /// Number of `Psh` frames we are allowed to send before waiting for a `Acknowledge` frame.
+    /// Number of `Push` frames we are allowed to send before waiting for a `Acknowledge` frame.
     psh_send_remaining: Arc<AtomicU32>,
     /// Waker to wake up the task that sends frames because their `psh_send_remaining`
     /// has increased.
@@ -395,7 +395,7 @@ impl MultiplexorInner {
 
     /// Process a stream frame
     /// Does the following:
-    /// - If `flag` is `Connect`,
+    /// - If `flag` is [`Connect`](crate::frame::OpCode::Connect),
     ///   - Find an available `dport` and send a `Acknowledge`.
     ///   - Create a new `MuxStream` and send it to the `stream_tx` channel.
     /// - If `flag` is `Acknowledge`,
@@ -447,8 +447,8 @@ impl MultiplexorInner {
             Payload::Acknowledge(payload) => {
                 trace!("received `Acknowledge` for {flow_id}");
                 // Two cases:
-                // 1. Peer acknowledged `Con`
-                // 2. Peer acknowledged some `Psh` frames
+                // 1. Peer acknowledged `Connect`
+                // 2. Peer acknowledged some `Push` frames
                 let action = self.streams.read().get(&flow_id).map(|slot| {
                     match slot {
                         MuxStreamSlot::Established(stream_data) => {
@@ -578,7 +578,7 @@ impl MultiplexorInner {
         Ok(())
     }
 
-    /// Create a new stream because this end received a `Connect` frame.
+    /// Create a new stream because this end received a [`Connect`](crate::frame::OpCode::Connect) frame.
     /// Create a new `MuxStream`, add it to the map, and send an `Acknowledge` frame.
     /// If `our_port` is 0, a new port will be allocated.
     #[inline]

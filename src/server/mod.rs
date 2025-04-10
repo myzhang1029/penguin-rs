@@ -239,7 +239,7 @@ where
     }
 }
 
-/// Workaround at https://github.com/rust-lang/rust/issues/102211#issuecomment-1367900125
+/// Workaround at <https://github.com/rust-lang/rust/issues/102211#issuecomment-1367900125>
 fn assert_send<'u, R>(
     fut: impl 'u + Send + std::future::Future<Output = R>,
 ) -> impl 'u + Send + std::future::Future<Output = R> {

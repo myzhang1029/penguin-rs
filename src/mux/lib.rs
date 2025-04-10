@@ -10,7 +10,7 @@
 
 mod config;
 mod dupe;
-mod frame;
+pub mod frame;
 mod inner;
 mod proto_version;
 mod stream;
@@ -19,7 +19,7 @@ mod tests;
 pub mod timing;
 pub mod ws;
 
-use crate::frame::{BindPayload, FinalizedFrame, Frame};
+use crate::frame::{BindPayload, BindType, FinalizedFrame, Frame};
 use crate::inner::MultiplexorInner;
 use crate::timing::OptionalDuration;
 use crate::ws::WebSocketStream;
@@ -36,7 +36,6 @@ use tokio::{sync::mpsc, task::JoinSet};
 use tracing::{error, trace, warn};
 
 pub use crate::dupe::Dupe;
-pub use crate::frame::BindType;
 pub use crate::proto_version::{PROTOCOL_VERSION, PROTOCOL_VERSION_NUMBER};
 pub use crate::stream::MuxStream;
 
@@ -73,7 +72,7 @@ pub enum Error {
     /// "The client and server MUST NOT use other WebSocket data frame types"
     #[error("Received `Text` message")]
     TextMessage,
-    /// A `Acknowledge` frame that does not match any pending `Connect` request.
+    /// A `Acknowledge` frame that does not match any pending [`Connect`](frame::OpCode::Connect) request.
     #[error("Bogus `Acknowledge` frame")]
     ConnAckGone,
 }
@@ -124,9 +123,9 @@ impl Multiplexor {
     ///
     /// * `ws`: The `WebSocket` connection to multiplex over.
     ///
-    /// * `keepalive_interval`: The interval at which to send `Ping` frames.
+    /// * `keepalive_interval`: The interval at which to send [`Ping`](tokio_tungstenite::tungstenite::protocol::Message::Ping) frames.
     ///
-    /// * `task_joinset`: A `JoinSet` to spawn the multiplexor task into so
+    /// * `task_joinset`: A [`JoinSet`] to spawn the multiplexor task into so
     ///   that the caller can notice if the task exits. If it is `None`, the
     ///   task will be spawned by `tokio::spawn` and errors will be logged.
     #[tracing::instrument(skip_all, level = "debug")]
@@ -146,7 +145,7 @@ impl Multiplexor {
     fn new_no_task(keepalive_interval: OptionalDuration, accept_bnd: bool) -> (Self, TaskData) {
         let (datagram_tx, datagram_rx) = mpsc::channel(config::DATAGRAM_BUFFER_SIZE);
         let (con_recv_stream_tx, con_recv_stream_rx) = mpsc::channel(config::STREAM_BUFFER_SIZE);
-        // This one is unbounded because the protocol provides its own flow control for `Psh` frames
+        // This one is unbounded because the protocol provides its own flow control for `Push` frames
         // and other frame types are to be immediately processed without any backpressure,
         // so they are ok to be unbounded channels.
         let (tx_frame_tx, tx_frame_rx) = mpsc::unbounded_channel();
@@ -215,9 +214,6 @@ impl Multiplexor {
     ///   specifies that the host component of a URI is limited to 255 octets.
     /// * `port`: The port to forward to.
     ///
-    /// # Panics
-    /// Panics if the `Multiplexor` is not a client.
-    ///
     /// # Cancel safety
     /// This function is not cancel safe. If the task is cancelled while waiting
     /// for the channel to be established, that channel may be established but
@@ -253,9 +249,6 @@ impl Multiplexor {
     /// # Errors
     /// Returns [`Error::Closed`] if the connection is closed.
     ///
-    /// # Panics
-    /// Panics if the `Multiplexor` is not a server.
-    ///
     /// # Cancel Safety
     /// This function is cancel safe. If the task is cancelled while waiting
     /// for a new connection, it is guaranteed that no connected stream will
@@ -286,10 +279,9 @@ impl Multiplexor {
     /// Send a datagram
     ///
     /// # Errors
-    /// * Returns `Error::DatagramHostTooLong` if the destination host is
+    /// * Returns [`Error::DatagramHostTooLong`] if the destination host is
     /// longer than 255 octets.
-    /// * Returns `Error::SendDatagram` if the datagram could not be sent
-    /// due to a `crate::ws::Error`.
+    /// * Returns [`Error::Closed`] if the Multiplexor is already closed.
     ///
     /// # Cancel Safety
     /// This function is cancel safe. If the task is cancelled, it is
@@ -313,7 +305,7 @@ impl Multiplexor {
         Ok(())
     }
 
-    /// Request a `Bnd` for `host` and `port`.
+    /// Request a `Bind` for `host` and `port`.
     ///
     /// # Arguments
     /// * `host`: The local address or host to bind to. Hostname resolution might
@@ -340,11 +332,11 @@ impl Multiplexor {
         Ok(())
     }
 
-    /// Accept a `Bnd` request from the remote peer.
+    /// Accept a `Bind` request from the remote peer.
     ///
     /// # Cancel Safety
     /// This function is cancel safe. If the task is cancelled while waiting
-    /// for a `Bnd` request, it is guaranteed that no request will be lost.
+    /// for a `Bind` request, it is guaranteed that no request will be lost.
     #[tracing::instrument(skip(self), level = "debug")]
     pub async fn accept_bnd_request(&self) -> Result<BindPayload<'static>> {
         if let Some(rx) = self.bnd_request_rx.as_ref() {

@@ -17,19 +17,23 @@ use thiserror::Error;
 /// Errors that can occur when parsing a frame.
 #[derive(Debug, Error)]
 pub enum Error {
+    /// Frame is invalid or incomplete
     #[error("Frame is invalid or incomplete")]
     FrameTooShort,
+    /// Unsupported frame version decoded
     #[error("Unsupported frame version: {0}")]
     FrameVersion(u8),
+    /// Invalid opcode in a frame
     #[error("Invalid opcode: {0}")]
     InvalidOpCode(u8),
+    /// Invalid type code in a `Bind` frame
     #[error("Invalid `Bind` type: {0}")]
     InvalidBindType(u8),
 }
 
 /// A special version of `std::borrow::Cow` using `Bytes`
 #[derive(Clone, Debug)]
-pub enum CowBytes<'data> {
+pub(crate) enum CowBytes<'data> {
     Borrowed(&'data [u8]),
     Owned(Bytes),
 }
@@ -113,7 +117,7 @@ pub enum OpCode {
     Acknowledge = 1,
     /// Aborting connection or rejecting operation
     Reset = 2,
-    /// Closing stream connection
+    /// Closing stream connection or completing operation
     Finish = 3,
     /// Sending stream data
     Push = 4,
@@ -144,7 +148,7 @@ impl TryFrom<u8> for OpCode {
 
 /// Payload for a [`Payload::Connect`] variant
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConnectPayload<'data> {
+pub(crate) struct ConnectPayload<'data> {
     /// Number of frames buffered in the receive buffer
     pub rwnd: u32,
     /// The destination port to forward to (client), or the local port (server)
@@ -155,7 +159,7 @@ pub struct ConnectPayload<'data> {
 
 /// Payload for a [`Payload::Bind`] variant
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BindPayload<'data> {
+pub(crate) struct BindPayload<'data> {
     /// Type of socket to listen on
     pub bind_type: BindType,
     /// The local port to bind to
@@ -166,7 +170,7 @@ pub struct BindPayload<'data> {
 
 /// Payload for a [`Payload::Datagram`] variant
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DatagramPayload<'data> {
+pub(crate) struct DatagramPayload<'data> {
     /// The port of the forwarding target
     pub target_port: u16,
     /// The host of the forwarding target
@@ -177,7 +181,7 @@ pub struct DatagramPayload<'data> {
 
 /// Frame payload
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Payload<'data> {
+pub(crate) enum Payload<'data> {
     /// `Connect` payload. See [`ConnectPayload`]
     Connect(ConnectPayload<'data>),
     /// `Acknowledge` payload
@@ -240,7 +244,7 @@ pub struct Frame<'data> {
     /// Flow ID
     pub id: u32,
     /// Payload data
-    pub payload: Payload<'data>,
+    pub(crate) payload: Payload<'data>,
 }
 
 impl Debug for Frame<'_> {
@@ -300,7 +304,7 @@ impl<'data> Frame<'data> {
             payload: Payload::Reset,
         }
     }
-    /// Create a new [`StreamFlag::Finish`] frame.
+    /// Create a new [`OpCode::Finish`] frame.
     ///
     /// # Arguments
     /// * `id`: The flow ID of the connection to shutdown.
@@ -313,7 +317,7 @@ impl<'data> Frame<'data> {
         }
     }
 
-    /// Create a new [`StreamFlag::Push`] frame.
+    /// Create a new [`OpCode::Push`] frame.
     ///
     /// # Arguments
     /// * `id`: The flow ID of the connection to send data on.
@@ -327,7 +331,7 @@ impl<'data> Frame<'data> {
         }
     }
 
-    /// Create a new [`StreamFlag::Push`] frame with owned data.
+    /// Create a new [`OpCode::Push`] frame with owned data.
     #[must_use]
     #[inline]
     pub const fn new_push_owned(id: u32, data: Bytes) -> Self {
@@ -337,7 +341,7 @@ impl<'data> Frame<'data> {
         }
     }
 
-    /// Create a new [`StreamFlag::Bind`] frame.
+    /// Create a new [`OpCode::Bind`] frame.
     ///
     /// # Arguments
     /// * `id`: An identifier for this Bind request.
@@ -480,7 +484,7 @@ impl From<&Frame<'_>> for Vec<u8> {
     /// Encode a [`Frame`] to bytes
     ///
     /// # Panics
-    /// Panics when the frame has [`Payload::Datagram`]
+    /// Panics when the frame has [`OpCode::Datagram`]
     /// but the `target_host` field is longer than 255 octets.
     #[tracing::instrument(level = "trace")]
     #[inline]
@@ -543,7 +547,7 @@ impl From<&Frame<'_>> for Bytes {
 
 /// An owned and finalized frame for single-copy operations
 #[derive(Clone, PartialEq, Eq)]
-pub struct FinalizedFrame(Bytes);
+pub(crate) struct FinalizedFrame(Bytes);
 
 impl FinalizedFrame {
     pub const FLUSH: Self = Self(Bytes::new());

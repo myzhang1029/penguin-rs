@@ -21,15 +21,15 @@ pub struct MuxStream {
     pub(super) frame_rx: mpsc::Receiver<Bytes>,
     /// Flow ID
     pub(super) flow_id: u32,
-    /// Forwarding destination. Only used on `Role::Server`
+    /// Forwarding destination
     pub dest_host: Bytes,
-    /// Forwarding destination port. Only used on `Role::Server`
+    /// Forwarding destination port
     pub dest_port: u16,
-    /// Whether writes should succeed.
+    /// Whether writes should succeed
     pub(super) can_write: Arc<AtomicBool>,
-    /// Number of frames we can still send before we need to wait for an `Ack`
+    /// Number of frames we can still send before we need to wait for an `Acknowledge`
     pub(super) psh_send_remaining: Arc<AtomicU32>,
-    /// Number of `Psh` frames received after sending the previous `Ack` frame
+    /// Number of `Push` frames received after sending the previous `Acknowledge` frame
     /// `rwnd - psh_recvd_since` is approximately the peer's `psh_send_remaining`
     pub(super) psh_recvd_since: AtomicU32,
     /// Waker to wake up the task that sends frames
@@ -40,8 +40,8 @@ pub struct MuxStream {
     pub(super) frame_tx: mpsc::UnboundedSender<FinalizedFrame>,
     /// See `MultiplexorInner`.
     pub(super) dropped_ports_tx: mpsc::UnboundedSender<u32>,
-    /// Number of `Psh` frames between `Ack`s:
-    /// If too low, `Ack`s will consume too much bandwidth;
+    /// Number of `Push` frames between [`Acknowledge`](frame::OpCode::Acknowledge)s:
+    /// If too low, `Acknowledge`s will consume too much bandwidth;
     /// If too high, writers may block.
     pub(super) rwnd_threshold: u32,
 }
@@ -64,7 +64,7 @@ impl std::fmt::Debug for MuxStream {
 impl Drop for MuxStream {
     // Dropping the port should act like `close()` has been called.
     // Since `drop` is not async, this is handled by the mux task.
-    /// Close the stream by instructing the mux task to send a `Rst` frame if
+    /// Close the stream by instructing the mux task to send a [`Reset`](frame::OpCode::Reset) frame if
     /// the stream is still open. The associated port will be freed for reuse.
     fn drop(&mut self) {
         // Notify the task that this port is no longer in use
@@ -78,7 +78,7 @@ impl Drop for MuxStream {
 impl AsyncRead for MuxStream {
     /// Read data from the stream.
     /// There are two cases where this function gives EOF:
-    /// 1. One `Message` contains an empty payload.
+    /// 1. One `Frame` contains an empty payload.
     /// 2. `Sink`'s sender is dropped.
     #[tracing::instrument(skip(cx, buf), level = "trace")]
     #[inline]
@@ -165,8 +165,8 @@ impl AsyncWrite for MuxStream {
             let original = self.psh_send_remaining.load(Ordering::Acquire);
             trace!("congestion window: {original}");
             if original == 0 {
-                // We have reached the congestion window limit. Wait for an `Ack`
-                debug!("waiting for `Ack`");
+                // We have reached the congestion window limit. Wait for an `Acknowledge`
+                debug!("waiting for `Acknowledge`");
                 // Make sure queued frames are flushed
                 self.frame_tx
                     .send(FinalizedFrame::FLUSH)
