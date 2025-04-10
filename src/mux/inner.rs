@@ -221,11 +221,11 @@ impl MultiplexorInner {
                 }
                 Some(frame) = frame_rx.recv() => {
                     // Buffer `Psh` frames, and flush everything else immediately
-                    if frame.opcode()? == OpCode::Push {
-                        ws_sink.feed(Message::Binary(frame.into())).await
-                    } else if frame.is_empty() {
+                    if frame.is_empty() {
                         // Flush
                         ws_sink.flush().await
+                    } else if frame.opcode()? == OpCode::Push {
+                        ws_sink.feed(Message::Binary(frame.into())).await
                     } else {
                         ws_sink.send(Message::Binary(frame.into())).await
                     }
