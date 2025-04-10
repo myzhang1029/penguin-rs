@@ -437,7 +437,7 @@ impl MultiplexorInner {
                 // In this case, `target_host` is always owned already
                 self.con_recv_new_stream(
                     flow_id,
-                    Bytes::from(target_host.into_owned()),
+                    target_host.into_owned(),
                     target_port,
                     peer_rwnd,
                     con_recv_stream_tx,
@@ -511,7 +511,7 @@ impl MultiplexorInner {
                 // This part is refactored out so that we don't hold the lock across await
                 if let Some(sender) = sender {
                     // In this case, `data` is always owned already
-                    match sender.try_send(Bytes::from(data.into_owned())) {
+                    match sender.try_send(data.into_owned()) {
                         Err(TrySendError::Full(_)) => {
                             // Peer does not respect the `rwnd` limit, this should not happen in normal circumstances.
                             // let it fall through to send `Reset`.

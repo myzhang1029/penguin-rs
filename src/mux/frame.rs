@@ -34,14 +34,14 @@ pub enum CowBytes<'data> {
     Owned(Bytes),
 }
 
-impl<'data> PartialEq for CowBytes<'data> {
+impl PartialEq for CowBytes<'_> {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
         self.as_ref() == other.as_ref()
     }
 }
 
-impl<'data> Eq for CowBytes<'data> {}
+impl Eq for CowBytes<'_> {}
 
 impl Dupe for CowBytes<'_> {
     #[inline]
@@ -53,7 +53,7 @@ impl Dupe for CowBytes<'_> {
     }
 }
 
-impl<'data> AsRef<[u8]> for CowBytes<'data> {
+impl AsRef<[u8]> for CowBytes<'_> {
     #[inline]
     fn as_ref(&self) -> &[u8] {
         match self {
@@ -63,7 +63,7 @@ impl<'data> AsRef<[u8]> for CowBytes<'data> {
     }
 }
 
-impl<'data> CowBytes<'data> {
+impl CowBytes<'_> {
     #[inline]
     pub fn into_owned(self) -> Bytes {
         match self {
@@ -73,7 +73,7 @@ impl<'data> CowBytes<'data> {
     }
 
     #[inline]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         match self {
             Self::Borrowed(data) => data.len(),
             Self::Owned(bytes) => bytes.len(),
@@ -199,7 +199,7 @@ pub enum Payload<'data> {
 
 impl Payload<'_> {
     #[inline]
-    fn len(&self) -> usize {
+    const fn len(&self) -> usize {
         match self {
             Self::Connect(ConnectPayload { target_host, .. }) => {
                 size_of::<u32>() + size_of::<u16>() + target_host.len()
@@ -537,7 +537,7 @@ impl From<&Frame<'_>> for Vec<u8> {
 impl From<&Frame<'_>> for Bytes {
     #[inline]
     fn from(frame: &Frame<'_>) -> Self {
-        Bytes::from(Vec::from(frame))
+        Self::from(Vec::from(frame))
     }
 }
 
@@ -550,14 +550,14 @@ impl FinalizedFrame {
 
     /// Check if the frame is empty
     #[inline]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
     /// Check the opcode of the frame
     #[inline]
     pub fn opcode(&self) -> Result<OpCode, Error> {
-        OpCode::try_from(self.0.get(0).ok_or(Error::FrameTooShort)? & 0x0F)
+        OpCode::try_from(self.0.first().ok_or(Error::FrameTooShort)? & 0x0F)
     }
 }
 
@@ -632,7 +632,7 @@ mod tests {
                 })
             }
         );
-        let bytes = Bytes::try_from(&frame).unwrap();
+        let bytes = Bytes::from(&frame);
         let decoded = Frame::try_from(bytes).unwrap();
         assert_eq!(frame, decoded);
 
@@ -644,7 +644,7 @@ mod tests {
                 data: CowBytes::Borrowed(&[1, 2, 3, 4]),
             }),
         };
-        let bytes = Bytes::try_from(&frame).unwrap();
+        let bytes = Bytes::from(&frame);
         let decoded = Frame::try_from(bytes).unwrap();
         assert_eq!(frame, decoded);
     }
@@ -655,7 +655,7 @@ mod tests {
     fn test_frame_repr() {
         crate::tests::setup_logging();
         let frame = Frame::new_connect(&[0x01, 0x02, 0x03], 5678, 1234, 512);
-        let bytes = Vec::try_from(&frame).unwrap();
+        let bytes = Vec::from(&frame);
         assert_eq!(
             bytes,
             vec![
@@ -668,7 +668,7 @@ mod tests {
         );
 
         let frame = Frame::new_acknowledge(5678, 128);
-        let bytes = Vec::try_from(&frame).unwrap();
+        let bytes = Vec::from(&frame);
         assert_eq!(
             bytes,
             vec![
@@ -679,7 +679,7 @@ mod tests {
         );
 
         let frame = Frame::new_reset(1291);
-        let bytes = Vec::try_from(&frame).unwrap();
+        let bytes = Vec::from(&frame);
         assert_eq!(
             bytes,
             vec![
@@ -688,8 +688,8 @@ mod tests {
             ]
         );
 
-        let frame = Frame::new_finish(21324);
-        let bytes = Vec::try_from(&frame).unwrap();
+        let frame = Frame::new_finish(0x534c);
+        let bytes = Vec::from(&frame);
         assert_eq!(
             bytes,
             vec![
@@ -698,8 +698,8 @@ mod tests {
             ]
         );
 
-        let frame = Frame::new_push(123443131, &[1, 2, 3, 4]);
-        let bytes = Vec::try_from(&frame).unwrap();
+        let frame = Frame::new_push(0x75b_97bb, &[1, 2, 3, 4]);
+        let bytes = Vec::from(&frame);
         assert_eq!(
             bytes,
             vec![
@@ -710,7 +710,7 @@ mod tests {
         );
 
         let frame = Frame::new_bind(42132, BindType::Datagram, &[1, 2, 3, 4], 1234);
-        let bytes = Vec::try_from(&frame).unwrap();
+        let bytes = Vec::from(&frame);
         assert_eq!(
             bytes,
             vec![
@@ -722,8 +722,8 @@ mod tests {
             ]
         );
 
-        let frame = Frame::new_bind(42134111, BindType::Stream, &[4, 2, 3, 4], 1234);
-        let bytes = Vec::try_from(&frame).unwrap();
+        let frame = Frame::new_bind(0x282_ea5f, BindType::Stream, &[4, 2, 3, 4], 1234);
+        let bytes = Vec::from(&frame);
         assert_eq!(
             bytes,
             vec![
@@ -736,7 +736,7 @@ mod tests {
         );
 
         let frame = Frame::new_datagram(2134, &[1, 2, 3, 4], 1234, &[1, 2, 3, 4]);
-        let bytes = Vec::try_from(&frame).unwrap();
+        let bytes = Vec::from(&frame);
         assert_eq!(
             bytes,
             vec![
@@ -748,6 +748,15 @@ mod tests {
                 0x01, 0x02, 0x03, 0x04 // data (variable)
             ]
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "Datagram target host too long")]
+    fn test_finalized_frame_too_long() {
+        crate::tests::setup_logging();
+        let long_hostname = vec![0; 256];
+        let frame = Frame::new_datagram(2134, &long_hostname, 1234, &[1, 2, 3, 4]);
+        let _ = frame.finalize();
     }
 
     #[test]
