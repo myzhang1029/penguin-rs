@@ -670,7 +670,7 @@ mod tests {
                 0x01, 0x02, 0x03, // host (variable)
             ]
         );
-        let frame_back = Frame::try_from(Bytes::from(bytes.clone())).unwrap();
+        let frame_back = Frame::try_from(Bytes::from(bytes)).unwrap();
         assert_eq!(frame, frame_back);
     }
 
@@ -687,7 +687,7 @@ mod tests {
                 0x00, 0x00, 0x00, 0x80, // psh_recvd_since (u32)
             ]
         );
-        let frame_back = Frame::try_from(Bytes::from(bytes.clone())).unwrap();
+        let frame_back = Frame::try_from(Bytes::from(bytes)).unwrap();
         assert_eq!(frame, frame_back);
     }
 
@@ -703,7 +703,7 @@ mod tests {
                 0x00, 0x00, 0x05, 0x0b, // id (u32)
             ]
         );
-        let frame_back = Frame::try_from(Bytes::from(bytes.clone())).unwrap();
+        let frame_back = Frame::try_from(Bytes::from(bytes)).unwrap();
         assert_eq!(frame, frame_back);
     }
 
@@ -719,7 +719,7 @@ mod tests {
                 0x00, 0x00, 0x53, 0x4c, // id (u32)
             ]
         );
-        let frame_back = Frame::try_from(Bytes::from(bytes.clone())).unwrap();
+        let frame_back = Frame::try_from(Bytes::from(bytes)).unwrap();
         assert_eq!(frame, frame_back);
     }
 
@@ -736,7 +736,7 @@ mod tests {
                 0x01, 0x02, 0x03, 0x04, // data (variable)
             ]
         );
-        let frame_back = Frame::try_from(Bytes::from(bytes.clone())).unwrap();
+        let frame_back = Frame::try_from(Bytes::from(bytes)).unwrap();
         assert_eq!(frame, frame_back);
     }
 
@@ -755,7 +755,7 @@ mod tests {
                 0x01, 0x02, 0x03, 0x04 // target_host (variable)
             ]
         );
-        let frame_back = Frame::try_from(Bytes::from(bytes.clone())).unwrap();
+        let frame_back = Frame::try_from(Bytes::from(bytes)).unwrap();
         assert_eq!(frame, frame_back);
 
         let frame = Frame::new_bind(0x282_ea5f, BindType::Stream, &[4, 2, 3, 4], 1234);
@@ -770,7 +770,7 @@ mod tests {
                 0x04, 0x02, 0x03, 0x04 // target_host (variable)
             ]
         );
-        let frame_back = Frame::try_from(Bytes::from(bytes.clone())).unwrap();
+        let frame_back = Frame::try_from(Bytes::from(bytes)).unwrap();
         assert_eq!(frame, frame_back);
     }
 
@@ -790,7 +790,7 @@ mod tests {
                 0x01, 0x02, 0x03, 0x04 // data (variable)
             ]
         );
-        let frame_back = Frame::try_from(Bytes::from(bytes.clone())).unwrap();
+        let frame_back = Frame::try_from(Bytes::from(bytes)).unwrap();
         assert_eq!(frame, frame_back);
     }
 
