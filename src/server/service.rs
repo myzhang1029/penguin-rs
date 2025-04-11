@@ -60,15 +60,17 @@ pub(super) enum Error {
 #[derive(Clone, Debug)]
 pub(super) struct State<'a> {
     /// Backend URL
-    pub backend: Option<&'a BackendUrl>,
+    backend: Option<&'a BackendUrl>,
     /// Websocket PSK
-    pub ws_psk: Option<&'a HeaderValue>,
+    ws_psk: Option<&'a HeaderValue>,
     /// 404 response
-    pub not_found_resp: &'a str,
+    not_found_resp: &'a str,
     /// Whether to obfuscate
-    pub obfs: bool,
+    obfs: bool,
+    /// Whether we accept reverse binding
+    reverse: bool,
     /// Reqwest client
-    pub client: reqwest::Client,
+    client: reqwest::Client,
     /// TLS handshake timeout
     pub tls_timeout: OptionalDuration,
     /// HTTP timeout
@@ -82,6 +84,7 @@ impl Dupe for State<'_> {
             ws_psk: self.ws_psk,
             not_found_resp: self.not_found_resp,
             obfs: self.obfs,
+            reverse: self.reverse,
             client: self.client.dupe(),
             tls_timeout: self.tls_timeout,
             http_timeout: self.http_timeout,
@@ -96,6 +99,7 @@ impl<'a> State<'a> {
         ws_psk: Option<&'a HeaderValue>,
         not_found_resp: &'a str,
         obfs: bool,
+        reverse: bool,
         tls_timeout: OptionalDuration,
         http_timeout: OptionalDuration,
     ) -> Self {
@@ -104,6 +108,7 @@ impl<'a> State<'a> {
             ws_psk,
             not_found_resp,
             obfs,
+            reverse,
             client: reqwest::Client::new(),
             tls_timeout,
             http_timeout,
@@ -200,7 +205,11 @@ impl State<'static> {
     }
 
     /// Check the PSK and protocol version and upgrade to a WebSocket if the PSK matches (if required).
-    async fn ws_handler<B>(self, mut req: Request<B>) -> Result<Response<FullBody<Bytes>>, Error>
+    async fn ws_handler<B>(
+        self,
+        mut req: Request<B>,
+        reverse: bool,
+    ) -> Result<Response<FullBody<Bytes>>, Error>
     where
         B: hyper::body::Body,
         <B as hyper::body::Body>::Error: std::fmt::Debug,
@@ -252,7 +261,7 @@ impl State<'static> {
                         None,
                     )
                     .await;
-                    handle_websocket(ws).await;
+                    handle_websocket(ws, reverse).await;
                 }
                 Err(err) => {
                     error!("Failed to upgrade to WebSocket: {err}");
@@ -295,7 +304,7 @@ where
         }
         // If `/ws`, handle WebSocket
         if req.uri().path() == "/ws" {
-            return Box::pin(self.dupe().ws_handler(req));
+            return Box::pin(self.dupe().ws_handler(req, self.reverse));
         }
         // Else, proxy to backend or return 404
         Box::pin(self.dupe().backend_or_404_handler(req))
@@ -332,6 +341,7 @@ mod tests {
             None,
             "not found in the test",
             false,
+            false,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         );
@@ -350,6 +360,7 @@ mod tests {
             None,
             "not found in the test",
             true,
+            false,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         );
@@ -367,6 +378,7 @@ mod tests {
             None,
             None,
             "not found in the test",
+            false,
             false,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
@@ -386,6 +398,7 @@ mod tests {
             None,
             "not found in the test",
             true,
+            false,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         );
@@ -412,6 +425,7 @@ mod tests {
             None,
             "not found in the test",
             false,
+            false,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         );
@@ -426,6 +440,7 @@ mod tests {
             Some(&BACKEND),
             None,
             "not found in the test",
+            false,
             false,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
@@ -452,6 +467,7 @@ mod tests {
             None,
             "not found in the test",
             false,
+            false,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         );
@@ -466,6 +482,7 @@ mod tests {
             Some(&BACKEND),
             None,
             "not found in the test",
+            false,
             false,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
@@ -487,6 +504,7 @@ mod tests {
             None,
             None,
             "not found in the test",
+            false,
             false,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
@@ -515,6 +533,7 @@ mod tests {
             None,
             "not found in the test",
             false,
+            false,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         );
@@ -541,6 +560,7 @@ mod tests {
             None,
             Some(&PSK),
             "not found in the test",
+            false,
             false,
             OptionalDuration::NONE,
             OptionalDuration::NONE,

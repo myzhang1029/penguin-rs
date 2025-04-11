@@ -84,6 +84,7 @@ pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
         args.ws_psk.as_ref(),
         &args.not_found_resp,
         args.obfs,
+        args.reverse,
         args.timeout,
         args.timeout,
     );
