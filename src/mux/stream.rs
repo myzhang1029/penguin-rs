@@ -100,12 +100,16 @@ impl AsyncRead for MuxStream {
             self.buf = next.unwrap();
             let new = self.psh_recvd_since + 1;
             self.psh_recvd_since = new;
-            debug!("received a frame, psh_recvd_since: {new}");
+            trace!(
+                "received a frame len = {}, psh_recvd_since: {}",
+                self.buf.len(),
+                new
+            );
             if new >= self.rwnd_threshold {
                 // Reset the counter
                 self.psh_recvd_since = 0;
                 // Send an `Acknowledge` frame
-                debug!("sending `Acknowledge` of {new} frames");
+                trace!("sending `Acknowledge` of {new} frames");
                 self.frame_tx
                     .send(Frame::new_acknowledge(self.flow_id, new).finalize())
                     .ok();

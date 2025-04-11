@@ -78,7 +78,6 @@ pub(super) async fn handle_udp_stdio(
         let frame = Datagram {
             target_host: Bytes::from_static(rhost.as_bytes()),
             target_port: rport,
-            // TODO: fix this flow id
             flow_id: 0,
             data: Bytes::from(line),
         };

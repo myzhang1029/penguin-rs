@@ -408,7 +408,7 @@ impl<'data> Frame<'data> {
     #[must_use]
     #[inline]
     pub(crate) fn finalize(&self) -> FinalizedFrame {
-        FinalizedFrame(Bytes::from(Vec::from(self)))
+        FinalizedFrame(Bytes::from(self))
     }
 }
 
@@ -577,7 +577,7 @@ impl Debug for FinalizedFrame {
 impl<'data> From<&Frame<'data>> for FinalizedFrame {
     #[inline]
     fn from(frame: &Frame<'data>) -> Self {
-        Self(Vec::from(frame).into())
+        Self(Bytes::from(frame))
     }
 }
 

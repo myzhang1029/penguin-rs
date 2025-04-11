@@ -17,7 +17,7 @@ pub const RWND_USIZE: usize = RWND as usize;
 
 /// Number of `StreamFrame`s to buffer in `MuxStream`'s channels before blocking
 #[cfg(not(test))]
-pub const RWND: u32 = 1 << 8;
+pub const RWND: u32 = 1 << 9;
 #[cfg(test)]
 pub const RWND: u32 = 4;
 /// Number of [`Push`](frame::OpCode::Push) frames between [`Acknowledge`](frame::OpCode::Acknowledge)s:
