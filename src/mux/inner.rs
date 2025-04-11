@@ -452,40 +452,41 @@ impl MultiplexorInner {
             }
             Payload::Acknowledge(payload) => {
                 trace!("received `Acknowledge` for {flow_id}");
-                // Two cases:
+                // Three cases:
                 // 1. Peer acknowledged `Connect`
                 // 2. Peer acknowledged some `Push` frames
-                let action = self.flows.read().get(&flow_id).and_then(|slot| {
-                    match slot {
-                        FlowSlot::Established(stream_data) => {
-                            // We have an established stream, so process the `Acknowledge`
-                            // Atomic ordering: as long as the value is incremented atomically,
-                            // whether a writer sees the new value or the old value is not
-                            // important. If it sees the old value and decides to return
-                            // `Poll::Pending`, it will be woken up by the `Waker` anyway.
-                            stream_data
-                                .psh_send_remaining
-                                .fetch_add(payload, Ordering::Relaxed);
-                            stream_data.writer_waker.wake();
-                            Some(true)
-                        }
-                        FlowSlot::Requested(_) => Some(false),
-                        FlowSlot::BindRequested(_) => {
-                            warn!("Peer replied `Acknowledge` to a `Bind` request");
-                            None
-                        }
+                // 3. Something unexpected
+                let (should_new_stream, should_send_rst) = match self.flows.read().get(&flow_id) {
+                    Some(FlowSlot::Established(stream_data)) => {
+                        debug!("peer processed {payload} frames");
+                        // We have an established stream, so process the `Acknowledge`
+                        // Atomic ordering: as long as the value is incremented atomically,
+                        // whether a writer sees the new value or the old value is not
+                        // important. If it sees the old value and decides to return
+                        // `Poll::Pending`, it will be woken up by the `Waker` anyway.
+                        stream_data
+                            .psh_send_remaining
+                            .fetch_add(payload, Ordering::Relaxed);
+                        stream_data.writer_waker.wake();
+                        (false, false)
                     }
-                });
-                match action {
-                    Some(true) => debug!("peer processed {payload} frames"),
-                    Some(false) => {
+                    Some(FlowSlot::Requested(_)) => {
                         debug!("new stream {flow_id} with peer rwnd {payload}");
-                        self.ack_recv_new_stream(flow_id, payload)?;
+                        (true, false)
+                    }
+                    Some(FlowSlot::BindRequested(_)) => {
+                        warn!("Peer replied `Acknowledge` to a `Bind` request");
+                        (false, true)
                     }
                     None => {
-                        trace!("port {flow_id} does not exist, sending `Reset`");
-                        send_rst.await;
+                        debug!("port {flow_id} does not exist, sending `Reset`");
+                        (false, true)
                     }
+                };
+                if should_new_stream {
+                    self.ack_recv_new_stream(flow_id, payload)?;
+                } else if should_send_rst {
+                    send_rst.await;
                 }
             }
             Payload::Finish => {
@@ -517,9 +518,7 @@ impl MultiplexorInner {
                             // If the send above fails, the receiver is dropped,
                             // so we can just ignore it.
                         }
-                        None => {
-                            warn!("Bogus `Finish` frame {flow_id}");
-                        }
+                        None => warn!("Bogus `Finish` frame {flow_id}"),
                     }
                 }
             }
@@ -574,9 +573,7 @@ impl MultiplexorInner {
                     if let Err(e) = sender.send(request).await {
                         warn!("Failed to send `Bind` request: {e}");
                     }
-                    self.tx_frame_tx
-                        .send(Frame::new_finish(flow_id).finalize())
-                        .ok();
+                    // Let the user decide what to reply using `BindRequest::reply`
                 } else {
                     info!("Received `Bind` request but configured to not accept such requests");
                     self.tx_frame_tx
