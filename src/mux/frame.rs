@@ -653,10 +653,10 @@ mod tests {
         assert_eq!(frame, decoded);
     }
 
-    /// These tests are to make sure that the binary representation of the
-    /// frames does not change without a protocol version bump.
+    // These tests are to make sure that the binary representation of the
+    // frames does not change without a protocol version bump.
     #[test]
-    fn test_frame_repr() {
+    fn test_frame_repr_connect() {
         crate::tests::setup_logging();
         let frame = Frame::new_connect(&[0x01, 0x02, 0x03], 5678, 1234, 512);
         let bytes = Vec::from(&frame);
@@ -670,7 +670,13 @@ mod tests {
                 0x01, 0x02, 0x03, // host (variable)
             ]
         );
+        let frame_back = Frame::try_from(Bytes::from(bytes.clone())).unwrap();
+        assert_eq!(frame, frame_back);
+    }
 
+    #[test]
+    fn test_frame_repr_acknowledge() {
+        crate::tests::setup_logging();
         let frame = Frame::new_acknowledge(5678, 128);
         let bytes = Vec::from(&frame);
         assert_eq!(
@@ -681,7 +687,13 @@ mod tests {
                 0x00, 0x00, 0x00, 0x80, // psh_recvd_since (u32)
             ]
         );
+        let frame_back = Frame::try_from(Bytes::from(bytes.clone())).unwrap();
+        assert_eq!(frame, frame_back);
+    }
 
+    #[test]
+    fn test_frame_repr_reset() {
+        crate::tests::setup_logging();
         let frame = Frame::new_reset(1291);
         let bytes = Vec::from(&frame);
         assert_eq!(
@@ -691,7 +703,13 @@ mod tests {
                 0x00, 0x00, 0x05, 0x0b, // id (u32)
             ]
         );
+        let frame_back = Frame::try_from(Bytes::from(bytes.clone())).unwrap();
+        assert_eq!(frame, frame_back);
+    }
 
+    #[test]
+    fn test_frame_repr_finish() {
+        crate::tests::setup_logging();
         let frame = Frame::new_finish(0x534c);
         let bytes = Vec::from(&frame);
         assert_eq!(
@@ -701,7 +719,13 @@ mod tests {
                 0x00, 0x00, 0x53, 0x4c, // id (u32)
             ]
         );
+        let frame_back = Frame::try_from(Bytes::from(bytes.clone())).unwrap();
+        assert_eq!(frame, frame_back);
+    }
 
+    #[test]
+    fn test_frame_repr_push() {
+        crate::tests::setup_logging();
         let frame = Frame::new_push(0x75b_97bb, &[1, 2, 3, 4]);
         let bytes = Vec::from(&frame);
         assert_eq!(
@@ -712,7 +736,13 @@ mod tests {
                 0x01, 0x02, 0x03, 0x04, // data (variable)
             ]
         );
+        let frame_back = Frame::try_from(Bytes::from(bytes.clone())).unwrap();
+        assert_eq!(frame, frame_back);
+    }
 
+    #[test]
+    fn test_frame_repr_bind() {
+        crate::tests::setup_logging();
         let frame = Frame::new_bind(42132, BindType::Datagram, &[1, 2, 3, 4], 1234);
         let bytes = Vec::from(&frame);
         assert_eq!(
@@ -725,6 +755,8 @@ mod tests {
                 0x01, 0x02, 0x03, 0x04 // target_host (variable)
             ]
         );
+        let frame_back = Frame::try_from(Bytes::from(bytes.clone())).unwrap();
+        assert_eq!(frame, frame_back);
 
         let frame = Frame::new_bind(0x282_ea5f, BindType::Stream, &[4, 2, 3, 4], 1234);
         let bytes = Vec::from(&frame);
@@ -738,7 +770,13 @@ mod tests {
                 0x04, 0x02, 0x03, 0x04 // target_host (variable)
             ]
         );
+        let frame_back = Frame::try_from(Bytes::from(bytes.clone())).unwrap();
+        assert_eq!(frame, frame_back);
+    }
 
+    #[test]
+    fn test_frame_repr_datagram() {
+        crate::tests::setup_logging();
         let frame = Frame::new_datagram(2134, &[1, 2, 3, 4], 1234, &[1, 2, 3, 4]);
         let bytes = Vec::from(&frame);
         assert_eq!(
@@ -752,6 +790,8 @@ mod tests {
                 0x01, 0x02, 0x03, 0x04 // data (variable)
             ]
         );
+        let frame_back = Frame::try_from(Bytes::from(bytes.clone())).unwrap();
+        assert_eq!(frame, frame_back);
     }
 
     #[test]
