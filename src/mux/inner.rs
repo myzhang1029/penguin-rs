@@ -29,13 +29,13 @@ pub struct EstablishedStreamData {
     /// Channel for sending data to `MuxStream`'s `AsyncRead`
     sender: mpsc::Sender<Bytes>,
     /// Whether writes should succeed.
-    /// There are two cases for `false`:
+    /// There are two cases for `true`:
     /// 1. `Finish` has been sent.
     /// 2. The stream has been removed from `inner.streams`.
     // In general, our `Atomic*` types don't need more than `Relaxed` ordering
     // because we are not protecting memory accesses, but rather counting the
     // frames we have sent and received.
-    can_write: Arc<AtomicBool>,
+    finish_sent: Arc<AtomicBool>,
     /// Number of `Push` frames we are allowed to send before waiting for a `Acknowledge` frame.
     psh_send_remaining: Arc<AtomicU32>,
     /// Waker to wake up the task that sends frames because their `psh_send_remaining`
@@ -301,8 +301,8 @@ impl MultiplexorInner {
             if let FlowSlot::Established(stream_data) = stream_data {
                 // Prevent the user from writing
                 // Atomic ordering: It does not matter whether the user calls `poll_shutdown` or not,
-                // the stream is shut down and the final value of `can_write` is `false`.
-                stream_data.can_write.store(false, Ordering::Relaxed);
+                // the stream is shut down and the final value of `finish_sent` is `true`.
+                stream_data.finish_sent.store(true, Ordering::Relaxed);
                 // If there is a writer waiting for `Acknowledge`, wake it up because it will never receive one.
                 // Waking it here and the user should receive a `BrokenPipe` error.
                 stream_data.writer_waker.wake();
@@ -627,7 +627,7 @@ impl MultiplexorInner {
     ) -> Result<()> {
         // `tx` is our end, `rx` is the user's end
         let (frame_tx, frame_rx) = mpsc::channel(config::RWND_USIZE);
-        let can_write = Arc::new(AtomicBool::new(true));
+        let finish_sent = Arc::new(AtomicBool::new(false));
         let psh_send_remaining = Arc::new(AtomicU32::new(peer_rwnd));
         let writer_waker = Arc::new(AtomicWaker::new());
         // Scope the following block to reduce locked time
@@ -653,7 +653,7 @@ impl MultiplexorInner {
                 flow_id,
                 FlowSlot::Established(EstablishedStreamData {
                     sender: frame_tx,
-                    can_write: can_write.dupe(),
+                    finish_sent: finish_sent.dupe(),
                     psh_send_remaining: psh_send_remaining.dupe(),
                     writer_waker: writer_waker.dupe(),
                 }),
@@ -664,7 +664,7 @@ impl MultiplexorInner {
             flow_id,
             dest_host,
             dest_port,
-            can_write,
+            finish_sent,
             psh_send_remaining,
             psh_recvd_since: 0,
             writer_waker,
@@ -697,12 +697,12 @@ impl MultiplexorInner {
     fn ack_recv_new_stream(&self, flow_id: u32, peer_rwnd: u32) -> Result<()> {
         // `tx` is our end, `rx` is the user's end
         let (frame_tx, frame_rx) = mpsc::channel(config::RWND_USIZE);
-        let can_write = Arc::new(AtomicBool::new(true));
+        let finish_sent = Arc::new(AtomicBool::new(false));
         let psh_send_remaining = Arc::new(AtomicU32::new(peer_rwnd));
         let writer_waker = Arc::new(AtomicWaker::new());
         let stream_data = EstablishedStreamData {
             sender: frame_tx,
-            can_write: can_write.dupe(),
+            finish_sent: finish_sent.dupe(),
             psh_send_remaining: psh_send_remaining.dupe(),
             writer_waker: writer_waker.dupe(),
         };
@@ -712,7 +712,7 @@ impl MultiplexorInner {
             flow_id,
             dest_host: Bytes::new(),
             dest_port: 0,
-            can_write,
+            finish_sent,
             psh_send_remaining,
             psh_recvd_since: 0,
             writer_waker,
@@ -753,10 +753,10 @@ impl MultiplexorInner {
                 // the other end will receive a bogus `Reset` frame, which is fine.
                 // Store part:
                 // It does not matter whether the user calls `poll_shutdown` or not,
-                // the stream is shut down and the final value of `can_write` is `false`.
-                let old = stream_data.can_write.swap(false, Ordering::Relaxed);
+                // the stream is shut down and the final value of `finish_sent` is `true`.
+                let old = stream_data.finish_sent.swap(true, Ordering::Relaxed);
                 if old && !inhibit_rst {
-                    // If the user did not call `poll_shutdown`, we need to send a `Reset` frame
+                    // If the user did not call `poll_shutdown`, we send a `Reset` frame
                     self.tx_frame_tx
                         .send(Frame::new_reset(flow_id).finalize())
                         .ok();

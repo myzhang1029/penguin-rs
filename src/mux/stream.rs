@@ -25,8 +25,8 @@ pub struct MuxStream {
     pub dest_host: Bytes,
     /// Forwarding destination port
     pub dest_port: u16,
-    /// Whether writes should succeed
-    pub(super) can_write: Arc<AtomicBool>,
+    /// Whether writes should not succeed
+    pub(super) finish_sent: Arc<AtomicBool>,
     /// Number of frames we can still send before we need to wait for an `Acknowledge`
     pub(super) psh_send_remaining: Arc<AtomicU32>,
     /// Number of `Push` frames received after sending the previous `Acknowledge` frame
@@ -52,7 +52,7 @@ impl std::fmt::Debug for MuxStream {
             .field("flow_id", &format_args!("{:x}", self.flow_id))
             .field("dest_host", &self.dest_host)
             .field("dest_port", &self.dest_port)
-            .field("can_write", &self.can_write)
+            .field("finish_sent", &self.finish_sent)
             .field("psh_send_remaining", &self.psh_send_remaining)
             .field("psh_recvd_since", &self.psh_recvd_since)
             .field("rwnd_threshold", &self.rwnd_threshold)
@@ -152,7 +152,7 @@ impl AsyncWrite for MuxStream {
         // Both `close_port` and `shutdown` in `inner.rs` set this flag with
         // `Relaxed` ordering because they are not releasing any access, but
         // instead acting based on the WebSocket or the stream's states.
-        if !self.can_write.load(Ordering::Relaxed) {
+        if self.finish_sent.load(Ordering::Relaxed) {
             // The stream has been closed. Return an error
             debug!("stream has been closed, returning `BrokenPipe`");
             return Poll::Ready(Err(BrokenPipe.into()));
@@ -215,12 +215,12 @@ impl AsyncWrite for MuxStream {
         // 2. The entire mux task has been dropped, so we will only get `BrokenPipe` error.
         // Atomic ordering: see `inner.rs` -> `close_port`.
         // As a summary, duplicate `Finish`/`Reset` frames are harmless.
-        if self.can_write.load(Ordering::Relaxed) {
+        if !self.finish_sent.load(Ordering::Relaxed) {
             self.frame_tx
                 .send(Frame::new_finish(self.flow_id).finalize())
                 .map_err(|_| BrokenPipe)?;
             // Atomic ordering: see `inner.rs` -> `shutdown` and `close_port`.
-            self.can_write.store(false, Ordering::Relaxed);
+            self.finish_sent.store(true, Ordering::Relaxed);
         }
         Poll::Ready(Ok(()))
     }
@@ -243,7 +243,7 @@ mod tests {
             flow_id: 1,
             dest_host: Bytes::new(),
             dest_port: 8080,
-            can_write: Arc::new(AtomicBool::new(true)),
+            finish_sent: Arc::new(AtomicBool::new(false)),
             psh_send_remaining: Arc::new(AtomicU32::new(2)),
             psh_recvd_since: 0,
             writer_waker: Arc::new(AtomicWaker::new()),
@@ -307,7 +307,7 @@ mod tests {
             flow_id: 1,
             dest_host: Bytes::new(),
             dest_port: 8080,
-            can_write: Arc::new(AtomicBool::new(true)),
+            finish_sent: Arc::new(AtomicBool::new(false)),
             psh_send_remaining: Arc::new(AtomicU32::new(2)),
             psh_recvd_since: 0,
             writer_waker: Arc::new(AtomicWaker::new()),
