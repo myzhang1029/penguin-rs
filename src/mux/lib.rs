@@ -360,7 +360,7 @@ pub struct Datagram {
 }
 
 /// A `Bind` request that the user can respond to
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct BindRequest<'data> {
     /// Flow ID
     flow_id: u32,
@@ -406,6 +406,13 @@ impl BindRequest<'_> {
                 .send(Frame::new_reset(self.flow_id).finalize())
         }
         .map_err(|_| Error::Closed)
+    }
+}
+
+impl Drop for BindRequest<'_> {
+    /// Dropping a `BindRequest` will reject the request
+    fn drop(&mut self) {
+        self.reply(false).ok();
     }
 }
 
