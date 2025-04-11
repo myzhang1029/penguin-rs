@@ -217,6 +217,10 @@ pub struct ServerArgs {
     /// in the HTTP header X-Penguin-PSK, the upgrade to WebSocket silently fails.
     #[arg(long)]
     pub ws_psk: Option<HeaderValue>,
+    /// Allow clients to specify reverse port forwarding remotes in addition to
+    /// normal remotes.
+    #[arg(long = "reverse")]
+    pub reverse: bool,
     /// Enables TLS and provides optional path to a PEM-encoded
     /// TLS private key. When this flag is set, you must also set --tls-cert,
     /// and you cannot set --tls-domain.
@@ -273,9 +277,6 @@ pub struct ServerArgs {
     /// For compatibility with `chisel` only. This option is a no-op.
     #[arg(long = "socks5")]
     pub _socks5: bool,
-    /// For compatibility with `chisel` only. This option is a no-op.
-    #[arg(long = "reverse")]
-    pub _reverse: bool,
     /// For compatibility with `chisel` only. This option is a no-op.
     #[arg(long = "keepalive", default_value = "0")]
     pub _keepalive: OptionalDuration,
@@ -763,6 +764,7 @@ mod tests {
             assert!(args.obfs);
             assert_eq!(args.not_found_resp, "404");
             assert_eq!(args.ws_psk, Some(HeaderValue::from_static("avocado")));
+            assert!(!args.reverse);
             assert_eq!(args.tls_key, None);
             assert_eq!(args.tls_cert, None);
             assert_eq!(args.tls_domain, ["example.com", "example.net"]);
@@ -791,6 +793,7 @@ mod tests {
             "404",
             "--ws-psk",
             "avocado",
+            "--reverse",
             "--tls-key",
             "key.pem",
             "--tls-cert",
@@ -811,6 +814,7 @@ mod tests {
             assert!(args.obfs);
             assert_eq!(args.not_found_resp, "404");
             assert_eq!(args.ws_psk, Some(HeaderValue::from_static("avocado")));
+            assert!(args.reverse);
             assert_eq!(args.tls_key, Some("key.pem".to_string()));
             assert_eq!(args.tls_cert, Some("cert.pem".to_string()));
             assert_eq!(args.tls_ca, Some("ca.pem".to_string()));
