@@ -251,7 +251,7 @@ impl Debug for Frame<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Frame")
             .field("opcode", &OpCode::from(&self.payload))
-            .field("id", &self.id)
+            .field("id", &format_args!("{:08x}", self.id))
             .field("payload.len", &self.payload.len())
             .finish()
     }

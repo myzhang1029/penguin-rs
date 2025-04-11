@@ -10,7 +10,7 @@ use penguin_mux::{Datagram, Dupe};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::UdpSocket;
-use tracing::{debug, info};
+use tracing::{info, trace};
 
 /// Handle a UDP Inet->Inet remote.
 #[inline]
@@ -40,7 +40,7 @@ pub(super) async fn handle_udp(
             .await
             .map_err(FatalError::ClientIo)?;
         buf.truncate(len);
-        debug!("received {len} bytes from {addr}");
+        trace!("received {len} bytes from {addr}");
         let client_id = handler_resources
             .add_udp_client(addr, socket.dupe(), false)
             .await;

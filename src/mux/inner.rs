@@ -417,7 +417,7 @@ impl MultiplexorInner {
     ///   - Send the data to the sender.
     ///   - If the receiver is closed or the port does not exist, send back a
     ///     `Reset` frame.
-    #[tracing::instrument(skip_all, level = "trace")]
+    #[tracing::instrument(skip_all, fields(flow_id), level = "debug")]
     #[inline]
     async fn process_frame(
         &self,
@@ -430,6 +430,7 @@ impl MultiplexorInner {
             id: flow_id,
             payload,
         } = frame;
+        tracing::Span::current().record("flow_id", &format_args!("{:08x}", flow_id));
         let send_rst = async {
             self.tx_frame_tx
                 .send(Frame::new_reset(flow_id).finalize())
@@ -454,7 +455,7 @@ impl MultiplexorInner {
                 .await?;
             }
             Payload::Acknowledge(payload) => {
-                trace!("received `Acknowledge` for {flow_id:x}");
+                trace!("received `Acknowledge`");
                 // Three cases:
                 // 1. Peer acknowledged `Connect`
                 // 2. Peer acknowledged some `Push` frames
@@ -474,7 +475,7 @@ impl MultiplexorInner {
                         (false, false)
                     }
                     Some(FlowSlot::Requested(_)) => {
-                        debug!("new stream {flow_id:x} with peer rwnd {payload}");
+                        debug!("new stream with peer rwnd {payload}");
                         (true, false)
                     }
                     Some(FlowSlot::BindRequested(_)) => {
@@ -482,7 +483,7 @@ impl MultiplexorInner {
                         (false, true)
                     }
                     None => {
-                        debug!("port {flow_id:x} does not exist, sending `Reset`");
+                        debug!("stream does not exist, sending `Reset`");
                         (false, true)
                     }
                 };
@@ -521,12 +522,12 @@ impl MultiplexorInner {
                             // If the send above fails, the receiver is dropped,
                             // so we can just ignore it.
                         }
-                        None => warn!("Bogus `Finish` frame {flow_id:x}"),
+                        None => warn!("Bogus `Finish` frame"),
                     }
                 }
             }
             Payload::Reset => {
-                debug!("`Reset` for {flow_id:x}");
+                debug!("received `Reset`");
                 // `true` because we don't want to reply `Reset` with `Reset`.
                 self.close_port(flow_id, true).await;
             }
@@ -545,9 +546,7 @@ impl MultiplexorInner {
                         Err(TrySendError::Full(_)) => {
                             // Peer does not respect the `rwnd` limit, this should not happen in normal circumstances.
                             // let it fall through to send `Reset`.
-                            warn!(
-                                "Peer does not respect `rwnd` limit, dropping stream {flow_id:x}"
-                            );
+                            warn!("Peer does not respect `rwnd` limit, dropping stream");
                             send_rst.await;
                         }
                         Err(TrySendError::Closed(_)) => {
@@ -560,7 +559,7 @@ impl MultiplexorInner {
                         Ok(()) => (),
                     }
                 } else {
-                    warn!("Bogus `Push` frame {flow_id:x}");
+                    warn!("Bogus `Push` frame");
                     send_rst.await;
                 }
             }
@@ -587,7 +586,7 @@ impl MultiplexorInner {
                 }
             }
             Payload::Datagram(payload) => {
-                trace!("received datagram frame with flow_id {flow_id:x}: {payload:?}");
+                trace!("received datagram frame: {payload:?}");
                 // Only fails if the receiver is dropped or the queue is full.
                 // The first case means the multiplexor itself is dropped;
                 // In the second case, we just drop the frame to avoid blocking.
@@ -601,7 +600,7 @@ impl MultiplexorInner {
                 if let Err(e) = datagram_tx.try_send(datagram) {
                     match e {
                         TrySendError::Full(_) => {
-                            warn!("dropped datagram frame: {e}");
+                            warn!("Dropped datagram: {e}");
                         }
                         TrySendError::Closed(_) => {
                             return Err(Error::Closed);
@@ -654,7 +653,7 @@ impl MultiplexorInner {
     /// Create a new stream because this end received a [`Connect`](crate::frame::OpCode::Connect) frame.
     /// Create a new `MuxStream`, add it to the map, and send an `Acknowledge` frame.
     /// If `our_port` is 0, a new port will be allocated.
-    #[tracing::instrument(skip_all, fields(flow_id = format!("{flow_id:x}")), level="debug")]
+    #[tracing::instrument(skip_all, level = "debug")]
     #[inline]
     async fn con_recv_new_stream(
         &self,
@@ -709,7 +708,7 @@ impl MultiplexorInner {
 
     /// Create a new `MuxStream` by finalizing a Con/Ack handshsake and
     /// change the state of the port to `Established`.
-    #[tracing::instrument(skip_all, fields(flow_id = format!("{flow_id:x}")), level="debug")]
+    #[tracing::instrument(skip_all, level = "debug")]
     #[inline]
     fn ack_recv_new_stream(&self, flow_id: u32, peer_rwnd: u32) -> Result<()> {
         // Change the state of the port to `Established` and send the stream to the user
@@ -729,7 +728,7 @@ impl MultiplexorInner {
 
     /// Close a port. That is, send `Reset` if `Finish` is not sent,
     /// and remove it from the map.
-    #[tracing::instrument(skip_all, fields(flow_id = format!("{flow_id:x}")))]
+    #[tracing::instrument(skip_all)]
     #[inline]
     async fn close_port(&self, flow_id: u32, inhibit_rst: bool) {
         // Free the port for reuse

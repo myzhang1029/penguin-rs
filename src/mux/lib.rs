@@ -208,7 +208,7 @@ impl Multiplexor {
                 let mut streams = self.inner.flows.write();
                 // Allocate a new port
                 let flow_id = u32::next_available_key(&*streams);
-                trace!("flow_id = {flow_id:x}");
+                trace!("flow_id = {flow_id:08x}");
                 streams.insert(flow_id, inner::FlowSlot::Requested(stream_tx));
                 flow_id
             };
@@ -312,7 +312,7 @@ impl Multiplexor {
             let mut streams = self.inner.flows.write();
             // Allocate a new port
             let flow_id = u32::next_available_key(&*streams);
-            trace!("flow_id = {flow_id:x}");
+            trace!("flow_id = {flow_id:08x}");
             streams.insert(flow_id, inner::FlowSlot::BindRequested(result_tx));
             flow_id
         };
