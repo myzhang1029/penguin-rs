@@ -114,7 +114,7 @@ The `Push` frame has the following fields:
 
 #### `Bind` Frame
 The `Bind` frame has the following fields:
-- `bind_type`: a 16-bit unsigned integer in network byte order representing
+- `bind_type`: a 8-bit unsigned integer in network byte order representing
   the type of bind request.
 - `target_port`: a 16-bit unsigned integer in network byte order representing
   the local port the server should bind to.

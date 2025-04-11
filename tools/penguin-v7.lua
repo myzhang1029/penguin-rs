@@ -1,82 +1,88 @@
 -- Wireshark dissector for the Penguin v7 protocol
-penguinv6_proto = Proto("penguin-v7", "Penguin v7 Protocol")
+penguinv7_proto = Proto("penguin-v7", "Penguin v7 Protocol")
 
-local f_type = ProtoField.string("penguin-v7.type", "Type")
-local f_forwarding_port = ProtoField.uint16("penguin-v7.forwarding_port", "Forwarding Port")
-local f_forwarding_host = ProtoField.string("penguin-v7.forwarding_host", "Forwarding Host")
-local f_payload = ProtoField.bytes("penguin-v7.payload", "Payload")
-local f_sport = ProtoField.uint16("penguin-v7.sport", "Source Port")
-local f_dport = ProtoField.uint16("penguin-v7.dport", "Destination Port")
--- stream only
+local opcodes = {
+    [0] = "Connect",
+    [1] = "Acknowledge",
+    [2] = "Reset",
+    [3] = "Finish",
+    [4] = "Push",
+    [5] = "Bind",
+    [6] = "Datagram"
+}
+
+local bind_types = {
+    [1] = "TCP",
+    [3] = "UDP"
+}
+
+local f_opcode = ProtoField.uint8("penguin-v7.opcode", "Operation Code", base.DEC, opcodes)
+local f_flow_id = ProtoField.uint32("penguin-v7.flow_id", "Flow ID", base.HEX)
 local f_rwnd = ProtoField.uint64("penguin-v7.rwnd", "Buffer Size")
-local f_opcode = ProtoField.string("penguin-v7.opcode", "Operation Code")
 local f_ack = ProtoField.uint64("penguin-v7.ack", "Acknowledge Amount")
--- datagram only
+local f_target_port = ProtoField.uint16("penguin-v7.target_port", "Target Port")
+local f_target_host = ProtoField.string("penguin-v7.target_host", "Target Host")
 local f_host_len = ProtoField.uint8("penguin-v7.host_len", "Host Length")
+local f_bind_type = ProtoField.uint8("penguin-v7.bind_type", "Bind Type", base.DEC, bind_types)
+local f_payload = ProtoField.bytes("penguin-v7.payload", "Payload")
 
 penguinv7_proto.fields = {
-    f_type,
-    f_forwarding_port,
-    f_forwarding_host,
-    f_payload,
-    f_sport,
-    f_dport,
-    f_rwnd,
     f_opcode,
+    f_flow_id,
+    f_rwnd,
     f_ack,
-    f_host_len
+    f_target_port,
+    f_target_host,
+    f_host_len,
+    f_bind_type,
+    f_payload
 }
 
 function penguinv7_proto.dissector(buffer, pinfo, tree)
     pinfo.cols.protocol = "Penguin v7"
     local subtree = tree:add(penguinv7_proto, buffer(), "Penguin v7 Protocol")
-    local frame_type = buffer(0, 1):uint()
-    if frame_type == 1 then
-        -- Stream Frame
-        subtree:add(f_type, "stream")
-        local opcode = buffer(1, 1):uint()
-        subtree:add(f_sport, buffer(2, 2))
-        subtree:add(f_dport, buffer(4, 2))
-        local opcodes = {
-            [0] = "Syn",
-            [2] = "Ack",
-            [3] = "Rst",
-            [4] = "Fin",
-            [5] = "Psh",
-            [6] = "Bnd"
-        }
-        if opcodes[opcode] ~= nil then
-            subtree:add(f_opcode, opcodes[opcode])
-        else
-            -- Not penguin-v6
+    local first_byte = buffer(0, 1):uint()
+    if (first_byte >> 4) ~= 7 then
+        -- Not penguin-v7
+        return 0
+    end
+    local opcode = first_byte & 0x0F;
+    subtree:add(f_opcode, opcode)
+    subtree:add(f_flow_id, buffer(1, 4))
+    if opcode == 0 then
+        -- Connect
+        subtree:add(f_rwnd, buffer(5, 4))
+        subtree:add(f_target_port, buffer(9, 2))
+        subtree:add(f_target_host, buffer(11))
+    elseif opcode == 1 then
+        -- Acknowledge
+        subtree:add(f_ack, buffer(5, 4))
+    elseif opcode == 2 then
+        -- Reset
+    elseif opcode == 3 then
+        -- Finish
+    elseif opcode == 4 then
+        -- Push
+        subtree:add(f_payload, buffer(5))
+    elseif opcode == 5 then
+        -- Bind
+        local bind_type = buffer(5, 1):uint()
+        if bind_types[bind_type] == nil then
             return 0
         end
-        if opcode == 0 then
-            -- Syn rwnd
-            subtree:add(f_rwnd, buffer(6, 8))
-            -- Syn forwarding target
-            subtree:add(f_forwarding_port, buffer(14, 2))
-            subtree:add(f_forwarding_host, buffer(16))
-        elseif flag == 2 then
-            -- Ack amount
-            subtree:add(f_ack, buffer(6, 8))
-        elseif flag == 5 then
-            -- Remaining is data
-            subtree:add(f_payload, buffer(6))
-        end
-    elseif frame_type == 3 then
-        -- Datagram Frame
-        subtree:add(f_type, "datagram")
-        local hostlen = buffer(1, 1):uint()
-        subtree:add(f_host_len, hostlen)
-        subtree:add(f_sport, buffer(2, 2))
-        subtree:add(f_dport, buffer(4, 2))
-        subtree:add(f_forwarding_port, buffer(6, 2))
-        subtree:add(f_forwarding_host, buffer(8, hostlen))
+        subtree:add(f_bind_type, bind_type)
+        subtree:add(f_target_port, buffer(6, 2))
+        subtree:add(f_target_host, buffer(8))
+    elseif opcode == 6 then
+        -- Datagram
+        local host_len = buffer(5, 1):uint()
+        subtree:add(f_host_len, host_len)
+        subtree:add(f_target_port, buffer(6, 2))
+        subtree:add(f_target_host, buffer(8, host_len))
         -- Remaining is data
-        subtree:add(f_payload, buffer(8 + hostlen))
+        subtree:add(f_payload, buffer(8 + host_len))
     else
-        -- Not penguin-v6
+        -- Not penguin-v7
         return 0
     end
 end
