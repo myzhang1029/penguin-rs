@@ -14,3 +14,5 @@ pub const STREAM_REQUEST_COMMAND_SIZE: usize = 1 << 6;
 pub const INCOMING_DATAGRAM_BUFFER_SIZE: usize = 1 << 6;
 /// Both: Maximum size of a UDP packet.
 pub const MAX_UDP_PACKET_SIZE: usize = 1 << 16;
+/// Server side: Bind request buffer size
+pub const BIND_BUFFER_SIZE: usize = 1 << 4;
