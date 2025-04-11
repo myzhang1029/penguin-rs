@@ -95,3 +95,14 @@ penguin-binary = [
 
 [profile.release]
 debug = true
+codegen-units = 1
+lto = true
+
+[profile.release-size]
+inherits = "release"
+opt-level = "z"
+debug = false
+strip = true
+codegen-units = 1
+lto = true
+panic = "abort"
