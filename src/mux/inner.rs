@@ -430,7 +430,7 @@ impl MultiplexorInner {
             id: flow_id,
             payload,
         } = frame;
-        tracing::Span::current().record("flow_id", &format_args!("{:08x}", flow_id));
+        tracing::Span::current().record("flow_id", format_args!("{flow_id:08x}"));
         let send_rst = async {
             self.tx_frame_tx
                 .send(Frame::new_reset(flow_id).finalize())
