@@ -59,6 +59,10 @@ async fn make_server_config_from_mem(
     }
     .with_single_cert(certs, key)?;
     config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    #[cfg(feature = "rustls-keylog")]
+    {
+        config.key_log = Arc::new(rustls::KeyLogFile::new());
+    }
     Ok(config)
 }
 
@@ -88,6 +92,10 @@ pub async fn make_client_config(
         (false, None) => config.with_root_certificates(roots).with_no_client_auth(),
     };
     config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    #[cfg(feature = "rustls-keylog")]
+    {
+        config.key_log = Arc::new(rustls::KeyLogFile::new());
+    }
     Ok(config)
 }
 

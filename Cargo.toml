@@ -70,6 +70,8 @@ tests-real-internet6 = []
 tests-acme-has-pebble = ["acme"]
 # Set the default localhost or unspecified address to IPv6
 default-is-ipv6 = []
+# Export key logs to a file specified via env SSLKEYLOGFILE
+rustls-keylog = ["__rustls"]
 # Enabling this causes `penguin` to listen for `tokio-console` connections
 tokio-console = ["dep:console-subscriber"]
 # Statically remove some logging code. This breaks `tokio-console`
