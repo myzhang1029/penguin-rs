@@ -11,10 +11,14 @@ impl MaybeRetryableError for std::io::Error {
     fn retryable(&self) -> bool {
         self.kind() == std::io::ErrorKind::AddrNotAvailable
             || self.kind() == std::io::ErrorKind::BrokenPipe
-            || self.kind() == std::io::ErrorKind::ConnectionReset
             || self.kind() == std::io::ErrorKind::ConnectionRefused
+            || self.kind() == std::io::ErrorKind::ConnectionReset
+            || self.kind() == std::io::ErrorKind::HostUnreachable
+            || self.kind() == std::io::ErrorKind::NetworkUnreachable
             || self.kind() == std::io::ErrorKind::ConnectionAborted
             || self.kind() == std::io::ErrorKind::NotConnected
+            || self.kind() == std::io::ErrorKind::AddrNotAvailable
+            || self.kind() == std::io::ErrorKind::NetworkDown
             || self.kind() == std::io::ErrorKind::TimedOut
             || self.kind() == std::io::ErrorKind::UnexpectedEof
     }
