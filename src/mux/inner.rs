@@ -454,7 +454,7 @@ impl MultiplexorInner {
                 .await?;
             }
             Payload::Acknowledge(payload) => {
-                trace!("received `Acknowledge` for {flow_id}");
+                trace!("received `Acknowledge` for {flow_id:x}");
                 // Three cases:
                 // 1. Peer acknowledged `Connect`
                 // 2. Peer acknowledged some `Push` frames
@@ -474,7 +474,7 @@ impl MultiplexorInner {
                         (false, false)
                     }
                     Some(FlowSlot::Requested(_)) => {
-                        debug!("new stream {flow_id} with peer rwnd {payload}");
+                        debug!("new stream {flow_id:x} with peer rwnd {payload}");
                         (true, false)
                     }
                     Some(FlowSlot::BindRequested(_)) => {
@@ -482,7 +482,7 @@ impl MultiplexorInner {
                         (false, true)
                     }
                     None => {
-                        debug!("port {flow_id} does not exist, sending `Reset`");
+                        debug!("port {flow_id:x} does not exist, sending `Reset`");
                         (false, true)
                     }
                 };
@@ -521,12 +521,12 @@ impl MultiplexorInner {
                             // If the send above fails, the receiver is dropped,
                             // so we can just ignore it.
                         }
-                        None => warn!("Bogus `Finish` frame {flow_id}"),
+                        None => warn!("Bogus `Finish` frame {flow_id:x}"),
                     }
                 }
             }
             Payload::Reset => {
-                debug!("`Reset` for {flow_id}");
+                debug!("`Reset` for {flow_id:x}");
                 // `true` because we don't want to reply `Reset` with `Reset`.
                 self.close_port(flow_id, true).await;
             }
@@ -545,7 +545,9 @@ impl MultiplexorInner {
                         Err(TrySendError::Full(_)) => {
                             // Peer does not respect the `rwnd` limit, this should not happen in normal circumstances.
                             // let it fall through to send `Reset`.
-                            warn!("Peer does not respect `rwnd` limit, dropping stream {flow_id}");
+                            warn!(
+                                "Peer does not respect `rwnd` limit, dropping stream {flow_id:x}"
+                            );
                             send_rst.await;
                         }
                         Err(TrySendError::Closed(_)) => {
@@ -558,7 +560,7 @@ impl MultiplexorInner {
                         Ok(()) => (),
                     }
                 } else {
-                    warn!("Bogus `Push` frame {flow_id}");
+                    warn!("Bogus `Push` frame {flow_id:x}");
                     send_rst.await;
                 }
             }
@@ -585,7 +587,7 @@ impl MultiplexorInner {
                 }
             }
             Payload::Datagram(payload) => {
-                trace!("received datagram frame with flow_id {flow_id}: {payload:?}");
+                trace!("received datagram frame with flow_id {flow_id:x}: {payload:?}");
                 // Only fails if the receiver is dropped or the queue is full.
                 // The first case means the multiplexor itself is dropped;
                 // In the second case, we just drop the frame to avoid blocking.
@@ -633,7 +635,7 @@ impl MultiplexorInner {
             // Save the TX end of the stream so we can write to it when subsequent frames arrive
             let mut streams = self.flows.write();
             if streams.contains_key(&flow_id) {
-                debug!("resetting `Connnect` with in-use flow_id {flow_id}");
+                debug!("resetting `Connnect` with in-use flow_id {flow_id:x}");
                 self.tx_frame_tx
                     .send(Frame::new_reset(flow_id).finalize())
                     .ok();
@@ -763,20 +765,20 @@ impl MultiplexorInner {
                 // If there is a writer waiting for `Acknowledge`, wake it up because it will never receive one.
                 // Waking it here and the user should receive a `BrokenPipe` error.
                 stream_data.writer_waker.wake();
-                debug!("freed connection {flow_id}");
+                debug!("freed connection {flow_id:x}");
             }
             Some(FlowSlot::Requested(sender)) => {
                 sender.send(None).ok();
                 // Ignore the error if the user already cancelled the requesting future
-                debug!("peer cancelled `Connect` for port {flow_id}");
+                debug!("peer cancelled `Connect` for port {flow_id:x}");
             }
             Some(FlowSlot::BindRequested(sender)) => {
                 sender.send(false).ok();
                 // Ignore the error if the user already cancelled the requesting future
-                debug!("peer rejected `Bind` for port {flow_id}");
+                debug!("peer rejected `Bind` for port {flow_id:x}");
             }
             None => {
-                debug!("port {flow_id} not found, nothing to close");
+                debug!("port {flow_id:x} not found, nothing to close");
             }
         }
     }

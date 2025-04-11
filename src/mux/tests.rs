@@ -42,13 +42,13 @@ async fn connect_succeeds() {
     let server_task = tokio::spawn(async move {
         let stream = server_mux.accept_stream_channel().await.unwrap();
         info!(
-            "flow_id = {}, dest = {:?}:{}",
+            "flow_id = {:x}, dest = {:?}:{}",
             stream.flow_id, stream.dest_host, stream.dest_port
         );
     });
 
     let stream = client_mux.new_stream_channel(&[], 0).await.unwrap();
-    info!("flow_id = {}", stream.flow_id);
+    info!("flow_id = {:x}", stream.flow_id);
     debug!("Waiting for server task to finish");
     server_task.await.unwrap();
 }

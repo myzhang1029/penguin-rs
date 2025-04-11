@@ -49,7 +49,7 @@ pub struct MuxStream {
 impl std::fmt::Debug for MuxStream {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MuxStream")
-            .field("flow_id", &self.flow_id)
+            .field("flow_id", &format_args!("{:x}", self.flow_id))
             .field("dest_host", &self.dest_host)
             .field("dest_port", &self.dest_port)
             .field("can_write", &self.can_write)

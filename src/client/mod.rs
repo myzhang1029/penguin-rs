@@ -367,14 +367,14 @@ async fn on_connected(
                 let data = dgram_frame.data;
                 match ClientIdMaps::send_datagram(&udp_client_map, client_id, data.as_ref()).await {
                     Some(Ok(())) => {
-                        trace!("sent datagram to client {client_id}");
+                        trace!("sent datagram to client {client_id:x}");
                     }
                     Some(Err(e)) => {
-                        warn!("Failed to send datagram to client {client_id}: {e}");
+                        warn!("Failed to send datagram to client {client_id:x}: {e}");
                     }
                     None => {
                         // Just drop the datagram
-                        info!("Received datagram for unknown client ID: {client_id}");
+                        info!("Received datagram for unknown client ID: {client_id:x}");
                     }
                 }
             }
