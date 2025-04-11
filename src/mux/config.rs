@@ -11,6 +11,8 @@ pub const DATAGRAM_BUFFER_SIZE: usize = 1 << 9;
 pub const STREAM_BUFFER_SIZE: usize = 1 << 4;
 /// Number of `Bnd` requests to buffer in the channels on the receiving end.
 pub const BND_BUFFER_SIZE: usize = 1 << 4;
+/// Number of retries for establishing a connection if the other end rejects our flow_id selection.
+pub const MAX_FLOW_ID_RETRIES: usize = 3;
 
 /// Needs to be the same as `RWND` but as `usize`
 pub const RWND_USIZE: usize = RWND as usize;

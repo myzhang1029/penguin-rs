@@ -15,7 +15,7 @@ use std::{fmt::Debug, mem::size_of};
 use thiserror::Error;
 
 /// Errors that can occur when parsing a frame.
-#[derive(Debug, Error)]
+#[derive(Debug, Error, PartialEq, Eq)]
 pub enum Error {
     /// Frame is invalid or incomplete
     #[error("Frame is invalid or incomplete")]

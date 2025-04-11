@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::*;
+use futures_util::{SinkExt, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 use tokio_tungstenite::tungstenite::protocol::Role;
 use tracing::{debug, info};
@@ -384,6 +385,101 @@ async fn test_several_channels() {
     conn3.shutdown().await.unwrap();
     info!("client conn3 wrote");
 
+    debug!("Waiting for server task to finish");
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn test_flow_id_contention_will_give_up() {
+    setup_logging();
+    let (client, mut server) = get_pair(None).await;
+
+    let client_mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
+
+    let server_task = tokio::spawn(async move {
+        // This side receives frames `Connect` and simply `Reset`s them
+        while let Some(message) = server.next().await {
+            let message = message.unwrap();
+            let Message::Binary(payload) = message else {
+                continue;
+            };
+            let frame = crate::frame::Frame::try_from(payload).unwrap();
+            if matches!(frame.payload, crate::frame::Payload::Connect(_)) {
+                debug!("Server received Connect frame, sending Reset");
+                let reset_frame = crate::frame::Frame::new_reset(frame.id);
+                server
+                    .send(tokio_tungstenite::tungstenite::Message::Binary(
+                        (&reset_frame).into(),
+                    ))
+                    .await
+                    .unwrap();
+            }
+        }
+    });
+    let stream1 = client_mux.new_stream_channel(&[], 0).await;
+    assert!(matches!(stream1.unwrap_err(), Error::FlowIdRejected));
+    drop(client_mux);
+    debug!("Waiting for server task to finish");
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn test_flow_id_contention_can_succeed() {
+    setup_logging();
+    let (client, mut server) = get_pair(None).await;
+
+    let client_mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
+
+    let (serverside_received_ports_tx, serverside_received_ports_rx) = oneshot::channel();
+
+    let server_task = tokio::spawn(async move {
+        // This side receives frames `Connect` and `Reset`s the first one
+        let mut rx_flow_ids = (0, 0);
+        let message = server.next().await.unwrap().unwrap();
+        let Message::Binary(payload) = message else {
+            return;
+        };
+        let frame = crate::frame::Frame::try_from(payload).unwrap();
+        rx_flow_ids.0 = frame.id;
+        if matches!(frame.payload, crate::frame::Payload::Connect(_)) {
+            debug!("Server received the first Connect frame, sending Reset");
+            let reset_frame = crate::frame::Frame::new_reset(frame.id);
+            server
+                .send(tokio_tungstenite::tungstenite::Message::Binary(
+                    (&reset_frame).into(),
+                ))
+                .await
+                .unwrap();
+        }
+
+        let message = server.next().await.unwrap().unwrap();
+        let Message::Binary(payload) = message else {
+            return;
+        };
+        let frame = crate::frame::Frame::try_from(payload).unwrap();
+        rx_flow_ids.1 = frame.id;
+        if matches!(frame.payload, crate::frame::Payload::Connect(_)) {
+            debug!("Server received the second Connect frame, sending Acknowledge");
+            let reset_frame = crate::frame::Frame::new_acknowledge(frame.id, 10);
+            server
+                .send(tokio_tungstenite::tungstenite::Message::Binary(
+                    (&reset_frame).into(),
+                ))
+                .await
+                .unwrap();
+        }
+        serverside_received_ports_tx.send(rx_flow_ids).unwrap();
+    });
+    let stream1 = client_mux.new_stream_channel(&[], 0).await.unwrap();
+    drop(client_mux);
+    let (_, server_flow_id2) = serverside_received_ports_rx.await.unwrap();
+    assert_eq!(stream1.flow_id, server_flow_id2);
+    assert_eq!(
+        stream1
+            .psh_send_remaining
+            .load(std::sync::atomic::Ordering::Relaxed),
+        10
+    );
     debug!("Waiting for server task to finish");
     server_task.await.unwrap();
 }

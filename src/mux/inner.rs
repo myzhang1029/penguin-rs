@@ -46,7 +46,7 @@ pub struct EstablishedStreamData {
 #[derive(Debug)]
 pub enum FlowSlot {
     /// A `Connect` frame was sent and waiting for the peer to `Acknowledge`.
-    Requested(oneshot::Sender<MuxStream>),
+    Requested(oneshot::Sender<Option<MuxStream>>),
     /// The stream is established.
     Established(EstablishedStreamData),
     /// A `Bind` request was sent and waiting for the peer to `Acknowledge` or `Reset`.
@@ -56,7 +56,10 @@ pub enum FlowSlot {
 impl FlowSlot {
     /// Take the sender and set the slot to `Established`.
     /// Returns `None` if the slot is already established.
-    pub fn establish(&mut self, data: EstablishedStreamData) -> Option<oneshot::Sender<MuxStream>> {
+    pub fn establish(
+        &mut self,
+        data: EstablishedStreamData,
+    ) -> Option<oneshot::Sender<Option<MuxStream>>> {
         // Make sure it is not replaced in the error case
         if matches!(self, Self::Established(_) | Self::BindRequested(_)) {
             error!("establishing an established or invalid slot");
@@ -634,8 +637,14 @@ impl MultiplexorInner {
                 self.tx_frame_tx
                     .send(Frame::new_reset(flow_id).finalize())
                     .ok();
-                // The existing connection at the same `flow_id` is not affected
-                // TODO: test this case
+                // On the other side, `process_frame` will pass the `Reset` frame to
+                // `close_port`, which takes the port out of the map and inform `Multiplexor::new_stream_channel`
+                // to retry.
+                // The existing connection at the same `flow_id` is not affected. For conforminh implementations,
+                // This only happens when both ends are trying to establish a new connection at the same time
+                // and also happen to have chosen the same `flow_id`.
+                // In this case, the peer would also receive our `Connect` frame and, depending on the timing,
+                // `Reset` us too or `Acknowledge` us.
                 return Ok(());
             }
             streams.insert(
@@ -719,7 +728,7 @@ impl MultiplexorInner {
             .ok_or(Error::ConnAckGone)?
             .establish(stream_data)
             .ok_or(Error::ConnAckGone)?
-            .send(stream)
+            .send(Some(stream))
             .map_err(|_| Error::SendStreamToClient)?;
         Ok(())
     }
@@ -735,6 +744,7 @@ impl MultiplexorInner {
             Some(FlowSlot::Established(stream_data)) => {
                 // Make sure the user receives `EOF`.
                 stream_data.sender.send(Bytes::new()).await.ok();
+                // Ignore the error if the user already dropped the stream
                 // Atomic ordering:
                 // Load part:
                 // If the user calls `poll_shutdown`, but we see `true` here,
@@ -748,17 +758,21 @@ impl MultiplexorInner {
                     self.tx_frame_tx
                         .send(Frame::new_reset(flow_id).finalize())
                         .ok();
+                    // Ignore the error because the other end will EOF everything anyway
                 }
                 // If there is a writer waiting for `Acknowledge`, wake it up because it will never receive one.
                 // Waking it here and the user should receive a `BrokenPipe` error.
                 stream_data.writer_waker.wake();
                 debug!("freed connection {flow_id}");
             }
-            Some(FlowSlot::Requested(_)) => {
+            Some(FlowSlot::Requested(sender)) => {
+                sender.send(None).ok();
+                // Ignore the error if the user already cancelled the requesting future
                 debug!("peer cancelled `Connect` for port {flow_id}");
             }
             Some(FlowSlot::BindRequested(sender)) => {
                 sender.send(false).ok();
+                // Ignore the error if the user already cancelled the requesting future
                 debug!("peer rejected `Bind` for port {flow_id}");
             }
             None => {

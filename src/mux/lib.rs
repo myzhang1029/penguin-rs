@@ -55,6 +55,9 @@ pub enum Error {
     /// This `Multiplexor` is not configured for this operation.
     #[error("Unsupported operation")]
     UnsupportedOperation,
+    /// Peer rejected the flow ID selection.
+    #[error("Peer rejected flow ID selection")]
+    FlowIdRejected,
 
     /// WebSocket errors
     #[error("WebSocket Error: {0}")]
@@ -197,27 +200,37 @@ impl Multiplexor {
     /// will result in a new channel being established.
     #[tracing::instrument(skip(self), level = "debug")]
     pub async fn new_stream_channel(&self, host: &[u8], port: u16) -> Result<MuxStream> {
-        let (stream_tx, stream_rx) = oneshot::channel();
-        let flow_id = {
-            let mut streams = self.inner.flows.write();
-            // Allocate a new port
-            let flow_id = u32::next_available_key(&*streams);
-            trace!("flow_id = {flow_id}");
-            streams.insert(flow_id, inner::FlowSlot::Requested(stream_tx));
-            flow_id
-        };
-        trace!("sending `Connect`");
-        self.inner
-            .tx_frame_tx
-            .send(Frame::new_connect(host, port, flow_id, config::RWND).finalize())
-            .map_err(|_| Error::Closed)?;
-        trace!("sending stream to user");
-        let stream = stream_rx
-            .await
-            // Happens if the task exits before sending the stream,
-            // thus `Closed` is the correct error
-            .map_err(|_| Error::Closed)?;
-        Ok(stream)
+        let mut retries_left = config::MAX_FLOW_ID_RETRIES;
+        // Normally this should terminate in one loop
+        while retries_left > 0 {
+            retries_left -= 1;
+            let (stream_tx, stream_rx) = oneshot::channel();
+            let flow_id = {
+                let mut streams = self.inner.flows.write();
+                // Allocate a new port
+                let flow_id = u32::next_available_key(&*streams);
+                trace!("flow_id = {flow_id}");
+                streams.insert(flow_id, inner::FlowSlot::Requested(stream_tx));
+                flow_id
+            };
+            trace!("sending `Connect`");
+            self.inner
+                .tx_frame_tx
+                .send(Frame::new_connect(host, port, flow_id, config::RWND).finalize())
+                .map_err(|_| Error::Closed)?;
+            trace!("sending stream to user");
+            let stream = stream_rx
+                .await
+                // Happens if the task exits before sending the stream,
+                // thus `Closed` is the correct error
+                .map_err(|_| Error::Closed)?;
+            if let Some(s) = stream {
+                return Ok(s);
+            }
+            // For testing purposes. Make sure the previous flow ID is gone
+            debug_assert!(!self.inner.flows.read().contains_key(&flow_id));
+        }
+        Err(Error::FlowIdRejected)
     }
 
     /// Accept a new stream channel from the remote peer.
