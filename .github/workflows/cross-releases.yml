@@ -128,5 +128,5 @@ jobs:
       with:
         name: penguin-${{ matrix.config.rust_target }}
         path: |
-          target/${{ matrix.config.rust_target }}/release/penguin
-          target/${{ matrix.config.rust_target }}/release/penguin.exe
+          target/${{ matrix.config.rust_target }}/${{ matrix.config.profile }}/penguin
+          target/${{ matrix.config.rust_target }}/${{ matrix.config.profile }}/penguin.exe
