@@ -97,8 +97,7 @@ jobs:
           profile: release
         - rust_target: x86_64-pc-windows-gnu # (crate `aws-lc-sys`)
           profile: release
-        - rust_target: x86_64-pc-solaris # testing
-          profile: release
+        # - rust_target: x86_64-pc-solaris # (linking issues)
         - rust_target: x86_64-unknown-freebsd # (crate `aws-lc-sys`)
           profile: release
         # - rust_target: x86_64-unknown-dragonfly (can't find crate for `core`)
