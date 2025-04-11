@@ -44,7 +44,7 @@ some functionalities:
 
 - ~~There is no support to acquire an ACME certificate on-the-fly.~~ (Implemented)
 
-- There is no reverse port forwarding because I am too lazy. (TODO!)
+- ~~There is no reverse port forwarding because I am too lazy.~~ (Implemented)
 
 Other than that, this project offers these functionalities compared to
 `chisel`:

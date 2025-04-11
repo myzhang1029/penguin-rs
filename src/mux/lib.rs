@@ -89,7 +89,7 @@ pub struct Multiplexor {
     /// established streams after the peer requests one.
     con_recv_stream_rx: Mutex<mpsc::Receiver<MuxStream>>,
     /// Channel for `Bnd` requests.
-    bnd_request_rx: Option<Mutex<mpsc::Receiver<BindPayload<'static>>>>,
+    bnd_request_rx: Option<Mutex<mpsc::Receiver<BindRequest<'static>>>>,
 }
 
 impl Multiplexor {
@@ -138,7 +138,7 @@ impl Multiplexor {
         let inner = MultiplexorInner {
             tx_frame_tx,
             keepalive_interval,
-            streams: Arc::new(RwLock::new(HashMap::new())),
+            flows: Arc::new(RwLock::new(HashMap::new())),
             dropped_ports_tx,
             default_rwnd_threshold: config::DEFAULT_RWND_THRESHOLD,
         };
@@ -199,11 +199,11 @@ impl Multiplexor {
     pub async fn new_stream_channel(&self, host: &[u8], port: u16) -> Result<MuxStream> {
         let (stream_tx, stream_rx) = oneshot::channel();
         let flow_id = {
-            let mut streams = self.inner.streams.write();
+            let mut streams = self.inner.flows.write();
             // Allocate a new port
             let flow_id = u32::next_available_key(&*streams);
             trace!("flow_id = {flow_id}");
-            streams.insert(flow_id, inner::MuxStreamSlot::Requested(stream_tx));
+            streams.insert(flow_id, inner::FlowSlot::Requested(stream_tx));
             flow_id
         };
         trace!("sending `Connect`");
@@ -289,23 +289,28 @@ impl Multiplexor {
     /// * `port`: The local port to bind to.
     ///
     /// # Cancel Safety
-    /// TODO
+    /// This function is not cancel safe. If the task is cancelled while waiting
+    /// for the peer to reply, the user will not be able to receive whether the
+    /// peer accepted the bind request.
     #[tracing::instrument(skip(self), level = "debug")]
     #[inline]
-    pub async fn request_bnd(
-        &self,
-        host: &[u8],
-        port: u16,
-        request_id: u32,
-        bind_type: BindType,
-    ) -> Result<()> {
-        let bnd_frame = Frame::new_bind(request_id, bind_type, host, port).finalize();
+    pub async fn request_bind(&self, host: &[u8], port: u16, bind_type: BindType) -> Result<bool> {
+        let (result_tx, result_rx) = oneshot::channel();
+        let flow_id = {
+            let mut streams = self.inner.flows.write();
+            // Allocate a new port
+            let flow_id = u32::next_available_key(&*streams);
+            trace!("flow_id = {flow_id}");
+            streams.insert(flow_id, inner::FlowSlot::BindRequested(result_tx));
+            flow_id
+        };
+        let bnd_frame = Frame::new_bind(flow_id, bind_type, host, port).finalize();
         self.inner
             .tx_frame_tx
             .send(bnd_frame)
             .map_err(|_| Error::Closed)?;
-        // TODO: await response
-        Ok(())
+        let result = result_rx.await.map_err(|_| Error::Closed)?;
+        Ok(result)
     }
 
     /// Accept a `Bind` request from the remote peer.
@@ -314,7 +319,7 @@ impl Multiplexor {
     /// This function is cancel safe. If the task is cancelled while waiting
     /// for a `Bind` request, it is guaranteed that no request will be lost.
     #[tracing::instrument(skip(self), level = "debug")]
-    pub async fn accept_bnd_request(&self) -> Result<BindPayload<'static>> {
+    pub async fn next_bind_request(&self) -> Result<BindRequest<'static>> {
         if let Some(rx) = self.bnd_request_rx.as_ref() {
             poll_fn(|cx| rx.lock().poll_recv(cx))
                 .await
@@ -338,7 +343,7 @@ struct TaskData {
     con_recv_stream_tx: mpsc::Sender<MuxStream>,
     tx_frame_rx: mpsc::UnboundedReceiver<FinalizedFrame>,
     dropped_ports_rx: mpsc::UnboundedReceiver<u32>,
-    bnd_request_tx: Option<mpsc::Sender<BindPayload<'static>>>,
+    bnd_request_tx: Option<mpsc::Sender<BindRequest<'static>>>,
 }
 
 /// Datagram frame data
@@ -352,6 +357,56 @@ pub struct Datagram {
     pub target_port: u16,
     /// Data
     pub data: Bytes,
+}
+
+/// A `Bind` request that the user can respond to
+#[derive(Clone, Debug)]
+pub struct BindRequest<'data> {
+    /// Flow ID
+    flow_id: u32,
+    /// Bind payload
+    payload: BindPayload<'data>,
+    /// Place to respond to the bind request
+    tx_frame_tx: mpsc::UnboundedSender<FinalizedFrame>,
+}
+
+impl BindRequest<'_> {
+    /// Get the flow ID of the bind request
+    #[inline]
+    pub const fn flow_id(&self) -> u32 {
+        self.flow_id
+    }
+
+    /// Get the bind type of the bind request
+    #[inline]
+    pub const fn bind_type(&self) -> BindType {
+        self.payload.bind_type
+    }
+
+    /// Get the host of the bind request
+    #[inline]
+    pub fn host(&self) -> &[u8] {
+        self.payload.target_host.as_ref()
+    }
+
+    /// Get the port of the bind request
+    #[inline]
+    pub const fn port(&self) -> u16 {
+        self.payload.target_port
+    }
+
+    /// Accept or reject the bind request
+    #[tracing::instrument(skip(self), level = "debug")]
+    pub fn reply(&self, accepted: bool) -> Result<()> {
+        if accepted {
+            self.tx_frame_tx
+                .send(Frame::new_finish(self.flow_id).finalize())
+        } else {
+            self.tx_frame_tx
+                .send(Frame::new_reset(self.flow_id).finalize())
+        }
+        .map_err(|_| Error::Closed)
+    }
 }
 
 /// A generic WebSocket stream

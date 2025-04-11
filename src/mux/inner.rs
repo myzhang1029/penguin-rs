@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use crate::dupe::Dupe;
-use crate::frame::{BindPayload, ConnectPayload, FinalizedFrame, Frame, OpCode, Payload};
+use crate::frame::{ConnectPayload, FinalizedFrame, Frame, OpCode, Payload};
 use crate::stream::MuxStream;
 use crate::timing::{OptionalDuration, OptionalInterval};
-use crate::{Datagram, Message, WebSocketStream, config};
+use crate::{BindRequest, Datagram, Message, WebSocketStream, config};
 use crate::{Error, Result, WsError};
 use bytes::Bytes;
 use futures_util::future::poll_fn;
@@ -25,7 +25,7 @@ use tokio::time::MissedTickBehavior;
 use tracing::{debug, error, info, trace, warn};
 
 #[derive(Debug)]
-pub struct MuxStreamData {
+pub struct EstablishedStreamData {
     /// Channel for sending data to `MuxStream`'s `AsyncRead`
     sender: mpsc::Sender<Bytes>,
     /// Whether writes should succeed.
@@ -44,24 +44,27 @@ pub struct MuxStreamData {
 }
 
 #[derive(Debug)]
-pub enum MuxStreamSlot {
-    /// The stream is requested by the `client`.
+pub enum FlowSlot {
+    /// A `Connect` frame was sent and waiting for the peer to `Acknowledge`.
     Requested(oneshot::Sender<MuxStream>),
     /// The stream is established.
-    Established(MuxStreamData),
+    Established(EstablishedStreamData),
+    /// A `Bind` request was sent and waiting for the peer to `Acknowledge` or `Reset`.
+    BindRequested(oneshot::Sender<bool>),
 }
 
-impl MuxStreamSlot {
+impl FlowSlot {
     /// Take the sender and set the slot to `Established`.
     /// Returns `None` if the slot is already established.
-    pub fn establish(&mut self, data: MuxStreamData) -> Option<oneshot::Sender<MuxStream>> {
+    pub fn establish(&mut self, data: EstablishedStreamData) -> Option<oneshot::Sender<MuxStream>> {
         // Make sure it is not replaced in the error case
-        if matches!(self, Self::Established(_)) {
+        if matches!(self, Self::Established(_) | Self::BindRequested(_)) {
+            error!("establishing an established or invalid slot");
             return None;
         }
         let sender = match std::mem::replace(self, Self::Established(data)) {
             Self::Requested(sender) => sender,
-            Self::Established(_) => unreachable!(),
+            Self::Established(_) | Self::BindRequested(_) => unreachable!(),
         };
         Some(sender)
     }
@@ -73,8 +76,8 @@ pub struct MultiplexorInner {
     pub tx_frame_tx: mpsc::UnboundedSender<FinalizedFrame>,
     /// Interval between keepalive `Ping`s
     pub keepalive_interval: OptionalDuration,
-    /// Open stream channels: `flow_id` -> `MuxStreamData`
-    pub streams: Arc<RwLock<HashMap<u32, MuxStreamSlot>>>,
+    /// Open stream channels: `flow_id` -> `FlowSlot`
+    pub flows: Arc<RwLock<HashMap<u32, FlowSlot>>>,
     /// Channel for notifying the task of a dropped `MuxStream` (to send the flow ID)
     /// Sending 0 means that the multiplexor is being dropped and the
     /// task should exit.
@@ -100,7 +103,7 @@ impl Dupe for MultiplexorInner {
         Self {
             tx_frame_tx: self.tx_frame_tx.dupe(),
             keepalive_interval: self.keepalive_interval,
-            streams: self.streams.dupe(),
+            flows: self.flows.dupe(),
             dropped_ports_tx: self.dropped_ports_tx.dupe(),
             default_rwnd_threshold: self.default_rwnd_threshold,
         }
@@ -252,7 +255,7 @@ impl MultiplexorInner {
         ws_stream: &mut SplitStream<S>,
         datagram_tx: &mpsc::Sender<Datagram>,
         con_recv_stream_tx: &mpsc::Sender<MuxStream>,
-        bnd_request_tx: Option<&mpsc::Sender<BindPayload<'static>>>,
+        bnd_request_tx: Option<&mpsc::Sender<BindRequest<'static>>>,
     ) -> Result<()> {
         loop {
             match ws_stream.next().await {
@@ -291,8 +294,8 @@ impl MultiplexorInner {
     ) -> Result<()> {
         debug!("closing all connections");
         // We first make sure the streams can no longer send
-        for (_, stream_data) in self.streams.write().iter() {
-            if let MuxStreamSlot::Established(stream_data) = stream_data {
+        for (_, stream_data) in self.flows.write().iter() {
+            if let FlowSlot::Established(stream_data) = stream_data {
                 // Prevent the user from writing
                 // Atomic ordering: It does not matter whether the user calls `poll_shutdown` or not,
                 // the stream is shut down and the final value of `can_write` is `false`.
@@ -333,11 +336,11 @@ impl MultiplexorInner {
         }
         // Finally, we send EOF to all established streams.
         let senders = self
-            .streams
+            .flows
             .write()
             .drain()
             .filter_map(|(_, stream_slot)| {
-                if let MuxStreamSlot::Established(stream_data) = stream_slot {
+                if let FlowSlot::Established(stream_data) = stream_slot {
                     Some(stream_data.sender)
                 } else {
                     None
@@ -363,7 +366,7 @@ impl MultiplexorInner {
         msg: Message,
         datagram_tx: &mpsc::Sender<Datagram>,
         con_recv_stream_tx: &mpsc::Sender<MuxStream>,
-        bnd_request_tx: Option<&mpsc::Sender<BindPayload<'static>>>,
+        bnd_request_tx: Option<&mpsc::Sender<BindRequest<'static>>>,
     ) -> Result<bool> {
         match msg {
             Message::Binary(data) => {
@@ -418,7 +421,7 @@ impl MultiplexorInner {
         frame: Frame<'static>,
         datagram_tx: &mpsc::Sender<Datagram>,
         con_recv_stream_tx: &mpsc::Sender<MuxStream>,
-        bnd_request_tx: Option<&mpsc::Sender<BindPayload<'static>>>,
+        bnd_request_tx: Option<&mpsc::Sender<BindRequest<'static>>>,
     ) -> Result<()> {
         let Frame {
             id: flow_id,
@@ -452,9 +455,9 @@ impl MultiplexorInner {
                 // Two cases:
                 // 1. Peer acknowledged `Connect`
                 // 2. Peer acknowledged some `Push` frames
-                let action = self.streams.read().get(&flow_id).map(|slot| {
+                let action = self.flows.read().get(&flow_id).and_then(|slot| {
                     match slot {
-                        MuxStreamSlot::Established(stream_data) => {
+                        FlowSlot::Established(stream_data) => {
                             // We have an established stream, so process the `Acknowledge`
                             // Atomic ordering: as long as the value is incremented atomically,
                             // whether a writer sees the new value or the old value is not
@@ -464,9 +467,13 @@ impl MultiplexorInner {
                                 .psh_send_remaining
                                 .fetch_add(payload, Ordering::Relaxed);
                             stream_data.writer_waker.wake();
-                            true
+                            Some(true)
                         }
-                        MuxStreamSlot::Requested(_) => false,
+                        FlowSlot::Requested(_) => Some(false),
+                        FlowSlot::BindRequested(_) => {
+                            warn!("Peer replied `Acknowledge` to a `Bind` request");
+                            None
+                        }
                     }
                 });
                 match action {
@@ -482,21 +489,39 @@ impl MultiplexorInner {
                 }
             }
             Payload::Finish => {
-                let sender = if let Some(MuxStreamSlot::Established(stream_data)) =
-                    self.streams.read().get(&flow_id)
+                let sender = if let Some(FlowSlot::Established(stream_data)) =
+                    self.flows.read().get(&flow_id)
                 {
                     Some(stream_data.sender.dupe())
                 } else {
                     None
                 };
+
                 // Make sure the user receives `EOF`.
                 // This part is refactored out so that we don't hold the lock across await
                 if let Some(sender) = sender {
                     sender.send(Bytes::new()).await.ok();
+                    // And our end can still send
                 } else {
-                    warn!("Bogus `Finish` frame {flow_id}");
+                    let slot = self.flows.write().remove(&flow_id);
+                    match slot {
+                        Some(FlowSlot::Established(_)) => unreachable!(),
+                        Some(FlowSlot::Requested(_)) => {
+                            // This is an invalid reply to a `Connect` frame
+                            warn!("Peer replied `Finish` to a `Connect` request");
+                            send_rst.await;
+                        }
+                        Some(FlowSlot::BindRequested(sender)) => {
+                            // Peer successfully bound the port
+                            sender.send(true).ok();
+                            // If the send above fails, the receiver is dropped,
+                            // so we can just ignore it.
+                        }
+                        None => {
+                            warn!("Bogus `Finish` frame {flow_id}");
+                        }
+                    }
                 }
-                // And our end can still send
             }
             Payload::Reset => {
                 debug!("`Reset` for {flow_id}");
@@ -504,8 +529,8 @@ impl MultiplexorInner {
                 self.close_port(flow_id, true).await;
             }
             Payload::Push(data) => {
-                let sender = if let Some(MuxStreamSlot::Established(stream_data)) =
-                    self.streams.read().get(&flow_id)
+                let sender = if let Some(FlowSlot::Established(stream_data)) =
+                    self.flows.read().get(&flow_id)
                 {
                     Some(stream_data.sender.dupe())
                 } else {
@@ -541,7 +566,12 @@ impl MultiplexorInner {
                         "received `Bind` request: [{:?}]:{}",
                         payload.target_host, payload.target_port
                     );
-                    if let Err(e) = sender.send(payload).await {
+                    let request = BindRequest {
+                        flow_id,
+                        payload,
+                        tx_frame_tx: self.tx_frame_tx.dupe(),
+                    };
+                    if let Err(e) = sender.send(request).await {
                         warn!("Failed to send `Bind` request: {e}");
                     }
                     self.tx_frame_tx
@@ -601,7 +631,7 @@ impl MultiplexorInner {
         // Scope the following block to reduce locked time
         {
             // Save the TX end of the stream so we can write to it when subsequent frames arrive
-            let mut streams = self.streams.write();
+            let mut streams = self.flows.write();
             if streams.contains_key(&flow_id) {
                 debug!("resetting `Connnect` with in-use flow_id {flow_id}");
                 self.tx_frame_tx
@@ -613,7 +643,7 @@ impl MultiplexorInner {
             }
             streams.insert(
                 flow_id,
-                MuxStreamSlot::Established(MuxStreamData {
+                FlowSlot::Established(EstablishedStreamData {
                     sender: frame_tx,
                     can_write: can_write.dupe(),
                     psh_send_remaining: psh_send_remaining.dupe(),
@@ -662,12 +692,13 @@ impl MultiplexorInner {
         let can_write = Arc::new(AtomicBool::new(true));
         let psh_send_remaining = Arc::new(AtomicU32::new(peer_rwnd));
         let writer_waker = Arc::new(AtomicWaker::new());
-        let stream_data = MuxStreamData {
+        let stream_data = EstablishedStreamData {
             sender: frame_tx,
             can_write: can_write.dupe(),
             psh_send_remaining: psh_send_remaining.dupe(),
             writer_waker: writer_waker.dupe(),
         };
+        // Save the TX end of the stream so we can write to it when subsequent frames arrive
         let stream = MuxStream {
             frame_rx,
             flow_id,
@@ -682,18 +713,17 @@ impl MultiplexorInner {
             dropped_ports_tx: self.dropped_ports_tx.dupe(),
             rwnd_threshold: self.default_rwnd_threshold.min(peer_rwnd),
         };
-        // Save the TX end of the stream so we can write to it when subsequent frames arrive
-        let mut streams = self.streams.write();
-        let entry = streams.get_mut(&flow_id).ok_or(Error::ConnAckGone)?;
-        // Change the state of the port to `Established`
-        let Some(sender) = entry.establish(stream_data) else {
-            return Err(Error::ConnAckGone);
-        };
-        drop(streams);
-        // Send the stream to the user
+        // Change the state of the port to `Established` and send the stream to the user
         // At the client side, we use the associated oneshot channel to send the new stream
         trace!("sending stream to user");
-        sender.send(stream).map_err(|_| Error::SendStreamToClient)?;
+        self.flows
+            .write()
+            .get_mut(&flow_id)
+            .ok_or(Error::ConnAckGone)?
+            .establish(stream_data)
+            .ok_or(Error::ConnAckGone)?
+            .send(stream)
+            .map_err(|_| Error::SendStreamToClient)?;
         Ok(())
     }
 
@@ -703,28 +733,40 @@ impl MultiplexorInner {
     #[inline]
     async fn close_port(&self, flow_id: u32, inhibit_rst: bool) {
         // Free the port for reuse
-        let removed = self.streams.write().remove(&flow_id);
-        if let Some(MuxStreamSlot::Established(stream_data)) = removed {
-            // Make sure the user receives `EOF`.
-            stream_data.sender.send(Bytes::new()).await.ok();
-            // Atomic ordering:
-            // Load part:
-            // If the user calls `poll_shutdown`, but we see `true` here,
-            // the other end will receive a bogus `Reset` frame, which is fine.
-            // Store part:
-            // It does not matter whether the user calls `poll_shutdown` or not,
-            // the stream is shut down and the final value of `can_write` is `false`.
-            let old = stream_data.can_write.swap(false, Ordering::Relaxed);
-            if old && !inhibit_rst {
-                // If the user did not call `poll_shutdown`, we need to send a `Reset` frame
-                self.tx_frame_tx
-                    .send(Frame::new_reset(flow_id).finalize())
-                    .ok();
+        let removed = self.flows.write().remove(&flow_id);
+        match removed {
+            Some(FlowSlot::Established(stream_data)) => {
+                // Make sure the user receives `EOF`.
+                stream_data.sender.send(Bytes::new()).await.ok();
+                // Atomic ordering:
+                // Load part:
+                // If the user calls `poll_shutdown`, but we see `true` here,
+                // the other end will receive a bogus `Reset` frame, which is fine.
+                // Store part:
+                // It does not matter whether the user calls `poll_shutdown` or not,
+                // the stream is shut down and the final value of `can_write` is `false`.
+                let old = stream_data.can_write.swap(false, Ordering::Relaxed);
+                if old && !inhibit_rst {
+                    // If the user did not call `poll_shutdown`, we need to send a `Reset` frame
+                    self.tx_frame_tx
+                        .send(Frame::new_reset(flow_id).finalize())
+                        .ok();
+                }
+                // If there is a writer waiting for `Acknowledge`, wake it up because it will never receive one.
+                // Waking it here and the user should receive a `BrokenPipe` error.
+                stream_data.writer_waker.wake();
+                debug!("freed connection {flow_id}");
             }
-            // If there is a writer waiting for `Acknowledge`, wake it up because it will never receive one.
-            // Waking it here and the user should receive a `BrokenPipe` error.
-            stream_data.writer_waker.wake();
+            Some(FlowSlot::Requested(_)) => {
+                debug!("peer cancelled `Connect` for port {flow_id}");
+            }
+            Some(FlowSlot::BindRequested(sender)) => {
+                sender.send(false).ok();
+                debug!("peer rejected `Bind` for port {flow_id}");
+            }
+            None => {
+                debug!("port {flow_id} not found, nothing to close");
+            }
         }
-        debug!("freed connection {flow_id}");
     }
 }

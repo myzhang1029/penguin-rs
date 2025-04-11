@@ -77,8 +77,9 @@ Frame Format:
   - `0x06`: `Datagram` frame
 
 - Flow ID: a 32-bit unsigned integer in network byte order uniquely identifying
-  the logical stream or datagram. Stream, datagram, and Bind operations share
-  the same flow ID space.
+  the logical stream or datagram. Stream and Bind operations share the same
+  flow ID space, while Datagram operations are free to share the same flow ID space
+  or use a different flow ID space.
 
 - Data: the payload of the frame, which varies based on the operation code.
 
