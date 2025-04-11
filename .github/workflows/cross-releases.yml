@@ -58,22 +58,18 @@ jobs:
           profile: release
         - rust_target: i686-unknown-linux-musl
           profile: release
-        - rust_target: mips-unknown-linux-gnu
+        - rust_target: loongarch64-unknown-linux-gnu # testing
           profile: release
-        - rust_target: mips-unknown-linux-musl
-          profile: release-size
-        - rust_target: mips64-unknown-linux-gnuabi64
+        - rust_target: loongarch64-unknown-linux-musl # testing
           profile: release
-        - rust_target: mips64-unknown-linux-muslabi64
-          profile: release-size
-        - rust_target: mips64el-unknown-linux-gnuabi64
-          profile: release
-        - rust_target: mips64el-unknown-linux-muslabi64
-          profile: release-size
-        - rust_target: mipsel-unknown-linux-gnu
-          profile: release
-        - rust_target: mipsel-unknown-linux-musl
-          profile: release-size
+        # - rust_target: mips-unknown-linux-gnu (cargo-cross image support)
+        # - rust_target: mips-unknown-linux-musl (cargo-cross image support)
+        # - rust_target: mips64-unknown-linux-gnuabi64 (cargo-cross image support)
+        # - rust_target: mips64-unknown-linux-muslabi64 (cargo-cross image support)
+        # - rust_target: mips64el-unknown-linux-gnuabi64 (cargo-cross image support)
+        # - rust_target: mips64el-unknown-linux-muslabi64 (cargo-cross image support)
+        # - rust_target: mipsel-unknown-linux-gnu (cargo-cross image support)
+        # - rust_target: mipsel-unknown-linux-musl (cargo-cross image support)
         # - rust_target: powerpc-unknown-linux-gnu (AtomicU64)
         - rust_target: powerpc64-unknown-linux-gnu
           profile: release
@@ -85,26 +81,35 @@ jobs:
           profile: release
         # - rust_target: sparc64-unknown-linux-gnu (ring support)
         # - rust_target: sparcv9-sun-solaris (ring support)
-        # - rust_target: thumbv6m-none-eabi (crate `std`)
-        # - rust_target: thumbv7em-none-eabi (crate `std`)
-        # - rust_target: thumbv7em-none-eabihf (crate `std`)
-        # - rust_target: thumbv7m-none-eabi (crate `std`)
+        - rust_target: thumbv6m-none-eabi # testing
+          profile: release-size
+        - rust_target: thumbv7em-none-eabi # testing
+          profile: release-size
+        - rust_target: thumbv7em-none-eabihf # testing
+          profile: release-size
+        - rust_target: thumbv7m-none-eabi # testing
+          profile: release-size
         - rust_target: thumbv7neon-linux-androideabi
           profile: release-size
         - rust_target: thumbv7neon-unknown-linux-gnueabihf
           profile: release-size
-        # - rust_target: thumbv8m.base-none-eabi (crate `core`)
-        # - rust_target: thumbv8m.main-none-eabi (crate `core`)
-        # - rust_target: thumbv8m.main-none-eabihf (crate `core`)
+        - rust_target: thumbv8m.base-none-eabi # testing
+          profile: release-size
+        - rust_target: thumbv8m.main-none-eabi # testing
+          profile: release-size
+        - rust_target: thumbv8m.main-none-eabihf # testing
+          profile: release-size
         # - rust_target: wasm32-unknown-emscripten (mio support)
         - rust_target: x86_64-linux-android
           profile: release
         - rust_target: x86_64-pc-windows-gnu # (crate `aws-lc-sys`)
           profile: release
-        # - rust_target: x86_64-sun-solaris (Rust support)
+        - rust_target: x86_64-pc-solaris # testing
+          profile: release
         - rust_target: x86_64-unknown-freebsd # (crate `aws-lc-sys`)
           profile: release
-        # - rust_target: x86_64-unknown-dragonfly (crate `core`)
+        - rust_target: x86_64-unknown-dragonfly # testing
+          profile: release
         - rust_target: x86_64-unknown-illumos # (bindgen)
           profile: release
         - rust_target: x86_64-unknown-linux-gnu
