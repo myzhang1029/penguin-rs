@@ -362,7 +362,7 @@ impl MultiplexorInner {
 impl MultiplexorInner {
     /// Process an incoming message
     /// Returns `Ok(true)` if a `Close` message was received.
-    #[tracing::instrument(skip_all, level = "debug")]
+    #[tracing::instrument(skip_all, level = "trace")]
     #[inline]
     async fn process_message(
         &self,
@@ -613,52 +613,27 @@ impl MultiplexorInner {
         Ok(())
     }
 
-    /// Create a new stream because this end received a [`Connect`](crate::frame::OpCode::Connect) frame.
-    /// Create a new `MuxStream`, add it to the map, and send an `Acknowledge` frame.
-    /// If `our_port` is 0, a new port will be allocated.
+    /// Shared code for new stream stuff
     #[inline]
-    async fn con_recv_new_stream(
+    fn new_stream_shared(
         &self,
         flow_id: u32,
+        peer_rwnd: u32,
         dest_host: Bytes,
         dest_port: u16,
-        peer_rwnd: u32,
-        con_recv_stream_tx: &mpsc::Sender<MuxStream>,
-    ) -> Result<()> {
+    ) -> (MuxStream, EstablishedStreamData) {
         // `tx` is our end, `rx` is the user's end
         let (frame_tx, frame_rx) = mpsc::channel(config::RWND_USIZE);
         let finish_sent = Arc::new(AtomicBool::new(false));
         let psh_send_remaining = Arc::new(AtomicU32::new(peer_rwnd));
         let writer_waker = Arc::new(AtomicWaker::new());
-        // Scope the following block to reduce locked time
-        {
-            // Save the TX end of the stream so we can write to it when subsequent frames arrive
-            let mut streams = self.flows.write();
-            if streams.contains_key(&flow_id) {
-                debug!("resetting `Connnect` with in-use flow_id {flow_id:x}");
-                self.tx_frame_tx
-                    .send(Frame::new_reset(flow_id).finalize())
-                    .ok();
-                // On the other side, `process_frame` will pass the `Reset` frame to
-                // `close_port`, which takes the port out of the map and inform `Multiplexor::new_stream_channel`
-                // to retry.
-                // The existing connection at the same `flow_id` is not affected. For conforminh implementations,
-                // This only happens when both ends are trying to establish a new connection at the same time
-                // and also happen to have chosen the same `flow_id`.
-                // In this case, the peer would also receive our `Connect` frame and, depending on the timing,
-                // `Reset` us too or `Acknowledge` us.
-                return Ok(());
-            }
-            streams.insert(
-                flow_id,
-                FlowSlot::Established(EstablishedStreamData {
-                    sender: frame_tx,
-                    finish_sent: finish_sent.dupe(),
-                    psh_send_remaining: psh_send_remaining.dupe(),
-                    writer_waker: writer_waker.dupe(),
-                }),
-            );
+        let stream_data = EstablishedStreamData {
+            sender: frame_tx,
+            finish_sent: finish_sent.dupe(),
+            psh_send_remaining: psh_send_remaining.dupe(),
+            writer_waker: writer_waker.dupe(),
         };
+        // Save the TX end of the stream so we can write to it when subsequent frames arrive
         let stream = MuxStream {
             frame_rx,
             flow_id,
@@ -672,6 +647,47 @@ impl MultiplexorInner {
             frame_tx: self.tx_frame_tx.dupe(),
             dropped_ports_tx: self.dropped_ports_tx.dupe(),
             rwnd_threshold: self.default_rwnd_threshold.min(peer_rwnd),
+        };
+        (stream, stream_data)
+    }
+
+    /// Create a new stream because this end received a [`Connect`](crate::frame::OpCode::Connect) frame.
+    /// Create a new `MuxStream`, add it to the map, and send an `Acknowledge` frame.
+    /// If `our_port` is 0, a new port will be allocated.
+    #[tracing::instrument(skip_all, fields(flow_id = format!("{flow_id:x}")), level="debug")]
+    #[inline]
+    async fn con_recv_new_stream(
+        &self,
+        flow_id: u32,
+        dest_host: Bytes,
+        dest_port: u16,
+        peer_rwnd: u32,
+        con_recv_stream_tx: &mpsc::Sender<MuxStream>,
+    ) -> Result<()> {
+        // Scope the following block to reduce locked time
+        let stream = {
+            // Save the TX end of the stream so we can write to it when subsequent frames arrive
+            let mut streams = self.flows.write();
+            if streams.contains_key(&flow_id) {
+                debug!("resetting `Connect` with in-use flow_id");
+                self.tx_frame_tx
+                    .send(Frame::new_reset(flow_id).finalize())
+                    .ok();
+                // On the other side, `process_frame` will pass the `Reset` frame to
+                // `close_port`, which takes the port out of the map and inform `Multiplexor::new_stream_channel`
+                // to retry.
+                // The existing connection at the same `flow_id` is not affected. For conforminh implementations,
+                // This only happens when both ends are trying to establish a new connection at the same time
+                // and also happen to have chosen the same `flow_id`.
+                // In this case, the peer would also receive our `Connect` frame and, depending on the timing,
+                // `Reset` us too or `Acknowledge` us.
+                return Ok(());
+            }
+            let (stream, stream_data) =
+                self.new_stream_shared(flow_id, peer_rwnd, dest_host, dest_port);
+            // No write should occur between our check and insert
+            streams.insert(flow_id, FlowSlot::Established(stream_data));
+            stream
         };
         // Send a `Acknowledge`
         // Make sure `Acknowledge` is sent before the stream is sent to the user
@@ -693,37 +709,13 @@ impl MultiplexorInner {
 
     /// Create a new `MuxStream` by finalizing a Con/Ack handshsake and
     /// change the state of the port to `Established`.
+    #[tracing::instrument(skip_all, fields(flow_id = format!("{flow_id:x}")), level="debug")]
     #[inline]
     fn ack_recv_new_stream(&self, flow_id: u32, peer_rwnd: u32) -> Result<()> {
-        // `tx` is our end, `rx` is the user's end
-        let (frame_tx, frame_rx) = mpsc::channel(config::RWND_USIZE);
-        let finish_sent = Arc::new(AtomicBool::new(false));
-        let psh_send_remaining = Arc::new(AtomicU32::new(peer_rwnd));
-        let writer_waker = Arc::new(AtomicWaker::new());
-        let stream_data = EstablishedStreamData {
-            sender: frame_tx,
-            finish_sent: finish_sent.dupe(),
-            psh_send_remaining: psh_send_remaining.dupe(),
-            writer_waker: writer_waker.dupe(),
-        };
-        // Save the TX end of the stream so we can write to it when subsequent frames arrive
-        let stream = MuxStream {
-            frame_rx,
-            flow_id,
-            dest_host: Bytes::new(),
-            dest_port: 0,
-            finish_sent,
-            psh_send_remaining,
-            psh_recvd_since: 0,
-            writer_waker,
-            buf: Bytes::new(),
-            frame_tx: self.tx_frame_tx.dupe(),
-            dropped_ports_tx: self.dropped_ports_tx.dupe(),
-            rwnd_threshold: self.default_rwnd_threshold.min(peer_rwnd),
-        };
         // Change the state of the port to `Established` and send the stream to the user
         // At the client side, we use the associated oneshot channel to send the new stream
         trace!("sending stream to user");
+        let (stream, stream_data) = self.new_stream_shared(flow_id, peer_rwnd, Bytes::new(), 0);
         self.flows
             .write()
             .get_mut(&flow_id)
@@ -737,7 +729,7 @@ impl MultiplexorInner {
 
     /// Close a port. That is, send `Reset` if `Finish` is not sent,
     /// and remove it from the map.
-    #[tracing::instrument(skip_all, level = "info")]
+    #[tracing::instrument(skip_all, fields(flow_id = format!("{flow_id:x}")))]
     #[inline]
     async fn close_port(&self, flow_id: u32, inhibit_rst: bool) {
         // Free the port for reuse
@@ -765,20 +757,20 @@ impl MultiplexorInner {
                 // If there is a writer waiting for `Acknowledge`, wake it up because it will never receive one.
                 // Waking it here and the user should receive a `BrokenPipe` error.
                 stream_data.writer_waker.wake();
-                debug!("freed connection {flow_id:x}");
+                debug!("freed connection");
             }
             Some(FlowSlot::Requested(sender)) => {
                 sender.send(None).ok();
                 // Ignore the error if the user already cancelled the requesting future
-                debug!("peer cancelled `Connect` for port {flow_id:x}");
+                debug!("peer cancelled `Connect`");
             }
             Some(FlowSlot::BindRequested(sender)) => {
                 sender.send(false).ok();
                 // Ignore the error if the user already cancelled the requesting future
-                debug!("peer rejected `Bind` for port {flow_id:x}");
+                debug!("peer rejected `Bind`");
             }
             None => {
-                debug!("port {flow_id:x} not found, nothing to close");
+                debug!("connection not found, nothing to close");
             }
         }
     }
