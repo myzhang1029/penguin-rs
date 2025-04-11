@@ -164,6 +164,8 @@ mod tests {
         let tmpdir = tempdir().unwrap();
         let actual_path = tmpdir.path().join("http01_helper.sh");
         tokio::fs::copy(&script_path, &actual_path).await.unwrap();
+        // Wait until the file is ready (for Linux CI runs)
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         let helper = ChallengeHelper::from(actual_path);
         helper
             .call(Action::Create, TEST_KEY_AUTH)
@@ -206,6 +208,8 @@ mod tests {
         let tmpdir = tempdir().unwrap();
         let actual_path = tmpdir.path().join("http01_helper.sh");
         tokio::fs::copy(&script_path, &actual_path).await.unwrap();
+        // Wait until the file is ready (for Linux CI runs)
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         let helper = ChallengeHelper::from(actual_path);
         let (account, _cred) = Account::create_with_http(
             &NewAccount {
@@ -274,6 +278,8 @@ mod tests {
         let tmpdir = tempdir().unwrap();
         let actual_path = tmpdir.path().join("http01_helper.sh");
         tokio::fs::copy(&script_path, &actual_path).await.unwrap();
+        // Wait until the file is ready (for Linux CI runs)
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         let helper = ChallengeHelper::from(actual_path);
         let (account, _cred) = Account::create_with_http(
             &NewAccount {
