@@ -545,9 +545,9 @@ impl MultiplexorInner {
                     match sender.try_send(data.into_owned()) {
                         Err(TrySendError::Full(_)) => {
                             // Peer does not respect the `rwnd` limit, this should not happen in normal circumstances.
-                            // let it fall through to send `Reset`.
+                            // let's send `Reset`.
                             warn!("Peer does not respect `rwnd` limit, dropping stream");
-                            send_rst.await;
+                            self.close_port(flow_id, false).await;
                         }
                         Err(TrySendError::Closed(_)) => {
                             // Else, the corresponding `MuxStream` is dropped
@@ -745,8 +745,8 @@ impl MultiplexorInner {
                 // Store part:
                 // It does not matter whether the user calls `poll_shutdown` or not,
                 // the stream is shut down and the final value of `finish_sent` is `true`.
-                let old = stream_data.finish_sent.swap(true, Ordering::Relaxed);
-                if old && !inhibit_rst {
+                let finish_sent = stream_data.finish_sent.swap(true, Ordering::Relaxed);
+                if !finish_sent && !inhibit_rst {
                     // If the user did not call `poll_shutdown`, we send a `Reset` frame
                     self.tx_frame_tx
                         .send(Frame::new_reset(flow_id).finalize())
