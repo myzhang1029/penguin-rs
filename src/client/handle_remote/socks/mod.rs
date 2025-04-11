@@ -47,7 +47,7 @@ pub enum Error {
 pub(super) async fn handle_socks(
     lhost: &'static str,
     lport: u16,
-    handler_resources: &HandlerResources,
+    handler_resources: &'static HandlerResources,
 ) -> Result<(), super::FatalError> {
     // Failing to open the listener is a fatal error and should be propagated.
     let listener = open_tcp_listener(lhost, lport)
@@ -68,9 +68,8 @@ pub(super) async fn handle_socks(
             result = listener.accept() => {
                 // A failed accept() is a fatal error and should be propagated.
                 let (stream, _) = result.map_err(super::FatalError::ClientIo)?;
-                let handler_resources = handler_resources.dupe();
                 socks_jobs.spawn(async move {
-                    handle_socks_connection(stream, lhost, &handler_resources).await
+                    handle_socks_connection(stream, lhost, handler_resources).await
                 });
             }
         }
@@ -79,7 +78,7 @@ pub(super) async fn handle_socks(
 
 #[inline]
 pub(super) async fn handle_socks_stdio(
-    handler_resources: &HandlerResources,
+    handler_resources: &'static HandlerResources,
 ) -> Result<(), super::FatalError> {
     if let Err(e) =
         handle_socks_connection(super::Stdio::new(), "localhost", handler_resources).await
@@ -100,7 +99,7 @@ pub(super) async fn handle_socks_stdio(
 pub(super) async fn handle_socks_connection<RW>(
     stream: RW,
     local_addr: &str,
-    handler_resources: &HandlerResources,
+    handler_resources: &'static HandlerResources,
 ) -> Result<(), Error>
 where
     RW: AsyncRead + AsyncWrite + Unpin,
@@ -146,7 +145,7 @@ where
 async fn handle_socks5_connection<RW>(
     mut stream: RW,
     local_addr: &str,
-    handler_resources: &HandlerResources,
+    handler_resources: &'static HandlerResources,
 ) -> Result<(), Error>
 where
     RW: AsyncRead + AsyncWrite + Unpin,
@@ -236,7 +235,7 @@ async fn handle_associate<RW>(
     rhost: Bytes,
     rport: u16,
     local_addr: &str,
-    handler_resources: &HandlerResources,
+    handler_resources: &'static HandlerResources,
 ) -> Result<(), Error>
 where
     RW: AsyncRead + AsyncWrite + Unpin,
@@ -256,7 +255,7 @@ where
             return Err(Error::ProcessSocksRequest("get udp socket local addr", e));
         }
     };
-    let relay_task = tokio::spawn(udp_relay(rhost, rport, handler_resources.dupe(), socket));
+    let relay_task = tokio::spawn(udp_relay(rhost, rport, handler_resources, socket));
     // Send back a successful response
     v5::write_response(&mut stream, 0x00, sock_local_addr).await?;
     // My crude way to detect when the client closes the connection
@@ -273,7 +272,7 @@ where
 async fn udp_relay(
     _rhost: Bytes,
     _rport: u16,
-    handler_resources: HandlerResources,
+    handler_resources: &HandlerResources,
     socket: UdpSocket,
 ) -> Result<(), Error> {
     let socket = Arc::new(socket);
@@ -365,7 +364,7 @@ async fn handle_udp_relay_header(
 #[inline]
 pub async fn send_udp_relay_response(
     socket: &UdpSocket,
-    target: &SocketAddr,
+    target: SocketAddr,
     data: &[u8],
 ) -> std::io::Result<usize> {
     // Write the header

@@ -94,7 +94,7 @@ pub(super) async fn handle_udp_stdio(
 mod tests {
     use super::*;
     use crate::client::ClientIdMaps;
-    use tokio::sync::RwLock;
+    use parking_lot::RwLock;
 
     #[tokio::test]
     async fn test_handle_udp() {
@@ -123,7 +123,6 @@ mod tests {
         assert_eq!(*frame.data, *b"hello");
         let client_id = *udp_client_map
             .read()
-            .await
             .client_addr_map
             .get(&(local_addr, ([127, 0, 0, 1], 14196).into()))
             .unwrap();

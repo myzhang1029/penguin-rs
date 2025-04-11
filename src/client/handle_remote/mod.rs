@@ -53,29 +53,29 @@ pub enum FatalError {
 #[tracing::instrument(skip_all, fields(remote = %remote), level = "debug")]
 pub(super) async fn handle_remote(
     remote: &'static Remote,
-    handler_resources: HandlerResources,
+    handler_resources: &'static HandlerResources,
 ) -> Result<(), FatalError> {
     debug!("opening remote");
     match (&remote.local_addr, &remote.remote_addr, remote.protocol) {
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Inet((rhost, rport)), Protocol::Tcp) => {
-            handle_tcp(lhost, *lport, rhost, *rport, &handler_resources).await
+            handle_tcp(lhost, *lport, rhost, *rport, handler_resources).await
         }
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Inet((rhost, rport)), Protocol::Udp) => {
-            handle_udp(lhost, *lport, rhost, *rport, &handler_resources).await
+            handle_udp(lhost, *lport, rhost, *rport, handler_resources).await
         }
         (LocalSpec::Stdio, RemoteSpec::Inet((rhost, rport)), Protocol::Tcp) => {
-            handle_tcp_stdio(rhost, *rport, &handler_resources).await
+            handle_tcp_stdio(rhost, *rport, handler_resources).await
         }
         (LocalSpec::Stdio, RemoteSpec::Inet((rhost, rport)), Protocol::Udp) => {
-            handle_udp_stdio(rhost, *rport, &handler_resources).await
+            handle_udp_stdio(rhost, *rport, handler_resources).await
         }
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Socks, _) => {
             // The parser guarantees that the protocol is TCP
-            handle_socks(lhost, *lport, &handler_resources).await
+            handle_socks(lhost, *lport, handler_resources).await
         }
         (LocalSpec::Stdio, RemoteSpec::Socks, _) => {
             // The parser guarantees that the protocol is TCP
-            handle_socks_stdio(&handler_resources).await
+            handle_socks_stdio(handler_resources).await
         }
     }
 }

@@ -11,17 +11,18 @@ use self::maybe_retryable::MaybeRetryableError;
 use crate::arg::ClientArgs;
 use crate::config;
 use bytes::Bytes;
+use parking_lot::RwLock;
 use penguin_mux::timing::{Backoff, OptionalDuration};
 use penguin_mux::{Datagram, Dupe, IntKey, Multiplexor, MuxStream};
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpStream, UdpSocket};
-use tokio::sync::{RwLock, mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
 use tokio::time;
 use tokio_tungstenite::MaybeTlsStream;
@@ -57,7 +58,6 @@ struct StreamCommand {
 }
 
 /// Data for a function to be able to use the mux/connection
-/// May be cheaply cloned for new `tokio::spawn` tasks.
 #[derive(Clone, Debug)]
 struct HandlerResources {
     /// Send a request for a TCP channel to the main loop
@@ -66,16 +66,6 @@ struct HandlerResources {
     datagram_tx: mpsc::Sender<Datagram>,
     /// The map of client IDs to UDP sockets and the map of client addresses to client IDs
     udp_client_map: Arc<RwLock<ClientIdMaps>>,
-}
-
-impl Dupe for HandlerResources {
-    fn dupe(&self) -> Self {
-        Self {
-            stream_command_tx: self.stream_command_tx.dupe(),
-            datagram_tx: self.datagram_tx.dupe(),
-            udp_client_map: self.udp_client_map.dupe(),
-        }
-    }
 }
 
 impl HandlerResources {
@@ -94,7 +84,7 @@ impl HandlerResources {
         let ClientIdMaps {
             client_id_map,
             client_addr_map,
-        } = &mut *self.udp_client_map.write().await;
+        } = &mut *self.udp_client_map.write();
         if let Some(client_id) = client_addr_map.get(&(addr, our_addr)) {
             // The client already exists, just refresh the entry
             client_id_map
@@ -119,7 +109,7 @@ impl HandlerResources {
         let ClientIdMaps {
             client_id_map,
             client_addr_map,
-        } = &mut *self.udp_client_map.write().await;
+        } = &mut *self.udp_client_map.write();
         let now = time::Instant::now();
         client_id_map.retain(|_, entry| {
             if entry.expires > now {
@@ -166,26 +156,23 @@ impl ClientIdMaps {
     ) -> Option<std::io::Result<()>> {
         if client_id == 0 {
             // Used for stdio
-            Some(tokio::io::stdout().write_all(data).await)
-        } else if let Some(information) = lock_self.read().await.client_id_map.get(&client_id) {
-            let send_result = if information.socks5 {
-                handle_remote::socks::send_udp_relay_response(
-                    &information.socket,
-                    &information.peer_addr,
-                    data,
-                )
-                .await
-            } else {
-                information
-                    .socket
-                    .send_to(data, &information.peer_addr)
-                    .await
-            }
-            .map(|_| ());
-            Some(send_result)
-        } else {
-            None
+            return Some(tokio::io::stdout().write_all(data).await);
         }
+        let info = {
+            let map = lock_self.read();
+            let Some(info) = map.client_id_map.get(&client_id) else {
+                return None;
+            };
+            info.dupe()
+        };
+
+        let send_result = if info.socks5 {
+            handle_remote::socks::send_udp_relay_response(&info.socket, info.peer_addr, data).await
+        } else {
+            info.socket.send_to(data, info.peer_addr).await
+        }
+        .map(|_| ());
+        Some(send_result)
     }
 }
 
@@ -203,6 +190,18 @@ pub struct ClientIdMapEntry {
     pub socks5: bool,
     /// When this entry should be removed
     pub expires: time::Instant,
+}
+
+impl Dupe for ClientIdMapEntry {
+    fn dupe(&self) -> Self {
+        Self {
+            peer_addr: self.peer_addr,
+            our_addr: self.our_addr,
+            socket: self.socket.dupe(),
+            socks5: self.socks5,
+            expires: self.expires,
+        }
+    }
 }
 
 impl ClientIdMapEntry {
@@ -229,6 +228,7 @@ impl ClientIdMapEntry {
 
 #[tracing::instrument(level = "trace")]
 pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
+    static HANDLER_RESOURCES: OnceLock<HandlerResources> = OnceLock::new();
     // TODO: Temporary, remove when implemented
     // Blocked on `snapview/tungstenite-rs#177`
     if args.proxy.is_some() {
@@ -241,15 +241,22 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
     let (datagram_tx, mut datagram_rx) = mpsc::channel(config::INCOMING_DATAGRAM_BUFFER_SIZE);
     // Map of client IDs to `ClientIdMapEntry`
     let udp_client_map = Arc::new(RwLock::new(ClientIdMaps::new()));
-    let handler_resources = HandlerResources {
-        stream_command_tx,
-        datagram_tx,
-        udp_client_map: udp_client_map.dupe(),
-    };
+    HANDLER_RESOURCES
+        .set(HandlerResources {
+            stream_command_tx,
+            datagram_tx,
+            udp_client_map: udp_client_map.dupe(),
+        })
+        .expect("cannot set handler_resources (this is a bug)");
     let mut jobs = JoinSet::new();
     // Spawn listeners. See `handle_remote.rs` for the implementation considerations.
     for remote in &args.remote {
-        jobs.spawn(handle_remote(remote, handler_resources.dupe()));
+        jobs.spawn(handle_remote(
+            remote,
+            HANDLER_RESOURCES
+                .get()
+                .expect("handler_resources should be set (this is a bug)"),
+        ));
     }
     // Check if any listener has failed. If so, quit immediately.
     let check_listeners_future = async move {
@@ -319,7 +326,7 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
         biased;
         result = check_listeners_future => result,
         // This future never resolves
-        () = prune_client_id_map_task(handler_resources) => unreachable!("prune_client_id_map_task should never return"),
+        () = prune_client_id_map_task(HANDLER_RESOURCES.get().expect("handler_resources should be set (this is a bug)")) => unreachable!("prune_client_id_map_task should never return"),
         result = main_future => result,
     }
 }
@@ -423,7 +430,7 @@ async fn get_send_stream_chan(
 
 /// Prune the client ID map of entries that have not been used for a while.
 #[tracing::instrument(skip_all, level = "trace")]
-async fn prune_client_id_map_task(handler_resources: HandlerResources) {
+async fn prune_client_id_map_task(handler_resources: &HandlerResources) {
     let mut interval = time::interval(config::UDP_PRUNE_TIMEOUT);
     interval.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
     loop {
@@ -508,7 +515,6 @@ mod tests {
             handler_resources
                 .udp_client_map
                 .read()
-                .await
                 .client_id_map
                 .is_empty()
         );
