@@ -79,6 +79,7 @@ async fn test_it_works() {
             vec![Remote::from_str("127.0.0.1:21628:127.0.0.1:10807").unwrap()],
         )
     });
+    static HANDLER_RESOURCES: OnceLock<crate::client::HandlerResources> = OnceLock::new();
     setup_logging();
 
     let input_bytes: Vec<u8> = (0..(1024 * 1024)).map(|_| rand::random::<u8>()).collect();
@@ -90,8 +91,15 @@ async fn test_it_works() {
         stream.read_exact(&mut output_bytes).await.unwrap();
         output_bytes
     });
-
-    let client_task = tokio::spawn(crate::client::client_main(&CLIENT_ARGS));
+    let (handler_resources, stream_command_rx, datagram_rx) =
+        crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let client_task = tokio::spawn(crate::client::client_main_inner(
+        &CLIENT_ARGS,
+        HANDLER_RESOURCES.get().unwrap(),
+        stream_command_rx,
+        datagram_rx,
+    ));
     let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
     tokio::time::sleep(Duration::from_secs(2)).await;
     let mut sock = TcpStream::connect("127.0.0.1:21628").await.unwrap();
@@ -136,6 +144,7 @@ async fn test_server_timeout_does_not_interrupt_ws() {
             vec![Remote::from_str("[::1]:27848:[::1]:17787").unwrap()],
         )
     });
+    static HANDLER_RESOURCES: OnceLock<crate::client::HandlerResources> = OnceLock::new();
     setup_logging();
 
     let input_bytes: Vec<u8> = (0..(1024 * 1024)).map(|_| rand::random::<u8>()).collect();
@@ -148,7 +157,15 @@ async fn test_server_timeout_does_not_interrupt_ws() {
         output_bytes
     });
 
-    let client_task = tokio::spawn(crate::client::client_main(&CLIENT_ARGS));
+    let (handler_resources, stream_command_rx, datagram_rx) =
+        crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let client_task = tokio::spawn(crate::client::client_main_inner(
+        &CLIENT_ARGS,
+        HANDLER_RESOURCES.get().unwrap(),
+        stream_command_rx,
+        datagram_rx,
+    ));
     let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
     // Wait much more than the timeout to ensure that any timeout would pop up.
     tokio::time::sleep(Duration::from_secs(8)).await;
@@ -172,6 +189,7 @@ async fn test_it_works_v6() {
             vec![Remote::from_str("[::1]:20246:[::1]:30389").unwrap()],
         )
     });
+    static HANDLER_RESOURCES: OnceLock<crate::client::HandlerResources> = OnceLock::new();
     setup_logging();
 
     let input_bytes: Vec<u8> = (0..(1024 * 1024)).map(|_| rand::random::<u8>()).collect();
@@ -184,7 +202,15 @@ async fn test_it_works_v6() {
         output_bytes
     });
 
-    let client_task = tokio::spawn(crate::client::client_main(&CLIENT_ARGS));
+    let (handler_resources, stream_command_rx, datagram_rx) =
+        crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let client_task = tokio::spawn(crate::client::client_main_inner(
+        &CLIENT_ARGS,
+        HANDLER_RESOURCES.get().unwrap(),
+        stream_command_rx,
+        datagram_rx,
+    ));
     let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
     tokio::time::sleep(Duration::from_secs(2)).await;
     let mut sock = TcpStream::connect("[::1]:20246").await.unwrap();
@@ -220,6 +246,7 @@ async fn test_it_works_tls_simple() {
         _fingerprint: None,
         _auth: None,
     });
+    static HANDLER_RESOURCES: OnceLock<crate::client::HandlerResources> = OnceLock::new();
     setup_logging();
 
     let mut serv_cfg = make_server_args("127.0.0.1", 20353);
@@ -238,7 +265,15 @@ async fn test_it_works_tls_simple() {
         output_bytes
     });
 
-    let client_task = tokio::spawn(crate::client::client_main(&CLIENT_ARGS));
+    let (handler_resources, stream_command_rx, datagram_rx) =
+        crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let client_task = tokio::spawn(crate::client::client_main_inner(
+        &CLIENT_ARGS,
+        HANDLER_RESOURCES.get().unwrap(),
+        stream_command_rx,
+        datagram_rx,
+    ));
     let server_task = tokio::spawn(crate::server::server_main(SERVER_ARGS.get().unwrap()));
     tokio::time::sleep(Duration::from_secs(2)).await;
     let mut sock = TcpStream::connect("127.0.0.1:24368").await.unwrap();
@@ -261,9 +296,18 @@ async fn test_socks5_connect_reliability_v4() {
             vec![Remote::from_str("127.0.0.1:21330:socks").unwrap()],
         )
     });
+    static HANDLER_RESOURCES: OnceLock<crate::client::HandlerResources> = OnceLock::new();
     setup_logging();
 
-    let client_task = tokio::spawn(crate::client::client_main(&CLIENT_ARGS));
+    let (handler_resources, stream_command_rx, datagram_rx) =
+        crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let client_task = tokio::spawn(crate::client::client_main_inner(
+        &CLIENT_ARGS,
+        HANDLER_RESOURCES.get().unwrap(),
+        stream_command_rx,
+        datagram_rx,
+    ));
     let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
 
     // Use a small buffer to simulate a HTTP request: if `flush` or `shutdown` is not called, the
@@ -319,9 +363,18 @@ async fn test_socks5_connect_reliability_v6() {
             vec![Remote::from_str("127.0.0.1:13261:socks").unwrap()],
         )
     });
+    static HANDLER_RESOURCES: OnceLock<crate::client::HandlerResources> = OnceLock::new();
     setup_logging();
 
-    let client_task = tokio::spawn(crate::client::client_main(&CLIENT_ARGS));
+    let (handler_resources, stream_command_rx, datagram_rx) =
+        crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let client_task = tokio::spawn(crate::client::client_main_inner(
+        &CLIENT_ARGS,
+        HANDLER_RESOURCES.get().unwrap(),
+        stream_command_rx,
+        datagram_rx,
+    ));
     let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
 
     // Use a small buffer to simulate a HTTP request: if `flush` or `shutdown` is not called, the
@@ -375,9 +428,18 @@ async fn test_socks5_udp_v4v4() {
             vec![Remote::from_str("127.0.0.1:30711:socks").unwrap()],
         )
     });
+    static HANDLER_RESOURCES: OnceLock<crate::client::HandlerResources> = OnceLock::new();
     setup_logging();
 
-    let client_task = tokio::spawn(crate::client::client_main(&CLIENT_ARGS));
+    let (handler_resources, stream_command_rx, datagram_rx) =
+        crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let client_task = tokio::spawn(crate::client::client_main_inner(
+        &CLIENT_ARGS,
+        HANDLER_RESOURCES.get().unwrap(),
+        stream_command_rx,
+        datagram_rx,
+    ));
     let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
 
     let input_bytes: Vec<u8> = (0..1024).map(|_| rand::random::<u8>()).collect();
@@ -458,9 +520,18 @@ async fn test_socks5_udp_v4v6() {
             vec![Remote::from_str("127.0.0.1:26396:socks").unwrap()],
         )
     });
+    static HANDLER_RESOURCES: OnceLock<crate::client::HandlerResources> = OnceLock::new();
     setup_logging();
 
-    let client_task = tokio::spawn(crate::client::client_main(&CLIENT_ARGS));
+    let (handler_resources, stream_command_rx, datagram_rx) =
+        crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let client_task = tokio::spawn(crate::client::client_main_inner(
+        &CLIENT_ARGS,
+        HANDLER_RESOURCES.get().unwrap(),
+        stream_command_rx,
+        datagram_rx,
+    ));
     let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
 
     let input_bytes: Vec<u8> = (0..1024).map(|_| rand::random::<u8>()).collect();
@@ -545,9 +616,18 @@ async fn test_socks5_udp_v6v6() {
             vec![Remote::from_str("[::1]:12654:socks").unwrap()],
         )
     });
+    static HANDLER_RESOURCES: OnceLock<crate::client::HandlerResources> = OnceLock::new();
     setup_logging();
 
-    let client_task = tokio::spawn(crate::client::client_main(&CLIENT_ARGS));
+    let (handler_resources, stream_command_rx, datagram_rx) =
+        crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let client_task = tokio::spawn(crate::client::client_main_inner(
+        &CLIENT_ARGS,
+        HANDLER_RESOURCES.get().unwrap(),
+        stream_command_rx,
+        datagram_rx,
+    ));
     let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
 
     let input_bytes: Vec<u8> = (0..1024).map(|_| rand::random::<u8>()).collect();
@@ -630,9 +710,18 @@ async fn test_socks4_works() {
             vec![Remote::from_str("127.0.0.1:23213:socks").unwrap()],
         )
     });
+    static HANDLER_RESOURCES: OnceLock<crate::client::HandlerResources> = OnceLock::new();
     setup_logging();
 
-    let client_task = tokio::spawn(crate::client::client_main(&CLIENT_ARGS));
+    let (handler_resources, stream_command_rx, datagram_rx) =
+        crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let client_task = tokio::spawn(crate::client::client_main_inner(
+        &CLIENT_ARGS,
+        HANDLER_RESOURCES.get().unwrap(),
+        stream_command_rx,
+        datagram_rx,
+    ));
     let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
 
     let input_bytes: Vec<u8> = (0..1024).map(|_| rand::random::<u8>()).collect();
@@ -680,9 +769,18 @@ async fn test_it_works_dns_v4() {
             vec![Remote::from_str("127.0.0.1:20326:1.1.1.1:53/udp").unwrap()],
         )
     });
+    static HANDLER_RESOURCES: OnceLock<crate::client::HandlerResources> = OnceLock::new();
     setup_logging();
 
-    let client_task = tokio::spawn(crate::client::client_main(&CLIENT_ARGS));
+    let (handler_resources, stream_command_rx, datagram_rx) =
+        crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let client_task = tokio::spawn(crate::client::client_main_inner(
+        &CLIENT_ARGS,
+        HANDLER_RESOURCES.get().unwrap(),
+        stream_command_rx,
+        datagram_rx,
+    ));
     let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
     tokio::time::sleep(Duration::from_secs(2)).await;
     let sock = UdpSocket::bind("0.0.0.0:0").await.unwrap();
@@ -712,9 +810,18 @@ async fn test_it_works_dns_v6() {
             vec![Remote::from_str("[::1]:20326:[2606:4700:4700::1111]:53/udp").unwrap()],
         )
     });
+    static HANDLER_RESOURCES: OnceLock<crate::client::HandlerResources> = OnceLock::new();
     setup_logging();
 
-    let client_task = tokio::spawn(crate::client::client_main(&CLIENT_ARGS));
+    let (handler_resources, stream_command_rx, datagram_rx) =
+        crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let client_task = tokio::spawn(crate::client::client_main_inner(
+        &CLIENT_ARGS,
+        HANDLER_RESOURCES.get().unwrap(),
+        stream_command_rx,
+        datagram_rx,
+    ));
     let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
     tokio::time::sleep(Duration::from_secs(2)).await;
     let sock = UdpSocket::bind("[::]:0").await.unwrap();

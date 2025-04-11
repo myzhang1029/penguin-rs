@@ -50,7 +50,7 @@ pub enum Error {
 // Send the information about how to send the stream to the listener
 /// Type that local listeners send to the main loop to request a connection
 #[derive(Debug)]
-struct StreamCommand {
+pub struct StreamCommand {
     /// Channel to send the stream back to the listener
     tx: oneshot::Sender<MuxStream>,
     host: Bytes,
@@ -59,7 +59,7 @@ struct StreamCommand {
 
 /// Data for a function to be able to use the mux/connection
 #[derive(Clone, Debug)]
-struct HandlerResources {
+pub struct HandlerResources {
     /// Send a request for a TCP channel to the main loop
     stream_command_tx: mpsc::Sender<StreamCommand>,
     /// Send a UDP datagram to the main loop
@@ -69,6 +69,30 @@ struct HandlerResources {
 }
 
 impl HandlerResources {
+    /// Create a new `HandlerResources`
+    pub fn create() -> (
+        Self,
+        mpsc::Receiver<StreamCommand>,
+        mpsc::Receiver<Datagram>,
+    ) {
+        // Channel for listeners to request TCP channels the main loop
+        let (stream_command_tx, stream_command_rx) =
+            mpsc::channel(config::STREAM_REQUEST_COMMAND_SIZE);
+        // Channel for listeners to send UDP datagrams to the main loop
+        let (datagram_tx, datagram_rx) = mpsc::channel(config::INCOMING_DATAGRAM_BUFFER_SIZE);
+        // Map of client IDs to `ClientIdMapEntry`
+        let udp_client_map = Arc::new(RwLock::new(ClientIdMaps::new()));
+        (
+            HandlerResources {
+                stream_command_tx,
+                datagram_tx,
+                udp_client_map: udp_client_map.dupe(),
+            },
+            stream_command_rx,
+            datagram_rx,
+        )
+    }
+
     /// Add a new UDP client to the maps, returns the new client ID
     #[must_use = "This function returns the new client ID, which should be used to mark the datagram"]
     pub async fn add_udp_client(
@@ -229,34 +253,36 @@ impl ClientIdMapEntry {
 #[tracing::instrument(level = "trace")]
 pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
     static HANDLER_RESOURCES: OnceLock<HandlerResources> = OnceLock::new();
+    let (handler_resources, stream_command_rx, datagram_rx) = HandlerResources::create();
+    HANDLER_RESOURCES
+        .set(handler_resources)
+        .expect("HandlerResources should only be set once (this is a bug)");
+    client_main_inner(
+        args,
+        HANDLER_RESOURCES
+            .get()
+            .expect("HandlerResources should be set (this is a bug)"),
+        stream_command_rx,
+        datagram_rx,
+    )
+    .await
+}
+
+pub async fn client_main_inner(
+    args: &'static ClientArgs,
+    handler_resources: &'static HandlerResources,
+    mut stream_command_rx: mpsc::Receiver<StreamCommand>,
+    mut datagram_rx: mpsc::Receiver<Datagram>,
+) -> Result<(), Error> {
     // TODO: Temporary, remove when implemented
     // Blocked on `snapview/tungstenite-rs#177`
     if args.proxy.is_some() {
         warn!("Proxy not implemented yet");
     }
-    // Channel for listeners to request TCP channels the main loop
-    let (stream_command_tx, mut stream_command_rx) =
-        mpsc::channel(config::STREAM_REQUEST_COMMAND_SIZE);
-    // Channel for listeners to send UDP datagrams to the main loop
-    let (datagram_tx, mut datagram_rx) = mpsc::channel(config::INCOMING_DATAGRAM_BUFFER_SIZE);
-    // Map of client IDs to `ClientIdMapEntry`
-    let udp_client_map = Arc::new(RwLock::new(ClientIdMaps::new()));
-    HANDLER_RESOURCES
-        .set(HandlerResources {
-            stream_command_tx,
-            datagram_tx,
-            udp_client_map: udp_client_map.dupe(),
-        })
-        .expect("cannot set handler_resources (this is a bug)");
     let mut jobs = JoinSet::new();
     // Spawn listeners. See `handle_remote.rs` for the implementation considerations.
     for remote in &args.remote {
-        jobs.spawn(handle_remote(
-            remote,
-            HANDLER_RESOURCES
-                .get()
-                .expect("handler_resources should be set (this is a bug)"),
-        ));
+        jobs.spawn(handle_remote(remote, handler_resources));
     }
     // Check if any listener has failed. If so, quit immediately.
     let check_listeners_future = async move {
@@ -291,7 +317,7 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
                         &mut stream_command_rx,
                         &mut failed_stream_request,
                         &mut datagram_rx,
-                        udp_client_map.dupe(),
+                        &handler_resources.udp_client_map,
                         args.keepalive,
                         channel_timeout,
                     )
@@ -326,7 +352,7 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
         biased;
         result = check_listeners_future => result,
         // This future never resolves
-        () = prune_client_id_map_task(HANDLER_RESOURCES.get().expect("handler_resources should be set (this is a bug)")) => unreachable!("prune_client_id_map_task should never return"),
+        () = prune_client_id_map_task(handler_resources) => unreachable!("prune_client_id_map_task should never return"),
         result = main_future => result,
     }
 }
@@ -344,7 +370,7 @@ async fn on_connected(
     stream_command_rx: &mut mpsc::Receiver<StreamCommand>,
     failed_stream_request: &mut Option<StreamCommand>,
     datagram_rx: &mut mpsc::Receiver<Datagram>,
-    udp_client_map: Arc<RwLock<ClientIdMaps>>,
+    udp_client_map: &RwLock<ClientIdMaps>,
     keepalive: OptionalDuration,
     channel_timeout: Duration,
 ) -> Result<Infallible, Error> {
