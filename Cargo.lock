@@ -1741,6 +1741,7 @@ dependencies = [
  "rustls-native-certs",
  "rustls-pemfile",
  "sha1",
+ "socket2",
  "tempfile",
  "thiserror 2.0.12",
  "tokio",
