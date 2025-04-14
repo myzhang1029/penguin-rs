@@ -85,5 +85,14 @@ Servers and clients with the same protocol version are compatible with each othe
 
 The current protocol version is `penguin-v7`. See [PROTOCOL.md](PROTOCOL.md) for details.
 
+## Contribution
+All contributions are welcome. Please make sure you
+1. Write test cases for the bugfix/feature
+2. Check that the patch passes all tests by running
+```
+cargo test
+```
+3. Send a Pull Request.
+
 ## License
 GPL v3.0 or later or Apache License 2.0.
