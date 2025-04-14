@@ -24,7 +24,7 @@ arc-swap = { version = "1", optional = true }
 base64 = { version = "0.22", optional = true }
 bytes = "1"
 clap = { version = "4", features = ["cargo", "derive"], optional = true }
-console-subscriber = { version = "0.4", optional = true }
+console-subscriber = { version = "0.4", features = ["parking_lot"], optional = true }
 futures-util = { version = "0.3", default-features = false }
 http = "1"
 http-body-util = { version = "0.1", optional = true }
@@ -41,7 +41,7 @@ rustls-native-certs = { version = "0.8", optional = true }
 rustls-pemfile = { version = "2", optional = true }
 sha1 = { version = "0.10", optional = true }
 thiserror = "2"
-tokio = { version = "^1, >=1.23.1", features = ["macros", "rt", "sync", "time"] }
+tokio = { version = "^1, >=1.23.1", features = ["macros", "parking_lot", "rt", "sync", "time"] }
 tokio-native-tls = { version = "0.3", optional = true }
 tokio-rustls = { version = "0.26", features = ["logging", "ring", "tls12"], default-features = false, optional = true }
 tokio-tungstenite = { version = "0.26", default-features = false }
@@ -77,7 +77,7 @@ tokio-console = ["dep:console-subscriber"]
 # Statically remove some logging code. This breaks `tokio-console`
 remove-logging = ["tracing/max_level_trace", "tracing/release_max_level_debug", "log/max_level_trace", "log/release_max_level_debug"]
 # `parking_lot`'s deadlock detection in a separate thread
-deadlock-detection = ["parking_lot/deadlock_detection", "tokio/parking_lot"]
+deadlock-detection = ["parking_lot/deadlock_detection"]
 # obtaining certificate automatically using ACME protocol
 acme = ["penguin-binary", "dep:instant-acme", "dep:rcgen", "tokio/process"]
 # `penguin` binary
