@@ -4,6 +4,7 @@
 [![Rust Build and Test](https://github.com/myzhang1029/penguin-rs/actions/workflows/rust.yml/badge.svg)](https://github.com/myzhang1029/penguin-rs/actions/workflows/rust.yml)
 [![Crates.io](https://img.shields.io/crates/v/rusty-penguin.svg)](https://crates.io/crates/rusty-penguin)
 [![Dependency Status](https://deps.rs/repo/github/myzhang1029/penguin-rs/status.svg)](https://deps.rs/repo/github/myzhang1029/penguin-rs)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/10422/badge)](https://www.bestpractices.dev/projects/10422)
 [![Codecov](https://codecov.io/gh/myzhang1029/penguin-rs/branch/main/graph/badge.svg?token=L0TE5i23sn)](https://codecov.io/gh/myzhang1029/penguin-rs)
 [![wakatime](https://wakatime.com/badge/github/myzhang1029/penguin-rs.svg)](https://wakatime.com/badge/github/myzhang1029/penguin-rs)
 ![License](https://img.shields.io/crates/l/rusty-penguin.svg)
