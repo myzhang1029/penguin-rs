@@ -69,7 +69,18 @@ jobs:
     - name: Process coverage data
       run: grcov . --binary-path ./target/debug/ -s . -t lcov --branch --ignore-not-existing --ignore "/*" -o lcov.info
 
-    - uses: codecov/codecov-action@v4
+    - name: Upload test results to Codecov
+      if: ${{ !cancelled() }}
+      uses: codecov/test-results-action@v1
       with:
+        fail_ci_if_error: true
+        token: ${{ secrets.CODECOV_TOKEN }}
+        flags: ${{ matrix.tls }},${{ matrix.config.name }}
+        
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+        fail_ci_if_error: true
         files: ./lcov.info
         token: ${{ secrets.CODECOV_TOKEN }}
+        flags: ${{ matrix.tls }},${{ matrix.config.name }}
