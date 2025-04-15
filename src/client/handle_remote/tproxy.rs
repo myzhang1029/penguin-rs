@@ -18,7 +18,7 @@ async fn bind_tcp_socket2(sockaddr: SocketAddr) -> std::io::Result<TcpListener> 
     socket.set_ip_transparent(true)?;
     socket.bind(&sockaddr.into())?;
     socket.listen(128)?;
-    Ok(TcpListener::from_std(socket.into())?)
+    TcpListener::from_std(socket.into())
 }
 
 pub(super) async fn start_tproxy_listener(
@@ -72,7 +72,7 @@ pub(super) async fn handle_tproxy_tcp(
         // Tproxy converts the destination address to our local address.
         let target_addr = tcp_stream
             .local_addr()
-            .map_err(|e| FatalError::ClientIo(e.into()))?;
+            .map_err(FatalError::ClientIo)?;
         let target_ip = target_addr.ip();
         let target_port = target_addr.port();
         // `expect`: the main loop should either hold the sender or send a channel
