@@ -182,13 +182,7 @@ impl ClientIdMaps {
             // Used for stdio
             return Some(tokio::io::stdout().write_all(data).await);
         }
-        let info = {
-            let map = lock_self.read();
-            let Some(info) = map.client_id_map.get(&client_id) else {
-                return None;
-            };
-            info.dupe()
-        };
+        let info = lock_self.read().client_id_map.get(&client_id)?.dupe();
 
         let send_result = if info.socks5 {
             handle_remote::socks::send_udp_relay_response(&info.socket, info.peer_addr, data).await
@@ -398,7 +392,7 @@ async fn on_connected(
             Ok(dgram_frame) = mux.get_datagram() => {
                 let client_id = dgram_frame.flow_id;
                 let data = dgram_frame.data;
-                match ClientIdMaps::send_datagram(&udp_client_map, client_id, data.as_ref()).await {
+                match ClientIdMaps::send_datagram(udp_client_map, client_id, data.as_ref()).await {
                     Some(Ok(())) => {
                         trace!("sent datagram to client {client_id:08x}");
                     }
