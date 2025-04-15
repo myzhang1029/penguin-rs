@@ -89,10 +89,10 @@ pub(super) async fn handle_remote(
             handle_socks_stdio(handler_resources).await
         }
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Tproxy, Protocol::Tcp) => {
-            handle_tproxy_tcp(lhost, *lport, &handler_resources).await
+            handle_tproxy_tcp(lhost, *lport, handler_resources).await
         }
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Tproxy, Protocol::Udp) => {
-            handle_tproxy_udp(lhost, *lport, &handler_resources).await
+            handle_tproxy_udp(lhost, *lport, handler_resources).await
         }
         (LocalSpec::Stdio, RemoteSpec::Tproxy, _) => {
             unreachable!("`clap` should have rejected this combination (this is a bug)")
