@@ -79,7 +79,7 @@ jobs:
       if: ${{ !cancelled() }}
       uses: codecov/test-results-action@v1
       with:
-        fail_ci_if_error: true
+        fail_ci_if_error: false
         token: ${{ secrets.CODECOV_TOKEN }}
         flags: ${{ matrix.tls }},${{ matrix.config.name }}
         
@@ -87,7 +87,7 @@ jobs:
       if: ${{ !cancelled() }}
       uses: codecov/codecov-action@v4
       with:
-        fail_ci_if_error: true
+        fail_ci_if_error: false
         handle_no_reports_found: true
         files: ./lcov.info
         token: ${{ secrets.CODECOV_TOKEN }}
