@@ -302,6 +302,84 @@ async fn connected_stream_passes_data() {
 }
 
 #[tokio::test]
+async fn connected_stream_passes_data_one_sided_lots() {
+    setup_logging();
+    let (client, server) = get_pair(None).await;
+
+    let client_mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
+    let server_mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
+
+    let input_bytes: Vec<u8> = (0..(32 * 131072)).map(|_| rand::random::<u8>()).collect();
+    let len = input_bytes.len();
+    let input_bytes_clone = input_bytes.clone();
+
+    let server_task = tokio::spawn(async move {
+        let mut conn = server_mux.accept_stream_channel().await.unwrap();
+        let mut i = 0;
+        while i < input_bytes_clone.len() {
+            conn.write_all(&input_bytes_clone[i..i + 32]).await.unwrap();
+            i += 32;
+        }
+        info!("Done send");
+        conn.shutdown().await.unwrap();
+    });
+
+    let mut output_bytes: Vec<u8> = vec![];
+
+    let mut conn = client_mux.new_stream_channel(&[], 0).await.unwrap();
+    conn.shutdown().await.unwrap();
+    while output_bytes.len() < len {
+        let mut buf = [0u8; 64];
+        let bytes = conn.read(&mut buf).await.unwrap();
+        if bytes == 0 {
+            break;
+        }
+        output_bytes.extend(&buf[..bytes]);
+        info!("Read {} bytes", output_bytes.len());
+    }
+
+    assert_eq!(input_bytes, output_bytes);
+    debug!("Waiting for server task to finish");
+    server_task.await.unwrap();
+}
+
+#[cfg(feature = "penguin-binary")]
+#[tokio::test]
+async fn test_with_tcpsocket() {
+    const SINGLE_WRITE_LEN: usize = 1024;
+    const ITERATIONS: usize = 8072;
+    setup_logging();
+    let s_socket = tokio::net::TcpListener::bind(("::1", 0)).await.unwrap();
+    let s_addr = s_socket.local_addr().unwrap();
+    let all_payload: Bytes = (0..SINGLE_WRITE_LEN * ITERATIONS).map(|_| rand::random::<u8>()).collect();
+    let mut s_payload = all_payload.dupe();
+    tokio::spawn(async move {
+        let tcpstream = s_socket.accept().await.unwrap().0;
+        let server =
+            tokio_tungstenite::WebSocketStream::from_raw_socket(tcpstream, Role::Server, None).await;
+        let mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
+        let mut stream = mux.accept_stream_channel().await.unwrap();
+        for _ in 0..ITERATIONS {
+            let payload = s_payload.split_to(SINGLE_WRITE_LEN);
+            stream.write_all(&payload).await.unwrap();
+        }
+        stream.shutdown().await.unwrap();
+    });
+    let tcpstream = tokio::net::TcpStream::connect(s_addr).await.unwrap();
+    let client = tokio_tungstenite::WebSocketStream::from_raw_socket(tcpstream, Role::Client, None).await;
+    let mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
+    let mut stream = mux.new_stream_channel(&[], 0).await.unwrap();
+    stream.shutdown().await.unwrap();
+    // Make sure any mishandling of half-close pop up in the test
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    for i in 0..ITERATIONS {
+        let mut buf = vec![0; SINGLE_WRITE_LEN];
+        stream.read_exact(&mut buf).await.unwrap();
+        assert_eq!(all_payload[i*SINGLE_WRITE_LEN..(i+1)*SINGLE_WRITE_LEN], buf);
+    }
+}
+
+#[tokio::test]
 async fn test_early_eof_detected() {
     setup_logging();
     for _ in 0..64 {
