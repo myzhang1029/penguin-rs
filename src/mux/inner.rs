@@ -153,9 +153,8 @@ impl MultiplexorInner {
             ));
             poll_fn(|cx| {
                 if let Poll::Ready(r) = process_dropped_ports_task_fut.as_mut().poll(cx) {
-                    let should_drain_frame_rx = r.is_ok();
                     debug!("mux dropped ports task finished: {r:?}");
-                    return Poll::Ready((r, should_drain_frame_rx));
+                    return Poll::Ready((Ok(()), true));
                 }
                 if let Poll::Ready(r) = process_ws_next_fut.as_mut().poll(cx) {
                     debug!("mux ws next task finished: {r:?}");
@@ -189,7 +188,7 @@ impl MultiplexorInner {
     pub async fn process_dropped_ports_task(
         &self,
         dropped_ports_rx: &mut mpsc::UnboundedReceiver<u32>,
-    ) -> Result<()> {
+    ) -> () {
         while let Some(flow_id) = dropped_ports_rx.recv().await {
             if flow_id == 0 {
                 // `our_port` is `0`, which means the multiplexor itself is being dropped.
@@ -204,7 +203,6 @@ impl MultiplexorInner {
         // If this returns, our end is dropped, but we should still try to flush everything we
         // already have in the `frame_rx` before closing.
         // we should make some attempt to flush `frame_rx` before exiting.
-        Ok(())
     }
 
     /// Poll `frame_rx` and process the frame received and send keepalive pings as needed.
