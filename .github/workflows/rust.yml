@@ -42,7 +42,15 @@ jobs:
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --component llvm-tools-preview
 
     - name: Install grcov
-      run: cargo install grcov
+      uses: baptiste0928/cargo-install@v1
+      with:
+        crate: grcov
+
+    - name: Install cargo-nextest
+      uses: baptiste0928/cargo-install@v1
+      with:
+        crate: cargo-nextest
+        args: --locked
 
     - name: Set up Go for Pebble
       uses: actions/setup-go@v5
@@ -52,12 +60,6 @@ jobs:
 
     - name: Install and run pebble
       run: .github/workflows/pebble.sh
-
-    - name: Install cargo-nextest
-      uses: baptiste0928/cargo-install@v1
-      with:
-        crate: cargo-nextest
-        locked: true
 
     - name: Check if program builds
       run: cargo run --verbose --features ${{ matrix.tls }},penguin-binary --no-default-features -- --help
@@ -82,7 +84,7 @@ jobs:
         fail_ci_if_error: false
         token: ${{ secrets.CODECOV_TOKEN }}
         flags: ${{ matrix.tls }},${{ matrix.config.name }}
-        
+
     - name: Upload coverage to Codecov
       if: ${{ !cancelled() }}
       uses: codecov/codecov-action@v4
