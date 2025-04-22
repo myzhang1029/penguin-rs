@@ -101,9 +101,14 @@ penguin-binary = [
 ]
 
 [profile.release]
-debug = true
 codegen-units = 1
 lto = true
+
+[profile.profile]
+inherits = "release"
+debug = true
+strip = false
+panic = "unwind"
 
 [profile.release-size]
 inherits = "release"

@@ -173,7 +173,7 @@ async fn connected_stream_passes_data_tiny_mtu_rwndminusone() {
             break;
         }
         output_bytes.extend(&buf[..bytes]);
-        info!("Read {} bytes", output_bytes.len());
+        debug!("Read {} bytes", output_bytes.len());
     }
 
     assert_eq!(input_bytes, output_bytes);
@@ -250,7 +250,7 @@ async fn connected_stream_passes_data_tiny_mtu() {
             break;
         }
         output_bytes.extend(&buf[..bytes]);
-        info!("Read {} bytes", output_bytes.len());
+        debug!("Read {} bytes", output_bytes.len());
     }
 
     assert_eq!(input_bytes, output_bytes);
@@ -293,7 +293,7 @@ async fn connected_stream_passes_data() {
             break;
         }
         output_bytes.extend(&buf[..bytes]);
-        info!("Read {} bytes", output_bytes.len());
+        debug!("Read {} bytes", output_bytes.len());
     }
 
     assert_eq!(input_bytes, output_bytes);
@@ -335,7 +335,7 @@ async fn connected_stream_passes_data_one_sided_lots() {
             break;
         }
         output_bytes.extend(&buf[..bytes]);
-        info!("Read {} bytes", output_bytes.len());
+        debug!("Read {} bytes", output_bytes.len());
     }
 
     assert_eq!(input_bytes, output_bytes);
@@ -344,19 +344,27 @@ async fn connected_stream_passes_data_one_sided_lots() {
 }
 
 #[cfg(feature = "penguin-binary")]
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_with_tcpsocket() {
-    const SINGLE_WRITE_LEN: usize = 1024;
-    const ITERATIONS: usize = 8072;
     setup_logging();
+    for _ in 0..16 {
+        test_with_tcpsocket_inner().await;
+    }
+}
+async fn test_with_tcpsocket_inner() {
+    const SINGLE_WRITE_LEN: usize = 4096;
+    const ITERATIONS: usize = 256;
     let s_socket = tokio::net::TcpListener::bind(("::1", 0)).await.unwrap();
     let s_addr = s_socket.local_addr().unwrap();
-    let all_payload: Bytes = (0..SINGLE_WRITE_LEN * ITERATIONS).map(|_| rand::random::<u8>()).collect();
+    let all_payload: Bytes = (0..SINGLE_WRITE_LEN * ITERATIONS)
+        .map(|_| rand::random::<u8>())
+        .collect();
     let mut s_payload = all_payload.dupe();
     tokio::spawn(async move {
         let tcpstream = s_socket.accept().await.unwrap().0;
         let server =
-            tokio_tungstenite::WebSocketStream::from_raw_socket(tcpstream, Role::Server, None).await;
+            tokio_tungstenite::WebSocketStream::from_raw_socket(tcpstream, Role::Server, None)
+                .await;
         let mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
         let mut stream = mux.accept_stream_channel().await.unwrap();
         for _ in 0..ITERATIONS {
@@ -366,16 +374,20 @@ async fn test_with_tcpsocket() {
         stream.shutdown().await.unwrap();
     });
     let tcpstream = tokio::net::TcpStream::connect(s_addr).await.unwrap();
-    let client = tokio_tungstenite::WebSocketStream::from_raw_socket(tcpstream, Role::Client, None).await;
+    let client =
+        tokio_tungstenite::WebSocketStream::from_raw_socket(tcpstream, Role::Client, None).await;
     let mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
     let mut stream = mux.new_stream_channel(&[], 0).await.unwrap();
     stream.shutdown().await.unwrap();
     // Make sure any mishandling of half-close pop up in the test
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(rand::random_range(0..500))).await;
     for i in 0..ITERATIONS {
         let mut buf = vec![0; SINGLE_WRITE_LEN];
         stream.read_exact(&mut buf).await.unwrap();
-        assert_eq!(all_payload[i*SINGLE_WRITE_LEN..(i+1)*SINGLE_WRITE_LEN], buf);
+        assert_eq!(
+            all_payload[i * SINGLE_WRITE_LEN..(i + 1) * SINGLE_WRITE_LEN],
+            buf
+        );
     }
 }
 
@@ -413,7 +425,7 @@ async fn test_early_eof_detected_inner() {
             break;
         }
         output_bytes.extend(&buf[..bytes]);
-        info!("Read {} bytes", output_bytes.len());
+        debug!("Read {} bytes", output_bytes.len());
     }
 
     assert_eq!(input_bytes, output_bytes);

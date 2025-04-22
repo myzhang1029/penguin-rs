@@ -313,7 +313,9 @@ impl MultiplexorInner {
                 stream_data.writer_waker.wake();
             }
         }
-        // First ensure no more frames can be sent. This should cause all `AsyncWrite::poll_write`
+        // Let the tasks do some work now
+        tokio::task::yield_now().await;
+        // Further ensure no more frames can be sent. This should cause all `AsyncWrite::poll_write`
         // to return `BrokenPipe`.
         // See `tokio::sync::mpsc`#clean-shutdown
         frame_rx.close();
@@ -326,6 +328,9 @@ impl MultiplexorInner {
         // `try_recv` should give us all the remaining frames.
         if should_drain_frame_rx {
             while let Ok(frame) = frame_rx.try_recv() {
+                if frame.is_empty() {
+                    continue;
+                }
                 debug!("sending remaining frame after mux drop");
                 if let Err(e) = ws.feed(Message::Binary(frame.into())).await {
                     warn!("Failed to send remaining frame after mux drop: {e}");
