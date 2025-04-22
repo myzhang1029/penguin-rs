@@ -152,17 +152,17 @@ impl MultiplexorInner {
                 bnd_request_tx.as_ref()
             ));
             poll_fn(|cx| {
-                if let Poll::Ready(r) = process_dropped_ports_task_fut.as_mut().poll(cx) {
-                    debug!("mux dropped ports task finished: {r:?}");
+                if let Poll::Ready(_r) = process_dropped_ports_task_fut.as_mut().poll(cx) {
+                    debug!("mux dropped ports task finished");
                     return Poll::Ready((Ok(()), true));
                 }
                 if let Poll::Ready(r) = process_ws_next_fut.as_mut().poll(cx) {
                     debug!("mux ws next task finished: {r:?}");
                     return Poll::Ready((r, false));
                 }
-                if let Poll::Ready(r) = process_frame_recv_task_fut.as_mut().poll(cx) {
-                    debug!("mux frame recv task finished: {r:?}");
-                    return Poll::Ready((r, false));
+                if let Poll::Ready(e) = process_frame_recv_task_fut.as_mut().poll(cx) {
+                    debug!("mux frame recv task finished: {e:?}");
+                    return Poll::Ready((Err(e), false));
                 }
                 Poll::Pending
             })
@@ -182,7 +182,7 @@ impl MultiplexorInner {
     }
 
     /// Process dropped ports from the `dropped_ports_rx` channel.
-    /// Returns when either [`MultiplexorInner`] or [`Multiplexor`] itself is dropped.
+    /// Returns when [`Multiplexor`] itself is dropped.
     #[tracing::instrument(skip_all, level = "trace")]
     #[inline]
     pub async fn process_dropped_ports_task(
@@ -212,14 +212,21 @@ impl MultiplexorInner {
     }
 
     /// Poll `frame_rx` and process the frame received and send keepalive pings as needed.
-    /// It never returns an `Ok(())`, and propagates errors from the `Sink` processing.
+    /// It propagates errors from the `Sink` processing.
     #[tracing::instrument(skip_all, level = "trace")]
     #[inline]
     async fn process_frame_recv_task<S: WebSocketStream<WsError>>(
         &self,
         frame_rx: &mut mpsc::UnboundedReceiver<FinalizedFrame>,
         ws_sink: &mut SplitSink<S, Message>,
-    ) -> Result<()> {
+    ) -> Error {
+        macro_rules! try_send {
+            ($e:expr) => {
+                if let Err(e) = $e {
+                    return Error::WebSocket(Box::new(e));
+                }
+            };
+        }
         let mut interval = OptionalInterval::from(self.keepalive_interval);
         // If we missed a tick, it is probably doing networking, so we don't need to
         // make up for it.
@@ -228,25 +235,25 @@ impl MultiplexorInner {
             tokio::select! {
                 _ = interval.tick() => {
                     trace!("sending keepalive ping");
-                    ws_sink.send(Message::Ping(Bytes::new())).await.map_err(Box::new)?;
+                    try_send!(ws_sink.send(Message::Ping(Bytes::new())).await);
                 }
                 Some(frame) = frame_rx.recv() => {
                     // Buffer `Push` frames, and flush everything else immediately
-                    if frame.is_empty() {
-                        // Flush
-                        ws_sink.flush().await
-                    } else if frame.opcode()? == OpCode::Push {
-                        ws_sink.feed(Message::Binary(frame.into())).await
-                    } else {
-                        ws_sink.send(Message::Binary(frame.into())).await
-                    }
-                    .map_err(Box::new)?;
+                    try_send!(match frame.opcode() {
+                        Err(_) => {
+                            // Not a critical error, treating as flush
+                            debug_assert!(frame.is_empty(), "nonempty frame with invalid opcode (this is a bug)");
+                            ws_sink.flush().await
+                        }
+                        Ok(OpCode::Push) => ws_sink.feed(Message::Binary(frame.into())).await,
+                        _ => ws_sink.send(Message::Binary(frame.into())).await,
+                    });
                 }
                 else => {
                     // Only happens when `frame_rx` is closed
                     // cannot happen because `Self` contains one sender unless
-                    // there is a bug in our code or `tokio` itself.
-                    // Using `debug_assert!` to avoid panicking in production.
+                    // there is a bug in our code or `tokio` itself. Not a critical error,
+                    // using `debug_assert!` to avoid panicking in production.
                     debug_assert!(false, "frame receiver should not be closed (this is a bug)");
                 }
             }
@@ -538,7 +545,7 @@ impl MultiplexorInner {
                             // If the send above fails, the receiver is dropped,
                             // so we can just ignore it.
                         }
-                        None => warn!("Bogus `Finish` frame"),
+                        None => warn!("Bogus `Finish` frame {flow_id:08x}"),
                     }
                 }
             }
