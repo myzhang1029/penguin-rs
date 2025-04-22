@@ -309,7 +309,7 @@ async fn connected_stream_passes_data_one_sided_lots() {
     let client_mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
     let server_mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
 
-    let input_bytes: Vec<u8> = (0..(32 * 131072)).map(|_| rand::random::<u8>()).collect();
+    let input_bytes: Vec<u8> = (0..(32 * 0x20000)).map(|_| rand::random::<u8>()).collect();
     let len = input_bytes.len();
     let input_bytes_clone = input_bytes.clone();
 
