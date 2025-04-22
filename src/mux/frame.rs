@@ -573,7 +573,7 @@ impl FinalizedFrame {
     /// Check the opcode of the frame
     #[inline]
     pub fn opcode(&self) -> Result<OpCode, Error> {
-        let firstbyte = self.0.first().ok_or_else(|| {
+        let firstbyte = self.0.first().ok_or({
             // This is used in `impl Debug` so let's allow empty frames
             Error::FrameTooShort
         })?;
