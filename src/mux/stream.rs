@@ -94,6 +94,12 @@ impl AsyncRead for MuxStream {
             if next.is_none() || next.as_ref().unwrap().is_empty() {
                 // See `tokio::sync::mpsc`#clean-shutdown
                 self.frame_rx.close();
+                // There should be no code path sending more frames after an EOF
+                // If this assertion fails, some code path is sending frames after EOF
+                // and thus causing loss of data.
+                // However, this is not an inconsistent state so we should not
+                // panic a production setup.
+                debug_assert!(self.frame_rx.try_recv().is_err());
                 // The stream has been closed, just return 0 bytes read
                 return Poll::Ready(Ok(()));
             }

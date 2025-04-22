@@ -188,21 +188,27 @@ impl MultiplexorInner {
     pub async fn process_dropped_ports_task(
         &self,
         dropped_ports_rx: &mut mpsc::UnboundedReceiver<u32>,
-    ) -> () {
+    ) {
         while let Some(flow_id) = dropped_ports_rx.recv().await {
             if flow_id == 0 {
                 // `our_port` is `0`, which means the multiplexor itself is being dropped.
                 debug!("mux dropped");
-                break;
+                // If this returns, our end is dropped, but we should still try to flush everything we
+                // already have in the `frame_rx` before closing.
+                // we should make some attempt to flush `frame_rx` before exiting.
+                return;
             }
             self.close_port(flow_id, false).await;
         }
         // None: only happens when the last sender (i.e. `dropped_ports_tx` in `MultiplexorInner`)
-        // is dropped,
-        // which can be combined with the case when the multiplexor itself is being dropped.
-        // If this returns, our end is dropped, but we should still try to flush everything we
-        // already have in the `frame_rx` before closing.
-        // we should make some attempt to flush `frame_rx` before exiting.
+        // is dropped, which should not happen in normal circumstances because `MultiplexorInner::drop`
+        // is called before its fields are dropped.
+        // However, this is not a fatal inconsistency, so we `debug_assert!` it to avoid
+        // panicking in production.
+        debug_assert!(
+            false,
+            "dropped ports receiver should not be closed (this is a bug)"
+        );
     }
 
     /// Poll `frame_rx` and process the frame received and send keepalive pings as needed.
@@ -240,7 +246,8 @@ impl MultiplexorInner {
                     // Only happens when `frame_rx` is closed
                     // cannot happen because `Self` contains one sender unless
                     // there is a bug in our code or `tokio` itself.
-                    panic!("frame receiver should not be closed (this is a bug)");
+                    // Using `debug_assert!` to avoid panicking in production.
+                    debug_assert!(false, "frame receiver should not be closed (this is a bug)");
                 }
             }
         }
@@ -306,11 +313,17 @@ impl MultiplexorInner {
                 stream_data.writer_waker.wake();
             }
         }
+        // First ensure no more frames can be sent. This should cause all `AsyncWrite::poll_write`
+        // to return `BrokenPipe`.
+        // See `tokio::sync::mpsc`#clean-shutdown
+        frame_rx.close();
         // Now if `should_drain_frame_rx` is `true`, we will process the remaining frames in `frame_rx`.
         // If it is `false`, then we reached here because the peer is now not interested
         // in our connection anymore, and we should just mind our own business and serve the connections
         // on our end.
-        // We must use `try_recv` because, again, `Self` contains one sender.
+        // We cannot loop await `recv` because, again, `Self` contains one last sender,
+        // so `recv` will never return `None`. We already closed `frame_rx` above, so looping over
+        // `try_recv` should give us all the remaining frames.
         if should_drain_frame_rx {
             while let Ok(frame) = frame_rx.try_recv() {
                 debug!("sending remaining frame after mux drop");
