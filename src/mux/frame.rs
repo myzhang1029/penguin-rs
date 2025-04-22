@@ -415,8 +415,18 @@ impl<'data> Frame<'data> {
 
 macro_rules! check_remaining {
     ($data:expr, $len:expr) => {
-        if $data.remaining() < $len {
-            tracing::debug!("`FrameTooShort` at {}:{}", file!(), line!());
+        let remaining = $data.remaining();
+        if remaining < $len {
+            // Make sure we catch any mistakes during debug but prevent
+            // incorrect peers from crashing the server in production
+            debug_assert!(
+                false,
+                "`FrameTooShort` at {}:{}, have {}/{}",
+                file!(),
+                line!(),
+                remaining,
+                $len
+            );
             return Err(Error::FrameTooShort);
         }
     };
@@ -564,7 +574,7 @@ impl FinalizedFrame {
     #[inline]
     pub fn opcode(&self) -> Result<OpCode, Error> {
         let firstbyte = self.0.first().ok_or_else(|| {
-            tracing::debug!("`FrameTooShort` at {}:{}", file!(), line!());
+            // This is used in `impl Debug` so let's allow empty frames
             Error::FrameTooShort
         })?;
         let raw_opcode = firstbyte & 0x0F;
