@@ -280,9 +280,7 @@ async fn udp_relay(
         let Some((dst, dport, data, src, sport)) = handle_udp_relay_header(&socket).await? else {
             continue;
         };
-        let client_id = handler_resources
-            .add_udp_client((src, sport).into(), socket.dupe(), true)
-            .await;
+        let client_id = handler_resources.add_udp_client((src, sport).into(), socket.dupe(), true);
         let datagram_frame = Datagram {
             target_host: dst,
             target_port: dport,

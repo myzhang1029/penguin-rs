@@ -83,7 +83,7 @@ impl HandlerResources {
         // Map of client IDs to `ClientIdMapEntry`
         let udp_client_map = Arc::new(RwLock::new(ClientIdMaps::new()));
         (
-            HandlerResources {
+            Self {
                 stream_command_tx,
                 datagram_tx,
                 udp_client_map: udp_client_map.dupe(),
@@ -95,12 +95,7 @@ impl HandlerResources {
 
     /// Add a new UDP client to the maps, returns the new client ID
     #[must_use = "This function returns the new client ID, which should be used to mark the datagram"]
-    pub async fn add_udp_client(
-        &self,
-        addr: SocketAddr,
-        socket: Arc<UdpSocket>,
-        socks5: bool,
-    ) -> u32 {
+    pub fn add_udp_client(&self, addr: SocketAddr, socket: Arc<UdpSocket>, socks5: bool) -> u32 {
         // `expect`: at this point `socket` should be bound. Otherwise, it's a bug.
         let our_addr = socket
             .local_addr()
@@ -129,7 +124,7 @@ impl HandlerResources {
     }
 
     /// Prune expired entries from the UDP client maps
-    async fn prune_udp_clients(&self) {
+    fn prune_udp_clients(&self) {
         let ClientIdMaps {
             client_id_map,
             client_addr_map,
@@ -455,7 +450,7 @@ async fn prune_client_id_map_task(handler_resources: &HandlerResources) {
     interval.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
     loop {
         interval.tick().await;
-        handler_resources.prune_udp_clients().await;
+        handler_resources.prune_udp_clients();
     }
 }
 
@@ -474,39 +469,31 @@ mod tests {
             udp_client_map: Arc::new(RwLock::new(ClientIdMaps::new())),
         };
         let stub_socket = Arc::new(UdpSocket::bind(("127.0.0.1", 0)).await.unwrap());
-        let client_id = handler_resources
-            .add_udp_client(
-                (IpAddr::from([127, 0, 0, 1]), 1234).into(),
-                stub_socket.dupe(),
-                false,
-            )
-            .await;
-        let client_id2 = handler_resources
-            .add_udp_client(
-                (IpAddr::from([127, 0, 0, 1]), 1234).into(),
-                stub_socket.dupe(),
-                false,
-            )
-            .await;
+        let client_id = handler_resources.add_udp_client(
+            (IpAddr::from([127, 0, 0, 1]), 1234).into(),
+            stub_socket.dupe(),
+            false,
+        );
+        let client_id2 = handler_resources.add_udp_client(
+            (IpAddr::from([127, 0, 0, 1]), 1234).into(),
+            stub_socket.dupe(),
+            false,
+        );
         // We should get the same client ID for the same client address and socket
         assert_eq!(client_id, client_id2);
         let stub_socket_2 = Arc::new(UdpSocket::bind(("127.0.0.1", 0)).await.unwrap());
-        let client_id2 = handler_resources
-            .add_udp_client(
-                (IpAddr::from([127, 0, 0, 1]), 1234).into(),
-                stub_socket_2,
-                false,
-            )
-            .await;
+        let client_id2 = handler_resources.add_udp_client(
+            (IpAddr::from([127, 0, 0, 1]), 1234).into(),
+            stub_socket_2,
+            false,
+        );
         // We should get a different client ID for a different socket
         assert_ne!(client_id, client_id2);
-        let client_id2 = handler_resources
-            .add_udp_client(
-                (IpAddr::from([127, 0, 0, 1]), 1235).into(),
-                stub_socket.dupe(),
-                false,
-            )
-            .await;
+        let client_id2 = handler_resources.add_udp_client(
+            (IpAddr::from([127, 0, 0, 1]), 1235).into(),
+            stub_socket.dupe(),
+            false,
+        );
         // We should get a different client ID for a different client address
         assert_ne!(client_id, client_id2);
     }
@@ -522,15 +509,13 @@ mod tests {
             udp_client_map: Arc::new(RwLock::new(ClientIdMaps::new())),
         };
         let stub_socket = Arc::new(UdpSocket::bind(("127.0.0.1", 0)).await.unwrap());
-        let _ = handler_resources
-            .add_udp_client(
-                (IpAddr::from([127, 0, 0, 1]), 1234).into(),
-                stub_socket.dupe(),
-                false,
-            )
-            .await;
+        let _ = handler_resources.add_udp_client(
+            (IpAddr::from([127, 0, 0, 1]), 1234).into(),
+            stub_socket.dupe(),
+            false,
+        );
         tokio::time::sleep(config::UDP_PRUNE_TIMEOUT).await;
-        handler_resources.prune_udp_clients().await;
+        handler_resources.prune_udp_clients();
         assert!(
             handler_resources
                 .udp_client_map

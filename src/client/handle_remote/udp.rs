@@ -41,9 +41,7 @@ pub(super) async fn handle_udp(
             .map_err(FatalError::ClientIo)?;
         buf.truncate(len);
         trace!("received {len} bytes from {addr}");
-        let client_id = handler_resources
-            .add_udp_client(addr, socket.dupe(), false)
-            .await;
+        let client_id = handler_resources.add_udp_client(addr, socket.dupe(), false);
         let frame = Datagram {
             target_host: Bytes::from(rhost),
             target_port: rport,
