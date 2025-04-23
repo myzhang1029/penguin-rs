@@ -14,11 +14,9 @@ use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt, task::AtomicWaker};
 use parking_lot::RwLock;
 use std::collections::HashMap;
-use std::future::Future;
-use std::pin::pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::task::Poll;
+use std::task::{Context, Poll, ready};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::MissedTickBehavior;
@@ -132,6 +130,7 @@ impl Dupe for MultiplexorInner {
     }
 }
 
+// This `impl` block is for the background task for the multiplexor.
 impl MultiplexorInner {
     /// Processing task
     /// Does the following:
@@ -159,38 +158,27 @@ impl MultiplexorInner {
         let (mut ws_sink, mut ws_stream) = ws.split();
         let mut should_drain_frame_rx = false;
 
-        // This is modified from an unrolled version of `tokio::try_join!` with our custom cancellation
-        // logic and to make sure that tasks are not cancelled at random points.
-        let res = {
-            let mut process_dropped_ports_task_fut =
-                pin!(self.process_dropped_ports_task(&mut dropped_ports_rx));
-            let mut process_frame_recv_task_fut =
-                pin!(self.process_frame_recv_task(&mut tx_frame_rx, &mut ws_sink));
-            let mut process_ws_next_fut = pin!(self.process_ws_next(
+        let res = tokio::select! {
+            r = self.process_dropped_ports_task(&mut dropped_ports_rx) => {
+                debug!("mux dropped ports task finished: {r:?}");
+                should_drain_frame_rx = true;
+                r
+            }
+            r = self.process_frame_recv_task(&mut tx_frame_rx, &mut ws_sink) => {
+                debug!("mux frame recv task finished: {r:?}");
+                // should_drain_frame_rx = false;
+                r
+            }
+            r = self.process_ws_next(
                 &mut ws_stream,
                 &datagram_tx,
                 &con_recv_stream_tx,
                 bnd_request_tx.as_ref()
-            ));
-            poll_fn(|cx| {
-                if let Poll::Ready(r) = process_dropped_ports_task_fut.as_mut().poll(cx) {
-                    debug!("mux dropped ports task finished: {r:?}");
-                    should_drain_frame_rx = true;
-                    return Poll::Ready(r);
-                }
-                if let Poll::Ready(r) = process_ws_next_fut.as_mut().poll(cx) {
-                    debug!("mux ws next task finished: {r:?}");
-                    // should_drain_frame_rx = false;
-                    return Poll::Ready(r);
-                }
-                if let Poll::Ready(r) = process_frame_recv_task_fut.as_mut().poll(cx) {
-                    debug!("mux frame recv task finished: {r:?}");
-                    // should_drain_frame_rx = false;
-                    return Poll::Ready(r);
-                }
-                Poll::Pending
-            })
-            .await
+            ) => {
+                debug!("mux ws next task finished: {r:?}");
+                // should_drain_frame_rx = false;
+                r
+            }
         };
         self.wind_down(
             should_drain_frame_rx,
@@ -207,6 +195,10 @@ impl MultiplexorInner {
 
     /// Process dropped ports from the `dropped_ports_rx` channel.
     /// Returns when [`Multiplexor`] itself is dropped.
+    ///
+    /// # Cancel Safety
+    /// This function is cancel safe. If it is cancelled, some items
+    /// may be left on `dropped_ports_rx` but no item will be lost.
     #[tracing::instrument(skip_all, level = "trace")]
     #[inline]
     pub async fn process_dropped_ports_task(
@@ -237,6 +229,10 @@ impl MultiplexorInner {
 
     /// Poll `frame_rx` and process the frame received and send keepalive pings as needed.
     /// It propagates errors from the `Sink` processing.
+    ///
+    /// # Cancel Safety
+    /// This function is mostly cancel safe. If it is cancelled, no data will be lost,
+    /// but there might be unflushed frames on `ws_sink` or lost `Message::Ping` messages.
     #[tracing::instrument(skip_all, level = "trace")]
     #[inline]
     async fn process_frame_recv_task<S: WebSocketStream<WsError>>(
@@ -251,25 +247,11 @@ impl MultiplexorInner {
         loop {
             tokio::select! {
                 biased;
-                r = frame_rx.recv() => {
-                    let Some(frame) = r else {
-                        // Only happens when `frame_rx` is closed
-                        // cannot happen because `Self` contains one sender unless
-                        // there is a bug in our code or `tokio` itself. Not a critical error,
-                        // using `debug_assert!` to avoid panicking in production.
-                        debug_assert!(false, "frame receiver should not be closed (this is a bug)");
-                        return Err(Error::ChannelClosed("frame_rx"));
-                    };
-                    // Buffer `Push` frames, and flush everything else immediately
-                    match frame.opcode() {
-                        Err(_) => {
-                            // Not a critical error, treating as flush
-                            debug_assert!(frame.is_empty(), "nonempty frame with invalid opcode (this is a bug)");
-                            ws_sink.flush().await
-                        }
-                        Ok(OpCode::Push) => ws_sink.feed(Message::Binary(frame.into())).await,
-                        Ok(_) => ws_sink.send(Message::Binary(frame.into())).await,
-                    }.map_err(Box::new)?;
+                r = poll_fn(|cx| self.poll_reserve_space_recv_frame(cx, frame_rx, ws_sink)) => {
+                    let should_flush = r?;
+                    if should_flush {
+                        ws_sink.flush().await.map_err(Box::new)?;
+                    }
                 }
                 _ = interval.tick() => {
                     trace!("sending keepalive ping");
@@ -279,6 +261,52 @@ impl MultiplexorInner {
         }
         // This returns if we cannot sink or cannot receive from `frame_rx` anymore,
         // in either case, it does not make sense to check `frame_rx`.
+    }
+
+    /// Poll `frame_rx` and process the frame received in a way that is cancel safe.
+    /// Returns `true` if the user should follow the call with a `Sink::flush`.
+    fn poll_reserve_space_recv_frame<S: WebSocketStream<WsError>>(
+        &self,
+        cx: &mut Context<'_>,
+        frame_rx: &mut mpsc::UnboundedReceiver<FinalizedFrame>,
+        ws_sink: &mut SplitSink<S, Message>,
+    ) -> Poll<Result<bool>> {
+        ready!(ws_sink.poll_ready_unpin(cx)).map_err(Box::new)?;
+        // `ready!`: if we cancel here, the reserved space is not used, but no other side effect
+        let Some(frame) = ready!(frame_rx.poll_recv(cx)) else {
+            // Only happens when `frame_rx` is closed
+            // cannot happen because `Self` contains one sender unless
+            // there is a bug in our code or `tokio` itself. Not a critical error,
+            // using `debug_assert!` to avoid panicking in production.
+            debug_assert!(false, "frame receiver should not be closed (this is a bug)");
+            return Poll::Ready(Err(Error::ChannelClosed("frame_rx")));
+        };
+        // After this point, we may not return `Poll::Pending` because we (might) hold data
+        let should_flush = match frame.opcode() {
+            Err(_) => {
+                // Not a critical error, treating as flush
+                debug_assert!(
+                    frame.is_empty(),
+                    "nonempty frame with invalid opcode (this is a bug)"
+                );
+                true
+            }
+            Ok(OpCode::Push) => {
+                ws_sink
+                    .start_send_unpin(Message::Binary(frame.into()))
+                    .map_err(Box::new)?;
+                // Buffer `Push` frames until the user calls `poll_flush`
+                false
+            }
+            Ok(_) => {
+                ws_sink
+                    .start_send_unpin(Message::Binary(frame.into()))
+                    .map_err(Box::new)?;
+                // Flush everything else immediately
+                true
+            }
+        };
+        Poll::Ready(Ok(should_flush))
     }
 
     /// Process the return value of `ws.next()`
