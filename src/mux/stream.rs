@@ -90,8 +90,7 @@ impl AsyncRead for MuxStream {
         let remaining = buf.remaining();
         if self.buf.is_empty() {
             trace!("polling the stream");
-            let next = ready!(self.frame_rx.poll_recv(cx));
-            if next.is_none() || next.as_ref().unwrap().is_empty() {
+            let Some(next) = ready!(self.frame_rx.poll_recv(cx)) else {
                 // See `tokio::sync::mpsc`#clean-shutdown
                 self.frame_rx.close();
                 // There should be no code path sending more frames after an EOF
@@ -102,8 +101,11 @@ impl AsyncRead for MuxStream {
                 debug_assert!(self.frame_rx.try_recv().is_err());
                 // The stream has been closed, just return 0 bytes read
                 return Poll::Ready(Ok(()));
-            }
-            self.buf = next.unwrap();
+            };
+            // Putting no data into the buffer is EOF, and other code should
+            // already ensure that such frames are filtered out.
+            debug_assert!(!next.is_empty());
+            self.buf = next;
             let new = self.psh_recvd_since + 1;
             self.psh_recvd_since = new;
             trace!(
@@ -295,11 +297,10 @@ mod tests {
         }
 
         // Try EOF
-        rx_frame_tx.send(Bytes::new()).await.unwrap();
+        drop(rx_frame_tx);
         let rs = stream.as_mut().poll_read(&mut cx, &mut read_buf);
         assert!(matches!(rs, Poll::Ready(Ok(()))));
         assert_eq!(read_buf.filled().len(), 0);
-        assert!(rx_frame_tx.is_closed());
     }
 
     #[tokio::test]
