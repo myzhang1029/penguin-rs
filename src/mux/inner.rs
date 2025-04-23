@@ -428,7 +428,7 @@ impl MultiplexorInner {
             }
             Message::Ping(_) | Message::Pong(_) => {
                 // `tokio-tungstenite` handles `Ping` messages automatically
-                trace!("received ping/poing");
+                trace!("received ping/pong");
                 Ok(false)
             }
             Message::Close(_) => {
