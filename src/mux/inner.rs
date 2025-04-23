@@ -27,7 +27,8 @@ use tracing::{debug, error, info, trace, warn};
 #[derive(Debug)]
 pub struct EstablishedStreamData {
     /// Channel for sending data to `MuxStream`'s `AsyncRead`
-    sender: mpsc::Sender<Bytes>,
+    /// If `None`, we have received `Finish` from the peer but we can possibly still send data.
+    sender: Option<mpsc::Sender<Bytes>>,
     /// Whether writes should succeed.
     /// There are two cases for `true`:
     /// 1. `Finish` has been sent.
@@ -56,6 +57,7 @@ pub enum FlowSlot {
 impl FlowSlot {
     /// Take the sender and set the slot to `Established`.
     /// Returns `None` if the slot is already established.
+    #[inline]
     pub fn establish(
         &mut self,
         data: EstablishedStreamData,
@@ -70,6 +72,23 @@ impl FlowSlot {
             Self::Established(_) | Self::BindRequested(_) => unreachable!(),
         };
         Some(sender)
+    }
+    /// If the slot is established, send data. Otherwise, return `None`.
+    #[inline]
+    pub fn dispatch(&self, data: Bytes) -> Option<std::result::Result<(), TrySendError<()>>> {
+        if let Self::Established(stream_data) = self {
+            let r = stream_data
+                .sender
+                .as_ref()
+                .map(|sender| sender.try_send(data))?
+                .map_err(|e| match e {
+                    TrySendError::Full(_) => TrySendError::Full(()),
+                    TrySendError::Closed(_) => TrySendError::Closed(()),
+                });
+            Some(r)
+        } else {
+            None
+        }
     }
 }
 
@@ -138,9 +157,11 @@ impl MultiplexorInner {
         } = taskdata;
         // Split the `WebSocket` stream into a `Sink` and `Stream` so we can process them concurrently
         let (mut ws_sink, mut ws_stream) = ws.split();
+        let mut should_drain_frame_rx = false;
+
         // This is modified from an unrolled version of `tokio::try_join!` with our custom cancellation
         // logic and to make sure that tasks are not cancelled at random points.
-        let (e, should_drain_frame_rx) = {
+        let res = {
             let mut process_dropped_ports_task_fut =
                 pin!(self.process_dropped_ports_task(&mut dropped_ports_rx));
             let mut process_frame_recv_task_fut =
@@ -152,17 +173,20 @@ impl MultiplexorInner {
                 bnd_request_tx.as_ref()
             ));
             poll_fn(|cx| {
-                if let Poll::Ready(_r) = process_dropped_ports_task_fut.as_mut().poll(cx) {
-                    debug!("mux dropped ports task finished");
-                    return Poll::Ready((Ok(()), true));
+                if let Poll::Ready(r) = process_dropped_ports_task_fut.as_mut().poll(cx) {
+                    debug!("mux dropped ports task finished: {r:?}");
+                    should_drain_frame_rx = true;
+                    return Poll::Ready(r);
                 }
                 if let Poll::Ready(r) = process_ws_next_fut.as_mut().poll(cx) {
                     debug!("mux ws next task finished: {r:?}");
-                    return Poll::Ready((r, false));
+                    // should_drain_frame_rx = false;
+                    return Poll::Ready(r);
                 }
-                if let Poll::Ready(e) = process_frame_recv_task_fut.as_mut().poll(cx) {
-                    debug!("mux frame recv task finished: {e:?}");
-                    return Poll::Ready((Err(e), false));
+                if let Poll::Ready(r) = process_frame_recv_task_fut.as_mut().poll(cx) {
+                    debug!("mux frame recv task finished: {r:?}");
+                    // should_drain_frame_rx = false;
+                    return Poll::Ready(r);
                 }
                 Poll::Pending
             })
@@ -178,7 +202,7 @@ impl MultiplexorInner {
             tx_frame_rx,
         )
         .await?;
-        e
+        res
     }
 
     /// Process dropped ports from the `dropped_ports_rx` channel.
@@ -188,17 +212,16 @@ impl MultiplexorInner {
     pub async fn process_dropped_ports_task(
         &self,
         dropped_ports_rx: &mut mpsc::UnboundedReceiver<u32>,
-    ) {
+    ) -> Result<()> {
         while let Some(flow_id) = dropped_ports_rx.recv().await {
             if flow_id == 0 {
                 // `our_port` is `0`, which means the multiplexor itself is being dropped.
                 debug!("mux dropped");
                 // If this returns, our end is dropped, but we should still try to flush everything we
                 // already have in the `frame_rx` before closing.
-                // we should make some attempt to flush `frame_rx` before exiting.
-                return;
+                return Ok(());
             }
-            self.close_port(flow_id, false).await;
+            self.close_port(flow_id, false);
         }
         // None: only happens when the last sender (i.e. `dropped_ports_tx` in `MultiplexorInner`)
         // is dropped, which should not happen in normal circumstances because `MultiplexorInner::drop`
@@ -209,6 +232,7 @@ impl MultiplexorInner {
             false,
             "dropped ports receiver should not be closed (this is a bug)"
         );
+        Err(Error::ChannelClosed("dropped_ports_rx"))
     }
 
     /// Poll `frame_rx` and process the frame received and send keepalive pings as needed.
@@ -219,42 +243,37 @@ impl MultiplexorInner {
         &self,
         frame_rx: &mut mpsc::UnboundedReceiver<FinalizedFrame>,
         ws_sink: &mut SplitSink<S, Message>,
-    ) -> Error {
-        macro_rules! try_send {
-            ($e:expr) => {
-                if let Err(e) = $e {
-                    return Error::WebSocket(Box::new(e));
-                }
-            };
-        }
+    ) -> Result<()> {
         let mut interval = OptionalInterval::from(self.keepalive_interval);
         // If we missed a tick, it is probably doing networking, so we don't need to
         // make up for it.
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
             tokio::select! {
-                _ = interval.tick() => {
-                    trace!("sending keepalive ping");
-                    try_send!(ws_sink.send(Message::Ping(Bytes::new())).await);
-                }
-                Some(frame) = frame_rx.recv() => {
+                biased;
+                r = frame_rx.recv() => {
+                    let Some(frame) = r else {
+                        // Only happens when `frame_rx` is closed
+                        // cannot happen because `Self` contains one sender unless
+                        // there is a bug in our code or `tokio` itself. Not a critical error,
+                        // using `debug_assert!` to avoid panicking in production.
+                        debug_assert!(false, "frame receiver should not be closed (this is a bug)");
+                        return Err(Error::ChannelClosed("frame_rx"));
+                    };
                     // Buffer `Push` frames, and flush everything else immediately
-                    try_send!(match frame.opcode() {
+                    match frame.opcode() {
                         Err(_) => {
                             // Not a critical error, treating as flush
                             debug_assert!(frame.is_empty(), "nonempty frame with invalid opcode (this is a bug)");
                             ws_sink.flush().await
                         }
                         Ok(OpCode::Push) => ws_sink.feed(Message::Binary(frame.into())).await,
-                        _ => ws_sink.send(Message::Binary(frame.into())).await,
-                    });
+                        Ok(_) => ws_sink.send(Message::Binary(frame.into())).await,
+                    }.map_err(Box::new)?;
                 }
-                else => {
-                    // Only happens when `frame_rx` is closed
-                    // cannot happen because `Self` contains one sender unless
-                    // there is a bug in our code or `tokio` itself. Not a critical error,
-                    // using `debug_assert!` to avoid panicking in production.
-                    debug_assert!(false, "frame receiver should not be closed (this is a bug)");
+                _ = interval.tick() => {
+                    trace!("sending keepalive ping");
+                    ws_sink.send(Message::Ping(Bytes::new())).await.map_err(Box::new)?;
                 }
             }
         }
@@ -272,28 +291,19 @@ impl MultiplexorInner {
         con_recv_stream_tx: &mpsc::Sender<MuxStream>,
         bnd_request_tx: Option<&mpsc::Sender<BindRequest<'static>>>,
     ) -> Result<()> {
-        loop {
-            match ws_stream.next().await {
-                Some(Ok(msg)) => {
-                    trace!("received message length = {}", msg.len());
-                    if self
-                        .process_message(msg, datagram_tx, con_recv_stream_tx, bnd_request_tx)
-                        .await?
-                    {
-                        // Received a `Close` message
-                        break Ok(());
-                    }
-                }
-                Some(Err(e)) => {
-                    error!("Failed to receive message from WebSocket: {e}");
-                    break Err(Error::WebSocket(Box::new(e)));
-                }
-                None => {
-                    debug!("WebSocket closed by peer");
-                    break Ok(());
-                }
+        while let Some(m) = ws_stream.next().await {
+            let msg = m.map_err(Box::new)?;
+            trace!("received message length = {}", msg.len());
+            if self
+                .process_message(msg, datagram_tx, con_recv_stream_tx, bnd_request_tx)
+                .await?
+            {
+                // Received a `Close` message
+                return Ok(());
             }
         }
+        debug!("WebSocket closed by peer");
+        return Ok(());
         // In this case, peer already requested close, so we should not attempt to send any more frames.
     }
 
@@ -361,23 +371,9 @@ impl MultiplexorInner {
                 .await?;
         }
         // Finally, we send EOF to all established streams.
-        let senders = self
-            .flows
-            .write()
-            .drain()
-            .filter_map(|(_, stream_slot)| {
-                if let FlowSlot::Established(stream_data) = stream_slot {
-                    Some(stream_data.sender)
-                } else {
-                    None
-                    // else: just drop the sender for `Requested` slots, and the user
-                    // will get `Error::Closed` from `client_new_stream_channel`
-                }
-            })
-            .collect::<Vec<_>>();
-        for sender in senders {
-            sender.send(Bytes::new()).await.ok();
-        }
+        self.flows.write().drain().for_each(|(flow_id, slot)| {
+            self.close_port_local(slot, flow_id, true);
+        });
         Ok(())
     }
 }
@@ -402,13 +398,9 @@ impl MultiplexorInner {
                     .await?;
                 Ok(false)
             }
-            Message::Ping(_data) => {
+            Message::Ping(_) | Message::Pong(_) => {
                 // `tokio-tungstenite` handles `Ping` messages automatically
-                trace!("received ping");
-                Ok(false)
-            }
-            Message::Pong(_data) => {
-                trace!("received pong");
+                trace!("received ping/poing");
                 Ok(false)
             }
             Message::Close(_) => {
@@ -454,7 +446,7 @@ impl MultiplexorInner {
             payload,
         } = frame;
         tracing::Span::current().record("flow_id", format_args!("{flow_id:08x}"));
-        let send_rst = async {
+        let send_rst = || {
             self.tx_frame_tx
                 .send(Frame::new_reset(flow_id).finalize())
                 .ok()
@@ -513,77 +505,76 @@ impl MultiplexorInner {
                 if should_new_stream {
                     self.ack_recv_new_stream(flow_id, payload)?;
                 } else if should_send_rst {
-                    send_rst.await;
+                    send_rst();
                 }
             }
             Payload::Finish => {
-                let sender = if let Some(FlowSlot::Established(stream_data)) =
-                    self.flows.read().get(&flow_id)
-                {
-                    Some(stream_data.sender.dupe())
-                } else {
-                    None
-                };
-
-                // Make sure the user receives `EOF`.
-                // This part is refactored out so that we don't hold the lock across await
-                if let Some(sender) = sender {
-                    sender.send(Bytes::new()).await.ok();
-                    // And our end can still send
-                } else {
-                    let slot = self.flows.write().remove(&flow_id);
-                    match slot {
-                        Some(FlowSlot::Established(_)) => unreachable!(),
-                        Some(FlowSlot::Requested(_)) => {
-                            // This is an invalid reply to a `Connect` frame
-                            warn!("Peer replied `Finish` to a `Connect` request");
-                            send_rst.await;
+                let mut flows = self.flows.write();
+                let was_bind = match flows.get_mut(&flow_id) {
+                    Some(FlowSlot::Established(stream_data)) => {
+                        let sender = stream_data.sender.take();
+                        if sender.is_none() {
+                            warn!("Duplicate `Finish` frame");
                         }
-                        Some(FlowSlot::BindRequested(sender)) => {
-                            // Peer successfully bound the port
-                            sender.send(true).ok();
-                            // If the send above fails, the receiver is dropped,
-                            // so we can just ignore it.
-                        }
-                        None => warn!("Bogus `Finish` frame {flow_id:08x}"),
+                        // And our end can still send
+                        false
                     }
+                    Some(FlowSlot::Requested(_)) => {
+                        // This is an invalid reply to a `Connect` frame
+                        warn!("Peer replied `Finish` to a `Connect` request");
+                        flows.remove(&flow_id);
+                        send_rst();
+                        false
+                    }
+                    Some(FlowSlot::BindRequested(_)) => true,
+                    None => {
+                        warn!("Bogus `Finish` frame");
+                        false
+                    }
+                };
+                if was_bind {
+                    // Peer successfully bound the port
+                    let Some(FlowSlot::BindRequested(sender)) = flows.remove(&flow_id) else {
+                        unreachable!();
+                    };
+                    drop(flows);
+                    sender.send(true).ok();
+                    // If the send above fails, the receiver is dropped,
+                    // so we can just ignore it.
                 }
             }
             Payload::Reset => {
                 debug!("received `Reset`");
                 // `true` because we don't want to reply `Reset` with `Reset`.
-                self.close_port(flow_id, true).await;
+                self.close_port(flow_id, true);
             }
             Payload::Push(data) => {
-                let sender = if let Some(FlowSlot::Established(stream_data)) =
-                    self.flows.read().get(&flow_id)
-                {
-                    Some(stream_data.sender.dupe())
-                } else {
-                    None
-                };
-                // This part is refactored out so that we don't hold the lock across await
-                if let Some(sender) = sender {
-                    // In this case, `data` is always owned already
-                    match sender.try_send(data.into_owned()) {
-                        Err(TrySendError::Full(_)) => {
-                            // Peer does not respect the `rwnd` limit, this should not happen in normal circumstances.
-                            // let's send `Reset`.
-                            warn!("Peer does not respect `rwnd` limit, dropping stream");
-                            self.close_port(flow_id, false).await;
-                        }
-                        Err(TrySendError::Closed(_)) => {
-                            // Else, the corresponding `MuxStream` is dropped
-                            // The job to remove the port from the map is done by `close_port_task`,
-                            // so not being able to send is the same as not finding the port;
-                            // just timing is different.
-                            trace!("dropped `MuxStream` not yet removed from the map");
-                        }
-                        Ok(()) => (),
+                // In this case, `data` is always owned already
+                let result = self
+                    .flows
+                    .read()
+                    .get(&flow_id)
+                    .and_then(|slot| slot.dispatch(data.into_owned()));
+                // This part is refactored out so that we don't have a deadlock
+                match result {
+                    Some(Ok(())) => (),
+                    Some(Err(TrySendError::Full(()))) => {
+                        // Peer does not respect the `rwnd` limit, this should not happen in normal circumstances.
+                        // let's send `Reset`.
+                        warn!("Peer does not respect `rwnd` limit, dropping stream");
+                        self.close_port(flow_id, false);
                     }
-                } else {
-                    warn!("Bogus `Push` frame");
-                    send_rst.await;
+                    Some(Err(TrySendError::Closed(()))) => {
+                        // Else, the corresponding `MuxStream` is dropped
+                        // The job to remove the port from the map is done by `close_port_task`,
+                        // so not being able to send is the same as not finding the port;
+                        // just timing is different.
+                        trace!("dropped `MuxStream` not yet removed from the map");
+                    }
+                    None => {
+                        warn!("Bogus `Push` frame");
+                        send_rst();
+                    }
                 }
             }
             Payload::Bind(payload) => {
@@ -650,7 +641,7 @@ impl MultiplexorInner {
         let psh_send_remaining = Arc::new(AtomicU32::new(peer_rwnd));
         let writer_waker = Arc::new(AtomicWaker::new());
         let stream_data = EstablishedStreamData {
-            sender: frame_tx,
+            sender: Some(frame_tx),
             finish_sent: finish_sent.dupe(),
             psh_send_remaining: psh_send_remaining.dupe(),
             writer_waker: writer_waker.dupe(),
@@ -749,18 +740,23 @@ impl MultiplexorInner {
         Ok(())
     }
 
-    /// Close a port. That is, send `Reset` if `Finish` is not sent,
-    /// and remove it from the map.
+    /// Close a port. That is, remove it from the map and call `close_port_local`.
+    fn close_port(&self, flow_id: u32, inhibit_rst: bool) {
+        // Free the port for reuse
+        let value = self.flows.write().remove(&flow_id);
+        if let Some(removed) = value {
+            self.close_port_local(removed, flow_id, inhibit_rst);
+        } else {
+            debug!("connection not found, nothing to close");
+        }
+    }
+
+    /// EOF the local end, and wake up the writer.
     #[tracing::instrument(skip_all)]
     #[inline]
-    async fn close_port(&self, flow_id: u32, inhibit_rst: bool) {
-        // Free the port for reuse
-        let removed = self.flows.write().remove(&flow_id);
+    fn close_port_local(&self, removed: FlowSlot, flow_id: u32, inhibit_rst: bool) {
         match removed {
-            Some(FlowSlot::Established(stream_data)) => {
-                // Make sure the user receives `EOF`.
-                stream_data.sender.send(Bytes::new()).await.ok();
-                // Ignore the error if the user already dropped the stream
+            FlowSlot::Established(mut stream_data) => {
                 // Atomic ordering:
                 // Load part:
                 // If the user calls `poll_shutdown`, but we see `true` here,
@@ -779,20 +775,23 @@ impl MultiplexorInner {
                 // If there is a writer waiting for `Acknowledge`, wake it up because it will never receive one.
                 // Waking it here and the user should receive a `BrokenPipe` error.
                 stream_data.writer_waker.wake();
+                // No need to send an empty `Bytes`. Dropping `sender`
+                // already makes sure the user receives `EOF`.
+                if let Some(sender) = stream_data.sender.take() {
+                    debug_assert!(sender.strong_count() == 1);
+                }
+                // Ignore the error if the user already dropped the stream
                 debug!("freed connection");
             }
-            Some(FlowSlot::Requested(sender)) => {
+            FlowSlot::Requested(sender) => {
                 sender.send(None).ok();
                 // Ignore the error if the user already cancelled the requesting future
                 debug!("peer cancelled `Connect`");
             }
-            Some(FlowSlot::BindRequested(sender)) => {
+            FlowSlot::BindRequested(sender) => {
                 sender.send(false).ok();
                 // Ignore the error if the user already cancelled the requesting future
                 debug!("peer rejected `Bind`");
-            }
-            None => {
-                debug!("connection not found, nothing to close");
             }
         }
     }

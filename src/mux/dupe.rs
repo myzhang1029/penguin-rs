@@ -44,6 +44,8 @@ impl_dupe_as_clone! {
     tokio::sync::mpsc::Sender<T> => (T),
     // `UnboundedSender` is designed to be cheaply cloned.
     tokio::sync::mpsc::UnboundedSender<T> => (T),
+    // `broadcast::Sender` is designed to be cheaply cloned.
+    tokio::sync::broadcast::Sender<T> => (T),
 }
 
 // `Client` uses `Arc` internally.

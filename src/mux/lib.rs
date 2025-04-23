@@ -76,6 +76,9 @@ pub enum Error {
     /// A `Acknowledge` frame that does not match any pending [`Connect`](frame::OpCode::Connect) request.
     #[error("Bogus `Acknowledge` frame")]
     ConnAckGone,
+    /// An internal channel closed
+    #[error("Internal channel `{0}` closed")]
+    ChannelClosed(&'static str),
 }
 
 /// A variant of [`std::result::Result`] with [`enum@Error`] as the error type.
