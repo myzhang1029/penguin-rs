@@ -222,6 +222,7 @@ impl Payload<'_> {
 }
 
 impl<'data> From<&Payload<'data>> for OpCode {
+    #[inline]
     fn from(payload: &Payload<'data>) -> Self {
         match payload {
             Payload::Connect { .. } => Self::Connect,
@@ -590,12 +591,14 @@ impl TryFrom<FinalizedFrame> for Frame<'_> {
 }
 
 impl From<Bytes> for FinalizedFrame {
+    #[inline]
     fn from(bytes: Bytes) -> Self {
         Self(bytes)
     }
 }
 
 impl From<FinalizedFrame> for Bytes {
+    #[inline]
     fn from(frame: FinalizedFrame) -> Self {
         frame.0
     }

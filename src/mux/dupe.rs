@@ -14,6 +14,7 @@ pub trait Dupe {
 macro_rules! impl_dupe_as_clone {
     ($t:ty => $($g:ident),* $(,)?) => {
             impl<$($g),*> Dupe for $t {
+                #[inline]
                 fn dupe(&self) -> Self {
                     self.clone()
                 }
@@ -48,6 +49,7 @@ impl_dupe_as_clone! {
 // `Client` uses `Arc` internally.
 #[cfg(feature = "penguin-binary")]
 impl Dupe for reqwest::Client {
+    #[inline]
     fn dupe(&self) -> Self {
         self.clone()
     }
