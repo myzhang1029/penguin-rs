@@ -562,8 +562,6 @@ impl From<&Frame<'_>> for Bytes {
 pub(crate) struct FinalizedFrame(Bytes);
 
 impl FinalizedFrame {
-    pub const FLUSH: Self = Self(Bytes::new());
-
     /// Check if the frame is empty
     #[inline]
     pub const fn is_empty(&self) -> bool {

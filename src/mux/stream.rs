@@ -174,10 +174,6 @@ impl AsyncWrite for MuxStream {
             if original == 0 {
                 // We have reached the congestion window limit. Wait for an `Acknowledge`
                 debug!("waiting for `Acknowledge`");
-                // Make sure queued frames are flushed
-                self.frame_tx
-                    .send(FinalizedFrame::FLUSH)
-                    .map_err(|_| BrokenPipe)?;
                 self.writer_waker.register(cx.waker());
                 // Since all writes start with `poll_flush`, we don't need to
                 // flush here. There is actually no way to `poll_flush` without
@@ -205,9 +201,7 @@ impl AsyncWrite for MuxStream {
     #[tracing::instrument(skip(_cx), level = "trace")]
     #[inline]
     fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        self.frame_tx
-            .send(FinalizedFrame::FLUSH)
-            .map_err(|_| BrokenPipe)?;
+        // All writes are flushed immediately, so we don't need to do anything
         Poll::Ready(Ok(()))
     }
 
@@ -223,12 +217,10 @@ impl AsyncWrite for MuxStream {
         //    have already sent a `Reset` frame.
         // 2. The entire mux task has been dropped, so we will only get `BrokenPipe` error.
         // Atomic ordering: see `inner.rs` -> `close_port_local`.
-        if !self.finish_sent.load(Ordering::Acquire) {
+        if !self.finish_sent.swap(true, Ordering::AcqRel) {
             self.frame_tx
                 .send(Frame::new_finish(self.flow_id).finalize())
                 .map_err(|_| BrokenPipe)?;
-            // Atomic ordering: see `inner.rs` -> `close_port_local`.
-            self.finish_sent.store(true, Ordering::Release);
         }
         Poll::Ready(Ok(()))
     }
@@ -355,10 +347,6 @@ mod tests {
         // Try to write again
         let rs = stream.as_mut().poll_write(&mut cx, b"maybe");
         assert!(matches!(rs, Poll::Pending));
-
-        // Check attempt to flush
-        let frame3 = tx_frame_rx.recv().await.unwrap();
-        assert_eq!(frame3, FinalizedFrame::FLUSH);
 
         // Simulate `Acknowledge`
         stream.psh_send_remaining.fetch_add(1, Ordering::Release);
