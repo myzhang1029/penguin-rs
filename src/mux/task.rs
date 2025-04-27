@@ -48,20 +48,22 @@ impl TaskData {
             tx_frame_rx,
             dropped_ports_rx,
         } = self;
+        let parent_id = tokio::task::try_id()
+            .as_ref()
+            .map_or("0".to_string(), tokio::task::Id::to_string);
+        let future = async move {
+            let id = tokio::task::id();
+            debug!("spawning mux task {id} from {parent_id}",);
+            let result = task.start(ws, dropped_ports_rx, tx_frame_rx).await;
+            if let Err(e) = &result {
+                error!("Multiplexor task exited with error: {e}");
+            }
+            result
+        };
         if let Some(task_joinset) = task_joinset {
-            task_joinset.spawn(task.start(ws, dropped_ports_rx, tx_frame_rx));
+            task_joinset.spawn(Box::pin(future));
         } else {
-            let parent_task = tokio::task::try_id();
-            tokio::spawn(async move {
-                debug!(
-                    "spawning mux task {} from {}",
-                    tokio::task::id(),
-                    parent_task.map_or_else(|| "0".to_string(), |id| format!("{id}"))
-                );
-                if let Err(e) = task.start(ws, dropped_ports_rx, tx_frame_rx).await {
-                    error!("Multiplexor task exited with error: {e}");
-                }
-            });
+            tokio::spawn(Box::pin(future));
         }
         trace!("Multiplexor task spawned");
     }
