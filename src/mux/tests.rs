@@ -143,8 +143,8 @@ async fn connected_stream_passes_data_tiny_mtu_rwndminusone() {
     client_mux.inner.default_rwnd_threshold = crate::config::RWND - 1;
     server_mux.inner.default_rwnd_threshold = crate::config::RWND - 1;
 
-    client_mux.spawn_task(client, taskdata_client, None);
-    server_mux.spawn_task(server, taskdata_server, None);
+    taskdata_client.spawn(client, None);
+    taskdata_server.spawn(server, None);
 
     let input_bytes: Vec<u8> = (0..(1024 * 1024)).map(|_| rand::random::<u8>()).collect();
     let len = input_bytes.len();
