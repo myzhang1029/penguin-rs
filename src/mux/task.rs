@@ -2,39 +2,32 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use crate::frame::{FinalizedFrame, OpCode};
+use crate::frame::{ConnectPayload, FinalizedFrame, Frame, OpCode, Payload};
 use crate::inner::{FlowSlot, MultiplexorInner};
-use crate::stream::MuxStream;
 use crate::timing::{OptionalDuration, OptionalInterval};
-use crate::{BindRequest, Datagram, Message, WebSocketStream};
-use crate::{Error, Result, WsError};
+use crate::{BindRequest, Datagram, Dupe, Error, Message, Result, WebSocketStream, WsError};
 use bytes::Bytes;
 use futures_util::future::poll_fn;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
-use std::sync::atomic::Ordering;
 use std::task::{Context, Poll, ready};
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::task::JoinSet;
 use tokio::time::MissedTickBehavior;
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 /// Internal type used for spawning the multiplexor task
 #[derive(Debug)]
-pub struct Task {
-    pub inner: MultiplexorInner,
-    pub datagram_tx: mpsc::Sender<Datagram>,
-    pub con_recv_stream_tx: mpsc::Sender<MuxStream>,
+pub struct TaskData {
+    pub task: Task,
     // To be taken out when the task is spawned
-    pub tx_frame_rx: Option<mpsc::UnboundedReceiver<FinalizedFrame>>,
+    pub tx_frame_rx: mpsc::UnboundedReceiver<FinalizedFrame>,
     // To be taken out when the task is spawned
-    pub dropped_ports_rx: Option<mpsc::UnboundedReceiver<u32>>,
-    pub bnd_request_tx: Option<mpsc::Sender<BindRequest<'static>>>,
-    /// Interval between keepalive `Ping`s,
-    pub keepalive_interval: OptionalDuration,
+    pub dropped_ports_rx: mpsc::UnboundedReceiver<u32>,
 }
 
-impl Task {
+impl TaskData {
     /// Spawn the multiplexor task.
     /// This function and [`new_no_task`] are implementation details and not exposed in the public API.
     #[inline]
@@ -43,18 +36,36 @@ impl Task {
         ws: S,
         task_joinset: Option<&mut JoinSet<Result<()>>>,
     ) {
+        let Self {
+            task,
+            tx_frame_rx,
+            dropped_ports_rx,
+        } = self;
         if let Some(task_joinset) = task_joinset {
-            task_joinset.spawn(self.task(ws));
+            task_joinset.spawn(task.start(ws, dropped_ports_rx, tx_frame_rx));
         } else {
             tokio::spawn(async move {
-                if let Err(e) = self.task(ws).await {
+                if let Err(e) = task.start(ws, dropped_ports_rx, tx_frame_rx).await {
                     error!("Multiplexor task exited with error: {e}");
                 }
             });
         }
         trace!("Multiplexor task spawned");
     }
+}
 
+/// Data owned by the multiplexor task.
+// Not `Clone` because cloning it makes no sense.
+#[derive(Debug)]
+pub struct Task {
+    pub inner: MultiplexorInner,
+    pub datagram_tx: mpsc::Sender<Datagram>,
+    pub bnd_request_tx: Option<mpsc::Sender<BindRequest<'static>>>,
+    /// Interval between keepalive `Ping`s,
+    pub keepalive_interval: OptionalDuration,
+}
+
+impl Task {
     /// Processing task
     /// Does the following:
     /// - Receives messages from `WebSocket` and processes them
@@ -66,17 +77,15 @@ impl Task {
     // Instead, the user will notice when `rx` channels return `None`.
     #[tracing::instrument(skip_all, level = "trace")]
     #[inline]
-    async fn task<S: WebSocketStream<WsError>>(mut self, ws: S) -> Result<()> {
+    async fn start<S: WebSocketStream<WsError>>(
+        mut self,
+        ws: S,
+        mut dropped_ports_rx: mpsc::UnboundedReceiver<u32>,
+        mut tx_frame_rx: mpsc::UnboundedReceiver<FinalizedFrame>,
+    ) -> Result<()> {
         // Split the `WebSocket` stream into a `Sink` and `Stream` so we can process them concurrently
         let (mut ws_sink, mut ws_stream) = ws.split();
         let mut should_drain_frame_rx = false;
-        let mut tx_frame_rx = self
-            .tx_frame_rx
-            .take()
-            .expect("`tx_frame_rx` should not be `None` before spawning the task (this is a bug)");
-        let mut dropped_ports_rx = self.dropped_ports_rx.take().expect(
-            "`dropped_ports_rx` should not be `None` before spawning the task (this is a bug)",
-        );
         let res = tokio::select! {
                 r = self.process_dropped_ports_task(&mut dropped_ports_rx) => {
                     debug!("mux dropped ports task finished: {r:?}");
@@ -233,16 +242,7 @@ impl Task {
         while let Some(m) = ws_stream.next().await {
             let msg = m.map_err(Box::new)?;
             trace!("received message length = {}", msg.len());
-            if self
-                .inner
-                .process_message(
-                    msg,
-                    &self.datagram_tx,
-                    &self.con_recv_stream_tx,
-                    self.bnd_request_tx.as_ref(),
-                )
-                .await?
-            {
+            if self.process_message(msg, false).await? {
                 // Received a `Close` message
                 return Ok(());
             }
@@ -264,13 +264,7 @@ impl Task {
         // We first make sure the streams can no longer send
         for (_, stream_data) in self.inner.flows.write().iter() {
             if let FlowSlot::Established(stream_data) = stream_data {
-                // Prevent the user from writing
-                // Atomic ordering: It does not matter whether the user calls `poll_shutdown` or not,
-                // the stream is shut down and the final value of `finish_sent` is `true`.
-                stream_data.finish_sent.store(true, Ordering::Relaxed);
-                // If there is a writer waiting for `Acknowledge`, wake it up because it will never receive one.
-                // Waking it here and the user should receive a `BrokenPipe` error.
-                stream_data.writer_waker.wake();
+                stream_data.disallow_write();
             }
         }
         // Let the tasks do some work now
@@ -310,9 +304,7 @@ impl Task {
                 "processing remaining message after closure length = {}",
                 msg.len()
             );
-            self.inner
-                .process_message(msg, &self.datagram_tx, &self.con_recv_stream_tx, None)
-                .await?;
+            self.process_message(msg, true).await?;
         }
         // Finally, we send EOF to all established streams.
         self.inner
@@ -322,6 +314,233 @@ impl Task {
             .for_each(|(flow_id, slot)| {
                 self.inner.close_port_local(slot, flow_id, true);
             });
+        Ok(())
+    }
+
+    /// Process an incoming message
+    /// Returns `Ok(true)` if a `Close` message was received.
+    #[tracing::instrument(skip_all, level = "trace")]
+    #[inline]
+    async fn process_message(&self, msg: Message, ignore_bind: bool) -> Result<bool> {
+        match msg {
+            Message::Binary(data) => {
+                let frame = data.try_into()?;
+                trace!("received stream frame: {frame:?}");
+                self.process_frame(frame, ignore_bind).await?;
+                Ok(false)
+            }
+            Message::Ping(_) | Message::Pong(_) => {
+                // `tokio-tungstenite` handles `Ping` messages automatically
+                trace!("received ping/pong");
+                Ok(false)
+            }
+            Message::Close(_) => {
+                debug!("received close");
+                Ok(true)
+            }
+            Message::Text(text) => {
+                debug!("received `Text` message: `{text}'");
+                Err(Error::TextMessage)
+            }
+            Message::Frame(_) => {
+                unreachable!("`Frame` message should not be received");
+            }
+        }
+    }
+
+    /// Process a stream frame
+    /// Does the following:
+    /// - If `flag` is [`Connect`](crate::frame::OpCode::Connect),
+    ///   - Find an available `dport` and send a `Acknowledge`.
+    ///   - Create a new `MuxStream` and send it to the `stream_tx` channel.
+    /// - If `flag` is `Acknowledge`,
+    ///   - Existing stream with the matching `dport`: increment the `psh_send_remaining` counter.
+    ///   - New stream: create a `MuxStream` and send it to the `stream_tx` channel.
+    /// - If `flag` is `Bind`,
+    ///   - Send the request to the user if we are accepting `Bind` requests and reply `Finish`.
+    ///   - Otherwise, send back a `Reset` frame.
+    /// - Otherwise, we find the sender with the matching `dport` and
+    ///   - Send the data to the sender.
+    ///   - If the receiver is closed or the port does not exist, send back a
+    ///     `Reset` frame.
+    #[tracing::instrument(skip_all, fields(flow_id), level = "debug")]
+    #[inline]
+    async fn process_frame(&self, frame: Frame<'static>, ignore_bind: bool) -> Result<()> {
+        let Frame {
+            id: flow_id,
+            payload,
+        } = frame;
+        tracing::Span::current().record("flow_id", format_args!("{flow_id:08x}"));
+        let send_rst = || {
+            self.inner
+                .tx_frame_tx
+                .send(Frame::new_reset(flow_id).finalize())
+                .ok()
+            // Error only happens if the `frame_tx` channel is closed, at which point
+            // we don't care about sending a `Reset` frame anymore
+        };
+        match payload {
+            Payload::Connect(ConnectPayload {
+                rwnd: peer_rwnd,
+                target_host,
+                target_port,
+            }) => {
+                // In this case, `target_host` is always owned already
+                self.inner
+                    .con_recv_new_stream(flow_id, target_host.into_owned(), target_port, peer_rwnd)
+                    .await?;
+            }
+            Payload::Acknowledge(payload) => {
+                trace!("received `Acknowledge`");
+                // Three cases:
+                // 1. Peer acknowledged `Connect`
+                // 2. Peer acknowledged some `Push` frames
+                // 3. Something unexpected
+                let (should_new_stream, should_send_rst) =
+                    match self.inner.flows.read().get(&flow_id) {
+                        Some(FlowSlot::Established(stream_data)) => {
+                            debug!("peer processed {payload} frames");
+                            // We have an established stream, so process the `Acknowledge`
+                            stream_data.acknowledge(payload);
+                            (false, false)
+                        }
+                        Some(FlowSlot::Requested(_)) => {
+                            debug!("new stream with peer rwnd {payload}");
+                            (true, false)
+                        }
+                        Some(FlowSlot::BindRequested(_)) => {
+                            warn!("Peer replied `Acknowledge` to a `Bind` request");
+                            (false, true)
+                        }
+                        None => {
+                            debug!("stream does not exist, sending `Reset`");
+                            (false, true)
+                        }
+                    };
+                if should_new_stream {
+                    self.inner.ack_recv_new_stream(flow_id, payload)?;
+                } else if should_send_rst {
+                    send_rst();
+                }
+            }
+            Payload::Finish => {
+                let mut flows = self.inner.flows.write();
+                let Some(flow) = flows.get_mut(&flow_id) else {
+                    warn!("Bogus `Finish` frame");
+                    send_rst();
+                    return Ok(());
+                };
+                match flow {
+                    FlowSlot::BindRequested(_) => {
+                        // Peer successfully bound the port
+                        let Some(FlowSlot::BindRequested(sender)) = flows.remove(&flow_id) else {
+                            unreachable!();
+                        };
+                        drop(flows);
+                        sender.send(true).ok();
+                        // If the send above fails, the receiver is dropped,
+                        // so we can just ignore it.
+                    }
+                    FlowSlot::Requested(_) => {
+                        // `Finish` is an invalid response to `Connect`
+                        warn!("Peer replied `Finish` to a `Connect` request");
+                        flows.remove(&flow_id);
+                        drop(flows);
+                        send_rst();
+                    }
+                    FlowSlot::Established(stream_data) => {
+                        if stream_data.disallow_read().is_none() {
+                            warn!("Duplicate `Finish` frame");
+                        }
+                    }
+                }
+            }
+            Payload::Reset => {
+                debug!("received `Reset`");
+                // `true` because we don't want to reply `Reset` with `Reset`.
+                self.inner.close_port(flow_id, true);
+            }
+            Payload::Push(data) => {
+                // In this case, `data` is always owned already
+                let result = self
+                    .inner
+                    .flows
+                    .read()
+                    .get(&flow_id)
+                    .and_then(|slot| slot.dispatch(data.into_owned()));
+                // This part is refactored out so that we don't have a deadlock
+                match result {
+                    Some(Ok(())) => (),
+                    Some(Err(TrySendError::Full(()))) => {
+                        // Peer does not respect the `rwnd` limit, this should not happen in normal circumstances.
+                        // let's send `Reset`.
+                        warn!("Peer does not respect `rwnd` limit, dropping stream");
+                        self.inner.close_port(flow_id, false);
+                    }
+                    Some(Err(TrySendError::Closed(()))) => {
+                        // Else, the corresponding `MuxStream` is dropped
+                        // The job to remove the port from the map is done by `close_port_task`,
+                        // so not being able to send is the same as not finding the port;
+                        // just timing is different.
+                        trace!("dropped `MuxStream` not yet removed from the map");
+                    }
+                    None => {
+                        warn!("Bogus `Push` frame");
+                        send_rst();
+                    }
+                }
+            }
+            Payload::Bind(payload) => {
+                if let Some(sender) = &self.bnd_request_tx {
+                    debug!(
+                        "received `Bind` request: [{:?}]:{}",
+                        payload.target_host, payload.target_port
+                    );
+                    if ignore_bind {
+                        // Used for shutting down
+                        return Ok(());
+                    }
+                    let request = BindRequest {
+                        flow_id,
+                        payload,
+                        tx_frame_tx: self.inner.tx_frame_tx.dupe(),
+                    };
+                    if let Err(e) = sender.send(request).await {
+                        warn!("Failed to send `Bind` request: {e}");
+                    }
+                    // Let the user decide what to reply using `BindRequest::reply`
+                } else {
+                    info!("Received `Bind` request but configured to not accept such requests");
+                    self.inner
+                        .tx_frame_tx
+                        .send(Frame::new_reset(flow_id).finalize())
+                        .ok();
+                }
+            }
+            Payload::Datagram(payload) => {
+                trace!("received datagram frame: {payload:?}");
+                // Only fails if the receiver is dropped or the queue is full.
+                // The first case means the multiplexor itself is dropped;
+                // In the second case, we just drop the frame to avoid blocking.
+                // It is UDP, after all.
+                let datagram = Datagram {
+                    flow_id,
+                    target_host: payload.target_host.into_owned(),
+                    target_port: payload.target_port,
+                    data: payload.data.into_owned(),
+                };
+                if let Err(e) = self.datagram_tx.try_send(datagram) {
+                    match e {
+                        TrySendError::Full(_) => {
+                            warn!("Dropped datagram: {e}");
+                        }
+                        TrySendError::Closed(_) => {
+                            return Err(Error::Closed);
+                        }
+                    }
+                }
+            }
+        }
         Ok(())
     }
 }

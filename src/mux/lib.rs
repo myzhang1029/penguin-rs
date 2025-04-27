@@ -29,6 +29,7 @@ use rand::distr::uniform::SampleUniform;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
+use task::TaskData;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
@@ -125,7 +126,7 @@ impl Multiplexor {
 
     /// Create a new `Multiplexor` without spawning the task.
     #[inline]
-    fn new_no_task(keepalive_interval: OptionalDuration, accept_bnd: bool) -> (Self, Task) {
+    fn new_no_task(keepalive_interval: OptionalDuration, accept_bnd: bool) -> (Self, TaskData) {
         let (datagram_tx, datagram_rx) = mpsc::channel(config::DATAGRAM_BUFFER_SIZE);
         let (con_recv_stream_tx, con_recv_stream_rx) = mpsc::channel(config::STREAM_BUFFER_SIZE);
         // This one is unbounded because the protocol provides its own flow control for `Push` frames
@@ -146,6 +147,7 @@ impl Multiplexor {
             tx_frame_tx,
             flows: Arc::new(RwLock::new(HashMap::new())),
             dropped_ports_tx,
+            con_recv_stream_tx,
             default_rwnd_threshold: config::DEFAULT_RWND_THRESHOLD,
         };
 
@@ -155,14 +157,15 @@ impl Multiplexor {
             con_recv_stream_rx: Mutex::new(con_recv_stream_rx),
             bnd_request_rx: bnd_request_rx.map(Mutex::new),
         };
-        let taskdata = Task {
-            inner,
-            datagram_tx,
-            con_recv_stream_tx,
-            tx_frame_rx: Some(tx_frame_rx),
-            dropped_ports_rx: Some(dropped_ports_rx),
-            bnd_request_tx,
-            keepalive_interval,
+        let taskdata = TaskData {
+            task: Task {
+                inner,
+                datagram_tx,
+                bnd_request_tx,
+                keepalive_interval,
+            },
+            dropped_ports_rx,
+            tx_frame_rx,
         };
         (mux, taskdata)
     }
