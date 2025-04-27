@@ -331,7 +331,9 @@ impl Multiplexor {
 
 impl Drop for Multiplexor {
     fn drop(&mut self) {
-        self.inner.dropped_ports_tx.send(0).ok();
+        if self.inner.dropped_ports_tx.send(0).is_err() {
+            error!("Failed to inform task of dropped multiplexor");
+        }
     }
 }
 
