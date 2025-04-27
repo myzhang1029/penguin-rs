@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use crate::frame::{ConnectPayload, FinalizedFrame, Frame, OpCode, Payload};
+use crate::frame::{ConnectPayload, FinalizedFrame, Frame, Payload};
 use crate::inner::{FlowSlot, MultiplexorInner};
 use crate::timing::{OptionalDuration, OptionalInterval};
 use crate::{BindRequest, Datagram, Dupe, Error, Message, Result, WebSocketStream, WsError};
@@ -178,10 +178,8 @@ impl Task {
             tokio::select! {
                 biased;
                 r = poll_fn(|cx| Self::poll_reserve_space_recv_frame(cx, ws_sink, tx_frame_rx)) => {
-                    let should_flush = r?;
-                    if should_flush {
-                        ws_sink.flush().await.map_err(Box::new)?;
-                    }
+                    r?;
+                    ws_sink.flush().await.map_err(Box::new)?;
                 }
                 _ = interval.tick() => {
                     trace!("sending keepalive ping");
@@ -199,7 +197,7 @@ impl Task {
         cx: &mut Context<'_>,
         ws_sink: &mut SplitSink<S, Message>,
         tx_frame_rx: &mut mpsc::UnboundedReceiver<FinalizedFrame>,
-    ) -> Poll<Result<bool>> {
+    ) -> Poll<Result<()>> {
         ready!(ws_sink.poll_ready_unpin(cx)).map_err(Box::new)?;
         // `ready!`: if we cancel here, the reserved space is not used, but no other side effect
         let Some(frame) = ready!(tx_frame_rx.poll_recv(cx)) else {
@@ -211,31 +209,10 @@ impl Task {
             return Poll::Ready(Err(Error::ChannelClosed("frame_rx")));
         };
         // After this point, we may not return `Poll::Pending` because we (might) hold data
-        let should_flush = match frame.opcode() {
-            Err(_) => {
-                // Not a critical error, treating as flush
-                debug_assert!(
-                    frame.is_empty(),
-                    "nonempty frame with invalid opcode (this is a bug)"
-                );
-                true
-            }
-            Ok(OpCode::Push) => {
-                ws_sink
-                    .start_send_unpin(Message::Binary(frame.into()))
-                    .map_err(Box::new)?;
-                // Buffer `Push` frames until the user calls `poll_flush`
-                false
-            }
-            Ok(_) => {
-                ws_sink
-                    .start_send_unpin(Message::Binary(frame.into()))
-                    .map_err(Box::new)?;
-                // Flush everything else immediately
-                true
-            }
-        };
-        Poll::Ready(Ok(should_flush))
+        ws_sink
+            .start_send_unpin(Message::Binary(frame.into()))
+            .map_err(Box::new)?;
+        Poll::Ready(Ok(()))
     }
 
     /// Process the return value of `ws.next()`
@@ -275,9 +252,12 @@ impl Task {
             }
         }
         // Let the tasks do some work now
+        // Note that this is not a guarantee, so we may still have some streams that wake up
+        // later but only to see a `BrokenPipe`.
         tokio::task::yield_now().await;
-        // Further ensure no more frames can be sent. This should cause all `AsyncWrite::poll_write`
-        // to return `BrokenPipe`.
+        tokio::task::yield_now().await;
+        // Further ensure no more frames can be sent. This should cause all further attempts at
+        // `AsyncWrite::poll_write` to return `BrokenPipe`.
         // See `tokio::sync::mpsc`#clean-shutdown
         tx_frame_rx.close();
         // Now if `should_drain_frame_rx` is `true`, we will process the remaining frames in `frame_rx`.
