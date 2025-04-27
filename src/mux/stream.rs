@@ -221,14 +221,13 @@ impl AsyncWrite for MuxStream {
         // 1. `MuxStream` was dropped before `poll_shutdown` is completed and the mux task should
         //    have already sent a `Reset` frame.
         // 2. The entire mux task has been dropped, so we will only get `BrokenPipe` error.
-        // Atomic ordering: see `inner.rs` -> `close_port`.
-        // As a summary, duplicate `Finish`/`Reset` frames are harmless.
-        if !self.finish_sent.load(Ordering::Relaxed) {
+        // Atomic ordering: see `inner.rs` -> `close_port_local`.
+        if !self.finish_sent.load(Ordering::Acquire) {
             self.frame_tx
                 .send(Frame::new_finish(self.flow_id).finalize())
                 .map_err(|_| BrokenPipe)?;
-            // Atomic ordering: see `inner.rs` -> `shutdown` and `close_port`.
-            self.finish_sent.store(true, Ordering::Relaxed);
+            // Atomic ordering: see `inner.rs` -> `close_port_local`.
+            self.finish_sent.store(true, Ordering::Release);
         }
         Poll::Ready(Ok(()))
     }
