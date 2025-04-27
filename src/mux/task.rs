@@ -44,7 +44,13 @@ impl TaskData {
         if let Some(task_joinset) = task_joinset {
             task_joinset.spawn(task.start(ws, dropped_ports_rx, tx_frame_rx));
         } else {
+            let parent_task = tokio::task::try_id();
             tokio::spawn(async move {
+                debug!(
+                    "spawning mux task {} from {}",
+                    tokio::task::id(),
+                    parent_task.map_or_else(|| "0".to_string(), |id| format!("{id}"))
+                );
                 if let Err(e) = task.start(ws, dropped_ports_rx, tx_frame_rx).await {
                     error!("Multiplexor task exited with error: {e}");
                 }
@@ -75,7 +81,7 @@ impl Task {
     // It doesn't make sense to return a `Result` here because we can't propagate
     // the error to the user from a spawned task.
     // Instead, the user will notice when `rx` channels return `None`.
-    #[tracing::instrument(skip_all, level = "trace")]
+    #[tracing::instrument(skip_all, level = "debug", fields(task_id = %tokio::task::id()))]
     #[inline]
     async fn start<S: WebSocketStream<WsError>>(
         mut self,
@@ -244,6 +250,7 @@ impl Task {
             trace!("received message length = {}", msg.len());
             if self.process_message(msg, false).await? {
                 // Received a `Close` message
+                debug!("WebSocket gracefully closed by peer");
                 return Ok(());
             }
         }
@@ -277,11 +284,10 @@ impl Task {
         // If it is `false`, then we reached here because the peer is now not interested
         // in our connection anymore, and we should just mind our own business and serve the connections
         // on our end.
-        // We cannot loop await `recv` because, again, `inner` contains one last sender,
-        // so `recv` will never return `None`. We already closed `frame_rx` above, so looping over
-        // `try_recv` should give us all the remaining frames.
         if should_drain_frame_rx {
-            while let Ok(frame) = tx_frame_rx.try_recv() {
+            // Since we've called `close` on `tx_frame_rx`, this loop will
+            // terminate once existing frames are processed.
+            while let Some(frame) = tx_frame_rx.recv().await {
                 if frame.is_empty() {
                     continue;
                 }

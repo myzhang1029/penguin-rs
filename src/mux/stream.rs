@@ -91,6 +91,7 @@ impl AsyncRead for MuxStream {
         if self.buf.is_empty() {
             trace!("polling the stream");
             let Some(next) = ready!(self.frame_rx.poll_recv(cx)) else {
+                trace!("stream has been closed");
                 // See `tokio::sync::mpsc`#clean-shutdown
                 self.frame_rx.close();
                 // There should be no code path sending more frames after an EOF
