@@ -137,11 +137,11 @@ async fn connected_stream_passes_data_tiny_mtu_rwndminusone() {
     setup_logging();
     let (client, server) = get_pair(Some(8)).await;
 
-    let (mut client_mux, taskdata_client) = Multiplexor::new_no_task(OptionalDuration::NONE, false);
-    let (mut server_mux, taskdata_server) = Multiplexor::new_no_task(OptionalDuration::NONE, false);
+    let (client_mux, mut taskdata_client) = Multiplexor::new_no_task(OptionalDuration::NONE, false);
+    let (server_mux, mut taskdata_server) = Multiplexor::new_no_task(OptionalDuration::NONE, false);
 
-    client_mux.inner.default_rwnd_threshold = crate::config::RWND - 1;
-    server_mux.inner.default_rwnd_threshold = crate::config::RWND - 1;
+    taskdata_client.task.default_rwnd_threshold = crate::config::RWND - 1;
+    taskdata_server.task.default_rwnd_threshold = crate::config::RWND - 1;
 
     taskdata_client.spawn(client, None);
     taskdata_server.spawn(server, None);

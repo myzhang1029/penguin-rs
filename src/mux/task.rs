@@ -3,13 +3,20 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use crate::frame::{ConnectPayload, FinalizedFrame, Frame, Payload};
-use crate::inner::{FlowSlot, MultiplexorInner};
 use crate::timing::{OptionalDuration, OptionalInterval};
-use crate::{BindRequest, Datagram, Dupe, Error, Message, Result, WebSocketStream, WsError};
+use crate::{
+    BindRequest, Datagram, Dupe, Error, EstablishedStreamData, FlowSlot, Message, MuxStream,
+    Result, WebSocketStream, WsError, config,
+};
 use bytes::Bytes;
 use futures_util::future::poll_fn;
 use futures_util::stream::{SplitSink, SplitStream};
+use futures_util::task::AtomicWaker;
 use futures_util::{SinkExt, StreamExt};
+use parking_lot::RwLock;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::task::{Context, Poll, ready};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
@@ -64,7 +71,19 @@ impl TaskData {
 // Not `Clone` because cloning it makes no sense.
 #[derive(Debug)]
 pub struct Task {
-    pub inner: MultiplexorInner,
+    /// Open stream channels: `flow_id` -> `FlowSlot`
+    pub flows: Arc<RwLock<HashMap<u32, FlowSlot>>>,
+    /// Where tasks queue frames to be sent
+    pub tx_frame_tx: mpsc::UnboundedSender<FinalizedFrame>,
+    /// Channel for notifying the task of a dropped `MuxStream` (to send the flow ID)
+    /// Sending 0 means that the multiplexor is being dropped and the
+    /// task should exit.
+    /// The reason we need `their_port` is to ensure the connection is `Reset`ted
+    /// if the user did not call `poll_shutdown` on the `MuxStream`.
+    pub dropped_ports_tx: mpsc::UnboundedSender<u32>,
+    pub con_recv_stream_tx: mpsc::Sender<MuxStream>,
+    /// Default threshold for `Acknowledge` replies. See [`MuxStream`] for more details.
+    pub default_rwnd_threshold: u32,
     pub datagram_tx: mpsc::Sender<Datagram>,
     pub bnd_request_tx: Option<mpsc::Sender<BindRequest<'static>>>,
     /// Interval between keepalive `Ping`s,
@@ -143,7 +162,7 @@ impl Task {
                 // already have in the `frame_rx` before closing.
                 return Ok(());
             }
-            self.inner.close_port(flow_id, false);
+            self.close_port(flow_id, false);
         }
         // None: only happens when the last sender (i.e. `dropped_ports_tx` in `MultiplexorInner`)
         // is dropped, which should not happen in normal circumstances because `MultiplexorInner::drop`
@@ -246,7 +265,7 @@ impl Task {
     ) -> Result<()> {
         debug!("closing all connections");
         // We first make sure the streams can no longer send
-        for (_, stream_data) in self.inner.flows.write().iter() {
+        for (_, stream_data) in self.flows.write().iter() {
             if let FlowSlot::Established(stream_data) = stream_data {
                 stream_data.disallow_write();
             }
@@ -293,13 +312,9 @@ impl Task {
             self.process_message(msg, true).await?;
         }
         // Finally, we send EOF to all established streams.
-        self.inner
-            .flows
-            .write()
-            .drain()
-            .for_each(|(flow_id, slot)| {
-                self.inner.close_port_local(slot, flow_id, true);
-            });
+        self.flows.write().drain().for_each(|(flow_id, slot)| {
+            self.close_port_local(slot, flow_id, true);
+        });
         Ok(())
     }
 
@@ -358,8 +373,7 @@ impl Task {
         } = frame;
         tracing::Span::current().record("flow_id", format_args!("{flow_id:08x}"));
         let send_rst = || {
-            self.inner
-                .tx_frame_tx
+            self.tx_frame_tx
                 .send(Frame::new_reset(flow_id).finalize())
                 .ok()
             // Error only happens if the `frame_tx` channel is closed, at which point
@@ -372,8 +386,7 @@ impl Task {
                 target_port,
             }) => {
                 // In this case, `target_host` is always owned already
-                self.inner
-                    .con_recv_new_stream(flow_id, target_host.into_owned(), target_port, peer_rwnd)
+                self.con_recv_new_stream(flow_id, target_host.into_owned(), target_port, peer_rwnd)
                     .await?;
             }
             Payload::Acknowledge(payload) => {
@@ -382,35 +395,34 @@ impl Task {
                 // 1. Peer acknowledged `Connect`
                 // 2. Peer acknowledged some `Push` frames
                 // 3. Something unexpected
-                let (should_new_stream, should_send_rst) =
-                    match self.inner.flows.read().get(&flow_id) {
-                        Some(FlowSlot::Established(stream_data)) => {
-                            debug!("peer processed {payload} frames");
-                            // We have an established stream, so process the `Acknowledge`
-                            stream_data.acknowledge(payload);
-                            (false, false)
-                        }
-                        Some(FlowSlot::Requested(_)) => {
-                            debug!("new stream with peer rwnd {payload}");
-                            (true, false)
-                        }
-                        Some(FlowSlot::BindRequested(_)) => {
-                            warn!("Peer replied `Acknowledge` to a `Bind` request");
-                            (false, true)
-                        }
-                        None => {
-                            debug!("stream does not exist, sending `Reset`");
-                            (false, true)
-                        }
-                    };
+                let (should_new_stream, should_send_rst) = match self.flows.read().get(&flow_id) {
+                    Some(FlowSlot::Established(stream_data)) => {
+                        debug!("peer processed {payload} frames");
+                        // We have an established stream, so process the `Acknowledge`
+                        stream_data.acknowledge(payload);
+                        (false, false)
+                    }
+                    Some(FlowSlot::Requested(_)) => {
+                        debug!("new stream with peer rwnd {payload}");
+                        (true, false)
+                    }
+                    Some(FlowSlot::BindRequested(_)) => {
+                        warn!("Peer replied `Acknowledge` to a `Bind` request");
+                        (false, true)
+                    }
+                    None => {
+                        debug!("stream does not exist, sending `Reset`");
+                        (false, true)
+                    }
+                };
                 if should_new_stream {
-                    self.inner.ack_recv_new_stream(flow_id, payload)?;
+                    self.ack_recv_new_stream(flow_id, payload)?;
                 } else if should_send_rst {
                     send_rst();
                 }
             }
             Payload::Finish => {
-                let mut flows = self.inner.flows.write();
+                let mut flows = self.flows.write();
                 let Some(flow) = flows.get_mut(&flow_id) else {
                     warn!("Bogus `Finish` frame");
                     send_rst();
@@ -444,12 +456,11 @@ impl Task {
             Payload::Reset => {
                 debug!("received `Reset`");
                 // `true` because we don't want to reply `Reset` with `Reset`.
-                self.inner.close_port(flow_id, true);
+                self.close_port(flow_id, true);
             }
             Payload::Push(data) => {
                 // In this case, `data` is always owned already
                 let result = self
-                    .inner
                     .flows
                     .read()
                     .get(&flow_id)
@@ -461,7 +472,7 @@ impl Task {
                         // Peer does not respect the `rwnd` limit, this should not happen in normal circumstances.
                         // let's send `Reset`.
                         warn!("Peer does not respect `rwnd` limit, dropping stream");
-                        self.inner.close_port(flow_id, false);
+                        self.close_port(flow_id, false);
                     }
                     Some(Err(TrySendError::Closed(()))) => {
                         // Else, the corresponding `MuxStream` is dropped
@@ -489,7 +500,7 @@ impl Task {
                     let request = BindRequest {
                         flow_id,
                         payload,
-                        tx_frame_tx: self.inner.tx_frame_tx.dupe(),
+                        tx_frame_tx: self.tx_frame_tx.dupe(),
                     };
                     if let Err(e) = sender.send(request).await {
                         warn!("Failed to send `Bind` request: {e}");
@@ -497,8 +508,7 @@ impl Task {
                     // Let the user decide what to reply using `BindRequest::reply`
                 } else {
                     info!("Received `Bind` request but configured to not accept such requests");
-                    self.inner
-                        .tx_frame_tx
+                    self.tx_frame_tx
                         .send(Frame::new_reset(flow_id).finalize())
                         .ok();
                 }
@@ -528,5 +538,164 @@ impl Task {
             }
         }
         Ok(())
+    }
+
+    /// Shared code for new stream stuff
+    #[inline]
+    fn new_stream_shared(
+        &self,
+        flow_id: u32,
+        peer_rwnd: u32,
+        dest_host: Bytes,
+        dest_port: u16,
+    ) -> (MuxStream, EstablishedStreamData) {
+        // `tx` is our end, `rx` is the user's end
+        let (frame_tx, frame_rx) = mpsc::channel(config::RWND_USIZE);
+        let finish_sent = Arc::new(AtomicBool::new(false));
+        let psh_send_remaining = Arc::new(AtomicU32::new(peer_rwnd));
+        let writer_waker = Arc::new(AtomicWaker::new());
+        let stream_data = EstablishedStreamData {
+            sender: Some(frame_tx),
+            finish_sent: finish_sent.dupe(),
+            psh_send_remaining: psh_send_remaining.dupe(),
+            writer_waker: writer_waker.dupe(),
+        };
+        // Save the TX end of the stream so we can write to it when subsequent frames arrive
+        let stream = MuxStream {
+            frame_rx,
+            flow_id,
+            dest_host,
+            dest_port,
+            finish_sent,
+            psh_send_remaining,
+            psh_recvd_since: 0,
+            writer_waker,
+            buf: Bytes::new(),
+            frame_tx: self.tx_frame_tx.dupe(),
+            dropped_ports_tx: self.dropped_ports_tx.dupe(),
+            rwnd_threshold: self.default_rwnd_threshold.min(peer_rwnd),
+        };
+        (stream, stream_data)
+    }
+
+    /// Create a new stream because this end received a [`Connect`](crate::frame::OpCode::Connect) frame.
+    /// Create a new `MuxStream`, add it to the map, and send an `Acknowledge` frame.
+    /// If `our_port` is 0, a new port will be allocated.
+    #[tracing::instrument(skip_all, level = "debug")]
+    #[inline]
+    async fn con_recv_new_stream(
+        &self,
+        flow_id: u32,
+        dest_host: Bytes,
+        dest_port: u16,
+        peer_rwnd: u32,
+    ) -> Result<()> {
+        // Scope the following block to reduce locked time
+        let stream = {
+            // Save the TX end of the stream so we can write to it when subsequent frames arrive
+            let mut streams = self.flows.write();
+            if streams.contains_key(&flow_id) {
+                debug!("resetting `Connect` with in-use flow_id");
+                self.tx_frame_tx
+                    .send(Frame::new_reset(flow_id).finalize())
+                    .ok();
+                // On the other side, `process_frame` will pass the `Reset` frame to
+                // `close_port`, which takes the port out of the map and inform `Multiplexor::new_stream_channel`
+                // to retry.
+                // The existing connection at the same `flow_id` is not affected. For conforminh implementations,
+                // This only happens when both ends are trying to establish a new connection at the same time
+                // and also happen to have chosen the same `flow_id`.
+                // In this case, the peer would also receive our `Connect` frame and, depending on the timing,
+                // `Reset` us too or `Acknowledge` us.
+                return Ok(());
+            }
+            let (stream, stream_data) =
+                self.new_stream_shared(flow_id, peer_rwnd, dest_host, dest_port);
+            // No write should occur between our check and insert
+            streams.insert(flow_id, FlowSlot::Established(stream_data));
+            stream
+        };
+        // Send a `Acknowledge`
+        // Make sure `Acknowledge` is sent before the stream is sent to the user
+        // so that the stream is `Established` when the user uses it.
+        trace!("sending `Acknowledge`");
+        self.tx_frame_tx
+            .send(Frame::new_acknowledge(flow_id, config::RWND).finalize())
+            .map_err(|_| Error::Closed)?;
+        // At the con_recv side, we use `con_recv_stream_tx` to send the new stream to the
+        // user.
+        trace!("sending stream to user");
+        // This goes to the user
+        self.con_recv_stream_tx
+            .send(stream)
+            .await
+            .map_err(|_| Error::SendStreamToClient)?;
+        Ok(())
+    }
+
+    /// Create a new `MuxStream` by finalizing a Con/Ack handshsake and
+    /// change the state of the port to `Established`.
+    #[tracing::instrument(skip_all, level = "debug")]
+    #[inline]
+    fn ack_recv_new_stream(&self, flow_id: u32, peer_rwnd: u32) -> Result<()> {
+        // Change the state of the port to `Established` and send the stream to the user
+        // At the client side, we use the associated oneshot channel to send the new stream
+        trace!("sending stream to user");
+        let (stream, stream_data) = self.new_stream_shared(flow_id, peer_rwnd, Bytes::new(), 0);
+        self.flows
+            .write()
+            .get_mut(&flow_id)
+            .ok_or(Error::ConnAckGone)?
+            .establish(stream_data)
+            .ok_or(Error::ConnAckGone)?
+            .send(Some(stream))
+            .map_err(|_| Error::SendStreamToClient)?;
+        Ok(())
+    }
+
+    /// Close a port. That is, remove it from the map and call `close_port_local`.
+    fn close_port(&self, flow_id: u32, inhibit_rst: bool) {
+        // Free the port for reuse
+        let value = self.flows.write().remove(&flow_id);
+        if let Some(removed) = value {
+            self.close_port_local(removed, flow_id, inhibit_rst);
+        } else {
+            debug!("connection not found, nothing to close");
+        }
+    }
+
+    /// EOF the local end, and wake up the writer.
+    #[tracing::instrument(skip_all)]
+    #[inline]
+    fn close_port_local(&self, removed: FlowSlot, flow_id: u32, inhibit_rst: bool) {
+        match removed {
+            FlowSlot::Established(mut stream_data) => {
+                let finish_sent = stream_data.disallow_write();
+                if !finish_sent && !inhibit_rst {
+                    // If the user did not call `poll_shutdown`, we send a `Reset` frame
+                    self.tx_frame_tx
+                        .send(Frame::new_reset(flow_id).finalize())
+                        .ok();
+                    // Ignore the error because the other end will EOF everything anyway
+                }
+                // No need to send an empty `Bytes`. Dropping `sender`
+                // already makes sure the user receives `EOF`.
+                if let Some(sender) = stream_data.disallow_read() {
+                    debug_assert!(sender.strong_count() == 1);
+                }
+                // Ignore the error if the user already dropped the stream
+                debug!("freed connection");
+            }
+            FlowSlot::Requested(sender) => {
+                sender.send(None).ok();
+                // Ignore the error if the user already cancelled the requesting future
+                debug!("peer cancelled `Connect`");
+            }
+            FlowSlot::BindRequested(sender) => {
+                sender.send(false).ok();
+                // Ignore the error if the user already cancelled the requesting future
+                debug!("peer rejected `Bind`");
+            }
+        }
     }
 }

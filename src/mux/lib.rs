@@ -10,7 +10,6 @@
 mod config;
 mod dupe;
 pub mod frame;
-mod inner;
 mod proto_version;
 mod stream;
 mod task;
@@ -19,18 +18,19 @@ mod tests;
 pub mod timing;
 
 use crate::frame::{BindPayload, BindType, FinalizedFrame, Frame};
-use crate::inner::MultiplexorInner;
-use crate::task::Task;
+use crate::task::{Task, TaskData};
 use crate::timing::OptionalDuration;
 use bytes::Bytes;
+use futures_util::task::AtomicWaker;
 use futures_util::{Sink, Stream, future::poll_fn};
 use parking_lot::{Mutex, RwLock};
 use rand::distr::uniform::SampleUniform;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
-use task::TaskData;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use thiserror::Error;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
 use tokio_tungstenite::tungstenite::{Error as WsError, Message};
@@ -90,7 +90,13 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// A multiplexor over a `WebSocket` connection.
 #[derive(Debug)]
 pub struct Multiplexor {
-    inner: MultiplexorInner,
+    /// Open stream channels: `flow_id` -> `FlowSlot`
+    flows: Arc<RwLock<HashMap<u32, FlowSlot>>>,
+    /// Where tasks queue frames to be sent
+    tx_frame_tx: mpsc::UnboundedSender<FinalizedFrame>,
+    /// We only use this to inform the task that the multiplexor is closed
+    /// and it should stop processing.
+    dropped_ports_tx: mpsc::UnboundedSender<u32>,
     /// Channel of received datagram frames for processing.
     datagram_rx: Mutex<mpsc::Receiver<Datagram>>,
     /// Channel for a `Multiplexor` to receive newly
@@ -142,24 +148,23 @@ impl Multiplexor {
         } else {
             (None, None)
         };
-
-        let inner = MultiplexorInner {
-            tx_frame_tx,
-            flows: Arc::new(RwLock::new(HashMap::new())),
-            dropped_ports_tx,
-            con_recv_stream_tx,
-            default_rwnd_threshold: config::DEFAULT_RWND_THRESHOLD,
-        };
+        let flows = Arc::new(RwLock::new(HashMap::new()));
 
         let mux = Self {
-            inner: inner.dupe(),
+            tx_frame_tx: tx_frame_tx.dupe(),
+            flows: flows.dupe(),
+            dropped_ports_tx: dropped_ports_tx.dupe(),
             datagram_rx: Mutex::new(datagram_rx),
             con_recv_stream_rx: Mutex::new(con_recv_stream_rx),
             bnd_request_rx: bnd_request_rx.map(Mutex::new),
         };
         let taskdata = TaskData {
             task: Task {
-                inner,
+                tx_frame_tx,
+                flows,
+                dropped_ports_tx,
+                con_recv_stream_tx,
+                default_rwnd_threshold: config::DEFAULT_RWND_THRESHOLD,
                 datagram_tx,
                 bnd_request_tx,
                 keepalive_interval,
@@ -192,16 +197,15 @@ impl Multiplexor {
             retries_left -= 1;
             let (stream_tx, stream_rx) = oneshot::channel();
             let flow_id = {
-                let mut streams = self.inner.flows.write();
+                let mut streams = self.flows.write();
                 // Allocate a new port
                 let flow_id = u32::next_available_key(&*streams);
                 trace!("flow_id = {flow_id:08x}");
-                streams.insert(flow_id, inner::FlowSlot::Requested(stream_tx));
+                streams.insert(flow_id, FlowSlot::Requested(stream_tx));
                 flow_id
             };
             trace!("sending `Connect`");
-            self.inner
-                .tx_frame_tx
+            self.tx_frame_tx
                 .send(Frame::new_connect(host, port, flow_id, config::RWND).finalize())
                 .map_err(|_| Error::Closed)?;
             trace!("sending stream to user");
@@ -214,7 +218,7 @@ impl Multiplexor {
                 return Ok(s);
             }
             // For testing purposes. Make sure the previous flow ID is gone
-            debug_assert!(!self.inner.flows.read().contains_key(&flow_id));
+            debug_assert!(!self.flows.read().contains_key(&flow_id));
         }
         Err(Error::FlowIdRejected)
     }
@@ -273,8 +277,7 @@ impl Multiplexor {
             datagram.target_port,
             datagram.data,
         );
-        self.inner
-            .tx_frame_tx
+        self.tx_frame_tx
             .send(frame.finalize())
             .map_err(|_| Error::Closed)?;
         Ok(())
@@ -296,16 +299,15 @@ impl Multiplexor {
     pub async fn request_bind(&self, host: &[u8], port: u16, bind_type: BindType) -> Result<bool> {
         let (result_tx, result_rx) = oneshot::channel();
         let flow_id = {
-            let mut streams = self.inner.flows.write();
+            let mut streams = self.flows.write();
             // Allocate a new port
             let flow_id = u32::next_available_key(&*streams);
             trace!("flow_id = {flow_id:08x}");
-            streams.insert(flow_id, inner::FlowSlot::BindRequested(result_tx));
+            streams.insert(flow_id, FlowSlot::BindRequested(result_tx));
             flow_id
         };
         let bnd_frame = Frame::new_bind(flow_id, bind_type, host, port).finalize();
-        self.inner
-            .tx_frame_tx
+        self.tx_frame_tx
             .send(bnd_frame)
             .map_err(|_| Error::Closed)?;
         let result = result_rx.await.map_err(|_| Error::Closed)?;
@@ -331,8 +333,117 @@ impl Multiplexor {
 
 impl Drop for Multiplexor {
     fn drop(&mut self) {
-        if self.inner.dropped_ports_tx.send(0).is_err() {
+        if self.dropped_ports_tx.send(0).is_err() {
             error!("Failed to inform task of dropped multiplexor");
+        }
+    }
+}
+
+#[derive(Debug)]
+struct EstablishedStreamData {
+    /// Channel for sending data to `MuxStream`'s `AsyncRead`
+    /// If `None`, we have received `Finish` from the peer but we can possibly still send data.
+    sender: Option<mpsc::Sender<Bytes>>,
+    /// Whether writes should succeed.
+    /// There are two cases for `true`:
+    /// 1. `Finish` has been sent.
+    /// 2. The stream has been removed from `inner.streams`.
+    // In general, our `Atomic*` types don't need more than `Relaxed` ordering
+    // because we are not protecting memory accesses, but rather counting the
+    // frames we have sent and received.
+    finish_sent: Arc<AtomicBool>,
+    /// Number of `Push` frames we are allowed to send before waiting for a `Acknowledge` frame.
+    psh_send_remaining: Arc<AtomicU32>,
+    /// Waker to wake up the task that sends frames because their `psh_send_remaining`
+    /// has increased.
+    writer_waker: Arc<AtomicWaker>,
+}
+
+impl EstablishedStreamData {
+    /// Process a `Finish` frame from the peer and thus disallowing further `AsyncRead` operations
+    /// Returns the sender if it was not already taken.
+    #[inline]
+    const fn disallow_read(&mut self) -> Option<mpsc::Sender<Bytes>> {
+        self.sender.take()
+    }
+
+    /// Process a `Acknowledge` frame from the peer
+    #[inline]
+    fn acknowledge(&self, acknowledged: u32) {
+        // Atomic ordering: as long as the value is incremented atomically,
+        // whether a writer sees the new value or the old value is not
+        // important. If it sees the old value and decides to return
+        // `Poll::Pending`, it will be woken up by the `Waker` anyway.
+        self.psh_send_remaining
+            .fetch_add(acknowledged, Ordering::Relaxed);
+        // Wake up the writer if it is waiting for `Acknowledge`
+        self.writer_waker.wake();
+    }
+
+    /// Disallow any `AsyncWrite` operations.
+    /// Note that this should not be used from inside the `MuxStream` itself
+    #[inline]
+    fn disallow_write(&self) -> bool {
+        // Atomic ordering:
+        // Load part:
+        // If the user calls `poll_shutdown`, but we see `true` here,
+        // the other end will receive a bogus `Reset` frame, which is fine.
+        // Store part:
+        // We need to make sure the writer can see the new value
+        // before we call `wake()`.
+        let old = self.finish_sent.swap(true, Ordering::AcqRel);
+        // If there is a writer waiting for `Acknowledge`, wake it up because it will never receive one.
+        // Waking it here and the user should receive a `BrokenPipe` error.
+        self.writer_waker.wake();
+        old
+    }
+}
+
+#[derive(Debug)]
+enum FlowSlot {
+    /// A `Connect` frame was sent and waiting for the peer to `Acknowledge`.
+    Requested(oneshot::Sender<Option<MuxStream>>),
+    /// The stream is established.
+    Established(EstablishedStreamData),
+    /// A `Bind` request was sent and waiting for the peer to `Acknowledge` or `Reset`.
+    BindRequested(oneshot::Sender<bool>),
+}
+
+impl FlowSlot {
+    /// Take the sender and set the slot to `Established`.
+    /// Returns `None` if the slot is already established.
+    #[inline]
+    fn establish(
+        &mut self,
+        data: EstablishedStreamData,
+    ) -> Option<oneshot::Sender<Option<MuxStream>>> {
+        // Make sure it is not replaced in the error case
+        if matches!(self, Self::Established(_) | Self::BindRequested(_)) {
+            error!("establishing an established or invalid slot");
+            return None;
+        }
+        let sender = match std::mem::replace(self, Self::Established(data)) {
+            Self::Requested(sender) => sender,
+            Self::Established(_) | Self::BindRequested(_) => unreachable!(),
+        };
+        Some(sender)
+    }
+
+    /// If the slot is established, send data. Otherwise, return `None`.
+    #[inline]
+    fn dispatch(&self, data: Bytes) -> Option<std::result::Result<(), TrySendError<()>>> {
+        if let Self::Established(stream_data) = self {
+            let r = stream_data
+                .sender
+                .as_ref()
+                .map(|sender| sender.try_send(data))?
+                .map_err(|e| match e {
+                    TrySendError::Full(_) => TrySendError::Full(()),
+                    TrySendError::Closed(_) => TrySendError::Closed(()),
+                });
+            Some(r)
+        } else {
+            None
         }
     }
 }
