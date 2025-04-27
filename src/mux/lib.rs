@@ -13,12 +13,14 @@ pub mod frame;
 mod inner;
 mod proto_version;
 mod stream;
+mod task;
 #[cfg(test)]
 mod tests;
 pub mod timing;
 
 use crate::frame::{BindPayload, BindType, FinalizedFrame, Frame};
 use crate::inner::MultiplexorInner;
+use crate::task::Task;
 use crate::timing::OptionalDuration;
 use bytes::Bytes;
 use futures_util::{Sink, Stream, future::poll_fn};
@@ -117,13 +119,13 @@ impl Multiplexor {
         task_joinset: Option<&mut JoinSet<Result<()>>>,
     ) -> Self {
         let (mux, taskdata) = Self::new_no_task(keepalive_interval, accept_bnd);
-        mux.spawn_task(ws, taskdata, task_joinset);
+        taskdata.spawn(ws, task_joinset);
         mux
     }
 
     /// Create a new `Multiplexor` without spawning the task.
     #[inline]
-    fn new_no_task(keepalive_interval: OptionalDuration, accept_bnd: bool) -> (Self, TaskData) {
+    fn new_no_task(keepalive_interval: OptionalDuration, accept_bnd: bool) -> (Self, Task) {
         let (datagram_tx, datagram_rx) = mpsc::channel(config::DATAGRAM_BUFFER_SIZE);
         let (con_recv_stream_tx, con_recv_stream_rx) = mpsc::channel(config::STREAM_BUFFER_SIZE);
         // This one is unbounded because the protocol provides its own flow control for `Push` frames
@@ -142,48 +144,27 @@ impl Multiplexor {
 
         let inner = MultiplexorInner {
             tx_frame_tx,
-            keepalive_interval,
             flows: Arc::new(RwLock::new(HashMap::new())),
             dropped_ports_tx,
             default_rwnd_threshold: config::DEFAULT_RWND_THRESHOLD,
         };
 
         let mux = Self {
-            inner,
+            inner: inner.dupe(),
             datagram_rx: Mutex::new(datagram_rx),
             con_recv_stream_rx: Mutex::new(con_recv_stream_rx),
             bnd_request_rx: bnd_request_rx.map(Mutex::new),
         };
-        let taskdata = TaskData {
+        let taskdata = Task {
+            inner,
             datagram_tx,
             con_recv_stream_tx,
-            tx_frame_rx,
-            dropped_ports_rx,
+            tx_frame_rx: Some(tx_frame_rx),
+            dropped_ports_rx: Some(dropped_ports_rx),
             bnd_request_tx,
+            keepalive_interval,
         };
         (mux, taskdata)
-    }
-
-    /// Spawn the multiplexor task.
-    /// This function and [`new_no_task`] are implementation details and not exposed in the public API.
-    #[inline]
-    fn spawn_task<S: WebSocketStream<WsError>>(
-        &self,
-        ws: S,
-        taskdata: TaskData,
-        task_joinset: Option<&mut JoinSet<Result<()>>>,
-    ) {
-        let task_future = self.inner.dupe().task(ws, taskdata);
-        if let Some(task_joinset) = task_joinset {
-            task_joinset.spawn(task_future);
-        } else {
-            tokio::spawn(async move {
-                if let Err(e) = task_future.await {
-                    error!("Multiplexor task exited with error: {}", e);
-                }
-            });
-        }
-        trace!("Multiplexor task spawned");
     }
 
     /// Request a channel for `host` and `port`.
@@ -349,16 +330,6 @@ impl Drop for Multiplexor {
     fn drop(&mut self) {
         self.inner.dropped_ports_tx.send(0).ok();
     }
-}
-
-/// Internal type used for spawning the multiplexor task
-#[derive(Debug)]
-struct TaskData {
-    datagram_tx: mpsc::Sender<Datagram>,
-    con_recv_stream_tx: mpsc::Sender<MuxStream>,
-    tx_frame_rx: mpsc::UnboundedReceiver<FinalizedFrame>,
-    dropped_ports_rx: mpsc::UnboundedReceiver<u32>,
-    bnd_request_tx: Option<mpsc::Sender<BindRequest<'static>>>,
 }
 
 /// Datagram frame data
