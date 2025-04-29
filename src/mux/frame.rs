@@ -545,6 +545,9 @@ impl From<&Frame<'_>> for Vec<u8> {
                 encoded.extend(data.as_ref());
             }
         }
+        // Make sure our estimated size is correct
+        // so that no extra allocations are made
+        debug_assert_eq!(size, encoded.len());
         encoded
     }
 }

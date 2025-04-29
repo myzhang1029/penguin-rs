@@ -206,6 +206,43 @@ async fn datagram_channel_passes_data() {
 }
 
 #[tokio::test]
+async fn test_datagram_reject_long_host() {
+    setup_logging();
+    let (client, server) = get_pair(None).await;
+
+    let client_mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
+    let server_mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
+    // Make it 256 bytes long
+    let long_host = Bytes::from(b"example1".repeat(32));
+    let data = Bytes::from_static(b"hello");
+    client_mux
+        .send_datagram(Datagram {
+            flow_id: 1,
+            target_host: long_host.clone(),
+            target_port: 53,
+            data: data.clone(),
+        })
+        .await
+        .unwrap_err();
+    // Try one fewer byte
+    let long_host2 = long_host.slice(1..);
+    client_mux
+        .send_datagram(Datagram {
+            flow_id: 1,
+            target_host: long_host2.clone(),
+            target_port: 53,
+            data: data.clone(),
+        })
+        .await
+        .unwrap();
+    let result = server_mux.get_datagram().await.unwrap();
+    assert_eq!(result.target_host, long_host2);
+    assert_eq!(result.target_port, 53);
+    assert_eq!(result.flow_id, 1);
+    assert_eq!(result.data, data);
+}
+
+#[tokio::test]
 async fn connected_stream_passes_data_tiny_mtu_rwndminusone() {
     setup_logging();
     let (client, server) = get_pair(Some(8)).await;
