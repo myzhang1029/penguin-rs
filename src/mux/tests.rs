@@ -343,7 +343,77 @@ async fn connected_stream_passes_data_one_sided_lots() {
     server_task.await.unwrap();
 }
 
+#[tokio::test]
+async fn test_shutdown_has_effect() {
+    setup_logging();
+    let (client, server) = get_pair(None).await;
+
+    let client_mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
+    let server_mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
+
+    let server_task = tokio::spawn(async move {
+        let mut conn = server_mux.accept_stream_channel().await.unwrap();
+        conn.shutdown().await.unwrap();
+        conn.write_all(b"hello").await.unwrap_err();
+    });
+
+    let mut conn = client_mux.new_stream_channel(&[], 0).await.unwrap();
+    conn.shutdown().await.unwrap();
+    conn.write_all(b"hello").await.unwrap_err();
+    server_task.await.unwrap();
+}
+
 #[cfg(feature = "penguin-binary")]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_contention() {
+    const NUM_CONCURRENT: usize = 16;
+    const EACH_JOB_WRITES: usize = 16;
+    setup_logging();
+    let (client, server) = get_pair(None).await;
+
+    let client_mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
+    let server_mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
+
+    let payload: Bytes = (0..(1024 * 1024)).map(|_| rand::random::<u8>()).collect();
+    let len = payload.len();
+    let s_payload = payload.dupe();
+
+    let mut jobs = tokio::task::JoinSet::new();
+    jobs.spawn(async move {
+        let mut server_jobs = tokio::task::JoinSet::new();
+        for _ in 0..NUM_CONCURRENT {
+            let mut stream = server_mux.accept_stream_channel().await.unwrap();
+            let s_payload = s_payload.dupe();
+            server_jobs.spawn(async move {
+                let mut buf = vec![0; len];
+                for _ in 0..EACH_JOB_WRITES {
+                    stream.write_all(&s_payload).await.unwrap();
+                    stream.read_exact(&mut buf).await.unwrap();
+                    // No check for correctness as this should be guaranteed by tests
+                }
+                stream.shutdown().await.unwrap();
+            });
+        }
+        while let Some(res) = server_jobs.join_next().await {
+            res.unwrap();
+        }
+    });
+    for _ in 0..NUM_CONCURRENT {
+        let mut stream = client_mux.new_stream_channel(&[], 0).await.unwrap();
+        jobs.spawn(async move {
+            let mut buf = vec![0; len];
+            for _ in 0..EACH_JOB_WRITES {
+                stream.read_exact(&mut buf).await.unwrap();
+                stream.write_all(&buf).await.unwrap();
+            }
+            stream.shutdown().await.unwrap();
+        });
+    }
+    while let Some(res) = jobs.join_next().await {
+        res.unwrap();
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_with_tcpsocket() {
     setup_logging();
