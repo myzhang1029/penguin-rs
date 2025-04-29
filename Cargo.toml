@@ -18,6 +18,7 @@ required-features = ["penguin-binary"]
 [[bench]]
 name = "stream_throughput"
 harness = false
+required-features = ["tungstenite"]
 
 [lib]
 name = "penguin_mux"
