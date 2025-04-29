@@ -63,7 +63,7 @@ pub enum Error {
 
     /// WebSocket errors
     #[error("WebSocket Error: {0}")]
-    WebSocket(#[from] Box<WsError>),
+    WebSocket(Box<WsError>),
 
     // These are the ones that shouldn't normally happen
     /// A `Datagram` frame with a target host longer than 255 octets.
@@ -82,6 +82,13 @@ pub enum Error {
     /// An internal channel closed
     #[error("Internal channel `{0}` closed")]
     ChannelClosed(&'static str),
+}
+
+impl From<WsError> for Error {
+    #[inline]
+    fn from(e: WsError) -> Self {
+        Self::WebSocket(Box::new(e))
+    }
 }
 
 /// A variant of [`std::result::Result`] with [`enum@Error`] as the error type.
@@ -125,14 +132,18 @@ impl Multiplexor {
         accept_bnd: bool,
         task_joinset: Option<&mut JoinSet<Result<()>>>,
     ) -> Self {
-        let (mux, taskdata) = Self::new_no_task(keepalive_interval, accept_bnd);
-        taskdata.spawn(ws, task_joinset);
+        let (mux, taskdata) = Self::new_no_task(ws, keepalive_interval, accept_bnd);
+        taskdata.spawn(task_joinset);
         mux
     }
 
     /// Create a new `Multiplexor` without spawning the task.
     #[inline]
-    fn new_no_task(keepalive_interval: OptionalDuration, accept_bnd: bool) -> (Self, TaskData) {
+    fn new_no_task<S: WebSocketStream<WsError>>(
+        ws: S,
+        keepalive_interval: OptionalDuration,
+        accept_bnd: bool,
+    ) -> (Self, TaskData<S>) {
         let (datagram_tx, datagram_rx) = mpsc::channel(config::DATAGRAM_BUFFER_SIZE);
         let (con_recv_stream_tx, con_recv_stream_rx) = mpsc::channel(config::STREAM_BUFFER_SIZE);
         // This one is unbounded because the protocol provides its own flow control for `Push` frames
@@ -160,6 +171,7 @@ impl Multiplexor {
         };
         let taskdata = TaskData {
             task: Task {
+                ws: Mutex::new(ws),
                 tx_frame_tx,
                 flows,
                 dropped_ports_tx,
@@ -526,7 +538,7 @@ where
         + Send
         + Unpin
         + 'static,
-    Box<E>: Into<Error>,
+    E: Into<Error>,
 {
 }
 

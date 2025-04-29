@@ -10,10 +10,9 @@ use crate::{
 };
 use bytes::Bytes;
 use futures_util::future::poll_fn;
-use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::task::AtomicWaker;
 use futures_util::{SinkExt, StreamExt};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32};
@@ -26,23 +25,19 @@ use tracing::{debug, error, info, trace, warn};
 
 /// Internal type used for spawning the multiplexor task
 #[derive(Debug)]
-pub struct TaskData {
-    pub task: Task,
+pub struct TaskData<S: WebSocketStream<WsError>> {
+    pub task: Task<S>,
     // To be taken out when the task is spawned
     pub tx_frame_rx: mpsc::UnboundedReceiver<FinalizedFrame>,
     // To be taken out when the task is spawned
     pub dropped_ports_rx: mpsc::UnboundedReceiver<u32>,
 }
 
-impl TaskData {
+impl<S: WebSocketStream<WsError>> TaskData<S> {
     /// Spawn the multiplexor task.
     /// This function and [`new_no_task`] are implementation details and not exposed in the public API.
     #[inline]
-    pub fn spawn<S: WebSocketStream<WsError>>(
-        self,
-        ws: S,
-        task_joinset: Option<&mut JoinSet<Result<()>>>,
-    ) {
+    pub fn spawn(self, task_joinset: Option<&mut JoinSet<Result<()>>>) {
         let Self {
             task,
             tx_frame_rx,
@@ -54,7 +49,7 @@ impl TaskData {
         let future = async move {
             let id = tokio::task::id();
             debug!("spawning mux task {id} from {parent_id}",);
-            let result = task.start(ws, dropped_ports_rx, tx_frame_rx).await;
+            let result = task.start(dropped_ports_rx, tx_frame_rx).await;
             if let Err(e) = &result {
                 error!("Multiplexor task exited with error: {e}");
             }
@@ -72,7 +67,9 @@ impl TaskData {
 /// Data owned by the multiplexor task.
 // Not `Clone` because cloning it makes no sense.
 #[derive(Debug)]
-pub struct Task {
+pub struct Task<S: WebSocketStream<WsError>> {
+    /// Underlying WebSocket
+    pub ws: Mutex<S>,
     /// Open stream channels: `flow_id` -> `FlowSlot`
     pub flows: Arc<RwLock<HashMap<u32, FlowSlot>>>,
     /// Where tasks queue frames to be sent
@@ -92,7 +89,7 @@ pub struct Task {
     pub keepalive_interval: OptionalDuration,
 }
 
-impl Task {
+impl<S: WebSocketStream<WsError>> Task<S> {
     /// Processing task
     /// Does the following:
     /// - Receives messages from `WebSocket` and processes them
@@ -104,14 +101,11 @@ impl Task {
     // Instead, the user will notice when `rx` channels return `None`.
     #[tracing::instrument(skip_all, level = "debug", fields(task_id = %tokio::task::id()))]
     #[inline]
-    async fn start<S: WebSocketStream<WsError>>(
+    async fn start(
         mut self,
-        ws: S,
         mut dropped_ports_rx: mpsc::UnboundedReceiver<u32>,
         mut tx_frame_rx: mpsc::UnboundedReceiver<FinalizedFrame>,
     ) -> Result<()> {
-        // Split the `WebSocket` stream into a `Sink` and `Stream` so we can process them concurrently
-        let (mut ws_sink, mut ws_stream) = ws.split();
         let mut should_drain_frame_rx = false;
         let res = tokio::select! {
                 r = self.process_dropped_ports_task(&mut dropped_ports_rx) => {
@@ -119,28 +113,20 @@ impl Task {
                     should_drain_frame_rx = true;
                     r
                 }
-                r = self.process_frame_recv_task(&mut ws_sink, &mut tx_frame_rx) => {
+                r = self.process_frame_recv_task(&mut tx_frame_rx) => {
                     debug!("mux frame recv task finished: {r:?}");
                     // should_drain_frame_rx = false;
                     r
                 }
-                r = self.process_ws_next(
-                    &mut ws_stream,
-                ) => {
+                r = self.process_ws_next() => {
                     debug!("mux ws next task finished: {r:?}");
                     // should_drain_frame_rx = false;
                     r
 
             }
         };
-        self.wind_down(
-            should_drain_frame_rx,
-            ws_sink
-                .reunite(ws_stream)
-                .expect("Failed to reunite sink and stream (this is a bug)"),
-            &mut tx_frame_rx,
-        )
-        .await?;
+        self.wind_down(should_drain_frame_rx, &mut tx_frame_rx)
+            .await?;
         res
     }
 
@@ -186,9 +172,8 @@ impl Task {
     /// but there might be unflushed frames on `ws_sink` or lost `Message::Ping` messages.
     #[tracing::instrument(skip_all, level = "trace")]
     #[inline]
-    async fn process_frame_recv_task<S: WebSocketStream<WsError>>(
+    async fn process_frame_recv_task(
         &self,
-        ws_sink: &mut SplitSink<S, Message>,
         tx_frame_rx: &mut mpsc::UnboundedReceiver<FinalizedFrame>,
     ) -> Result<()> {
         let mut interval = OptionalInterval::from(self.keepalive_interval);
@@ -198,15 +183,16 @@ impl Task {
         loop {
             tokio::select! {
                 biased;
-                r = poll_fn(|cx| Self::poll_reserve_space_recv_frame(cx, ws_sink, tx_frame_rx)) => {
+                r = poll_fn(|cx| self.poll_reserve_space_recv_frame(cx, tx_frame_rx)) => {
                     r?;
-                    ws_sink.flush().await.map_err(Box::new)?;
                 }
                 _ = interval.tick() => {
                     trace!("sending keepalive ping");
-                    ws_sink.send(Message::Ping(Bytes::new())).await.map_err(Box::new)?;
+                    poll_fn(|cx| self.ws.lock().poll_ready_unpin(cx)).await?;
+                    self.ws.lock().start_send_unpin(Message::Ping(Bytes::new()))?;
                 }
             }
+            poll_fn(|cx| self.ws.lock().poll_flush_unpin(cx)).await?;
         }
         // This returns if we cannot sink or cannot receive from `frame_rx` anymore,
         // in either case, it does not make sense to check `frame_rx`.
@@ -214,12 +200,12 @@ impl Task {
 
     /// Poll `frame_rx` and process the frame received in a way that is cancel safe.
     /// Returns `true` if the user should follow the call with a `Sink::flush`.
-    fn poll_reserve_space_recv_frame<S: WebSocketStream<WsError>>(
+    fn poll_reserve_space_recv_frame(
+        &self,
         cx: &mut Context<'_>,
-        ws_sink: &mut SplitSink<S, Message>,
         tx_frame_rx: &mut mpsc::UnboundedReceiver<FinalizedFrame>,
     ) -> Poll<Result<()>> {
-        ready!(ws_sink.poll_ready_unpin(cx)).map_err(Box::new)?;
+        ready!(self.ws.lock().poll_ready_unpin(cx))?;
         // `ready!`: if we cancel here, the reserved space is not used, but no other side effect
         let Some(frame) = ready!(tx_frame_rx.poll_recv(cx)) else {
             // Only happens when `frame_rx` is closed
@@ -230,22 +216,19 @@ impl Task {
             return Poll::Ready(Err(Error::ChannelClosed("frame_rx")));
         };
         // After this point, we may not return `Poll::Pending` because we (might) hold data
-        ws_sink
-            .start_send_unpin(Message::Binary(frame.into()))
-            .map_err(Box::new)?;
+        self.ws
+            .lock()
+            .start_send_unpin(Message::Binary(frame.into()))?;
         Poll::Ready(Ok(()))
     }
 
     /// Process the return value of `ws.next()`
     /// Returns `Ok(())` when a `Close` message was received or the WebSocket was otherwise closed by the peer.
     #[tracing::instrument(skip_all, level = "trace")]
-    async fn process_ws_next<S: WebSocketStream<WsError>>(
-        &self,
-        ws_stream: &mut SplitStream<S>,
-    ) -> Result<()> {
-        while let Some(m) = ws_stream.next().await {
-            let msg = m.map_err(Box::new)?;
-            trace!("received message length = {}", msg.len());
+    async fn process_ws_next(&self) -> Result<()> {
+        while let Some(m) = poll_fn(|cx| self.ws.lock().poll_next_unpin(cx)).await {
+            let msg = m?;
+            trace!("received message len = {}", msg.len());
             if self.process_message(msg, false).await? {
                 // Received a `Close` message
                 debug!("WebSocket gracefully closed by peer");
@@ -259,10 +242,9 @@ impl Task {
 
     /// Wind down the multiplexor task.
     #[tracing::instrument(skip_all, level = "trace")]
-    async fn wind_down<S: WebSocketStream<WsError>>(
+    async fn wind_down(
         &mut self,
         should_drain_frame_rx: bool,
-        mut ws: S,
         tx_frame_rx: &mut mpsc::UnboundedReceiver<FinalizedFrame>,
     ) -> Result<()> {
         debug!("closing all connections");
@@ -293,7 +275,11 @@ impl Task {
                     continue;
                 }
                 debug!("sending remaining frame after mux drop");
-                if let Err(e) = ws.feed(Message::Binary(frame.into())).await {
+                let message = Message::Binary(frame.into());
+                let r = poll_fn(|cx| self.ws.lock().poll_ready_unpin(cx))
+                    .await
+                    .and_then(|()| self.ws.lock().start_send_unpin(message));
+                if let Err(e) = r {
                     warn!("Failed to send remaining frame after mux drop: {e}");
                     // Don't keep trying to send frames after an error
                     break;
@@ -303,10 +289,10 @@ impl Task {
             }
         }
         // This will flush the remaining frames already queued for sending as well
-        ws.close().await.ok();
+        poll_fn(|cx| self.ws.lock().poll_close_unpin(cx)).await.ok();
         // The above line only closes the `Sink`. Before we terminate connections,
         // we dispatch the remaining frames in the `Source` to our streams.
-        while let Some(Ok(msg)) = ws.next().await {
+        while let Some(Ok(msg)) = poll_fn(|cx| self.ws.lock().poll_next_unpin(cx)).await {
             debug!(
                 "processing remaining message after closure length = {}",
                 msg.len()
