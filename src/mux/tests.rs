@@ -55,17 +55,24 @@ mod mock {
     use tokio::sync::mpsc;
 
     pub struct MockWebSocketStream(
-        mpsc::UnboundedSender<Message>,
+        Option<mpsc::UnboundedSender<Message>>,
         mpsc::UnboundedReceiver<Message>,
     );
 
     impl WebSocket for MockWebSocketStream {
         fn poll_ready_unpin(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), crate::Error>> {
-            Poll::Ready(Ok(()))
+            if self.0.is_none() {
+                Poll::Ready(Err(crate::Error::Closed))
+            } else {
+                Poll::Ready(Ok(()))
+            }
         }
 
         fn start_send_unpin(&mut self, item: Message) -> Result<(), crate::Error> {
-            self.0.send(item.into()).map_err(|_| crate::Error::Closed)?;
+            let Some(sender) = &self.0 else {
+                return Err(crate::Error::Closed);
+            };
+            sender.send(item).map_err(|_| crate::Error::Closed)?;
             Ok(())
         }
 
@@ -74,6 +81,7 @@ mod mock {
         }
 
         fn poll_close_unpin(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), crate::Error>> {
+            self.0.take();
             Poll::Ready(Ok(()))
         }
 
@@ -88,8 +96,8 @@ mod mock {
     pub async fn get_pair(_link_mss: Option<usize>) -> (MockWebSocketStream, MockWebSocketStream) {
         let (tx1, rx1) = mpsc::unbounded_channel();
         let (tx2, rx2) = mpsc::unbounded_channel();
-        let client = MockWebSocketStream(tx1, rx2);
-        let server = MockWebSocketStream(tx2, rx1);
+        let client = MockWebSocketStream(Some(tx1), rx2);
+        let server = MockWebSocketStream(Some(tx2), rx1);
         (client, server)
     }
 }
