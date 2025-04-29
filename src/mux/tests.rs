@@ -6,6 +6,7 @@ use super::*;
 use crate::ws::Message;
 use futures_util::{SinkExt, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
+#[cfg(feature = "tungstenite")]
 use tokio_tungstenite::{WebSocketStream, tungstenite::protocol::Role};
 use tracing::{debug, info};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
@@ -18,14 +19,65 @@ pub fn setup_logging() {
         .ok();
 }
 
+#[cfg(feature = "tungstenite")]
 async fn get_pair(
     link_mss: Option<usize>,
 ) -> (WebSocketStream<DuplexStream>, WebSocketStream<DuplexStream>) {
+    use tokio_tungstenite::{WebSocketStream, tungstenite::protocol::Role};
     let (client, server) = tokio::io::duplex(link_mss.unwrap_or(2048));
     let client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
     let server = WebSocketStream::from_raw_socket(server, Role::Server, None).await;
     (client, server)
 }
+#[cfg(not(feature = "tungstenite"))]
+mod mock {
+    use tokio::sync::mpsc;
+
+    pub struct MockWebSocketStream(mpsc::UnboundedSender<Bytes>, mpsc::UnboundedReceiver<Bytes>);
+
+    impl WebSocket for MockWebSocketStream {
+        type Message = Bytes;
+        type Error = std::io::Error;
+        fn poll_ready_unpin(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), crate::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn start_send_unpin(&mut self, item: Message) -> Result<(), crate::Error> {
+            self.0
+                .send(item.into())
+                .map_err(|_| std::io::ErrorKind::BrokenPipe)?;
+            Ok(())
+        }
+
+        fn poll_flush_unpin(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), crate::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_close_unpin(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), crate::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_next_unpin(
+            &mut self,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Option<Result<Message, crate::Error>>> {
+            match self.1.recv().await {
+                Some(msg) => Poll::Ready(Some(Ok(msg.into()))),
+                None => Poll::Ready(None),
+            }
+        }
+    }
+
+    pub async fn get_pair(_link_mss: Option<usize>) -> (MockWebSocketStream, MockWebSocketStream) {
+        let (tx1, rx1) = mpsc::unbounded_channel();
+        let (tx2, rx2) = mpsc::unbounded_channel();
+        let client = MockWebSocketStream(tx1, rx2);
+        let server = MockWebSocketStream(tx2, rx1);
+        (client, server)
+    }
+}
+#[cfg(not(feature = "tungstenite"))]
+use mock::*;
 
 #[tokio::test]
 async fn connect_succeeds() {
@@ -411,6 +463,7 @@ async fn test_contention() {
     }
 }
 
+#[cfg(feature = "tungstenite")]
 #[tokio::test(flavor = "multi_thread")]
 async fn test_with_tcpsocket() {
     setup_logging();
@@ -418,6 +471,7 @@ async fn test_with_tcpsocket() {
         test_with_tcpsocket_inner().await;
     }
 }
+#[cfg(feature = "tungstenite")]
 async fn test_with_tcpsocket_inner() {
     const SINGLE_WRITE_LEN: usize = 4096;
     const ITERATIONS: usize = 256;
