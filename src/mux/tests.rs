@@ -3,13 +3,28 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::*;
-use crate::ws::Message;
-use futures_util::{SinkExt, StreamExt};
-use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
+use crate::ws::{Message, WebSocket};
+use std::future::poll_fn;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[cfg(feature = "tungstenite")]
 use tokio_tungstenite::{WebSocketStream, tungstenite::protocol::Role};
 use tracing::{debug, info};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+
+/// Used to provide some compatibility for tests written against the
+/// `futures_util::Sink` and `Stream` traits.
+trait CompatSinkStreamWebSocket: WebSocket {
+    async fn send(&mut self, item: Message) -> Result<()> {
+        poll_fn(|cx| self.poll_ready_unpin(cx)).await?;
+        self.start_send_unpin(item)?;
+        poll_fn(|cx| self.poll_flush_unpin(cx)).await
+    }
+
+    async fn next(&mut self) -> Option<Result<Message>> {
+        poll_fn(|cx| self.poll_next_unpin(cx)).await
+    }
+}
+impl<T: WebSocket> CompatSinkStreamWebSocket for T {}
 
 pub fn setup_logging() {
     tracing_subscriber::registry()
@@ -22,30 +37,35 @@ pub fn setup_logging() {
 #[cfg(feature = "tungstenite")]
 async fn get_pair(
     link_mss: Option<usize>,
-) -> (WebSocketStream<DuplexStream>, WebSocketStream<DuplexStream>) {
+) -> (
+    WebSocketStream<tokio::io::DuplexStream>,
+    WebSocketStream<tokio::io::DuplexStream>,
+) {
     use tokio_tungstenite::{WebSocketStream, tungstenite::protocol::Role};
     let (client, server) = tokio::io::duplex(link_mss.unwrap_or(2048));
     let client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
     let server = WebSocketStream::from_raw_socket(server, Role::Server, None).await;
     (client, server)
 }
+
 #[cfg(not(feature = "tungstenite"))]
 mod mock {
+    use crate::ws::{Message, WebSocket};
+    use std::task::{Context, Poll};
     use tokio::sync::mpsc;
 
-    pub struct MockWebSocketStream(mpsc::UnboundedSender<Bytes>, mpsc::UnboundedReceiver<Bytes>);
+    pub struct MockWebSocketStream(
+        mpsc::UnboundedSender<Message>,
+        mpsc::UnboundedReceiver<Message>,
+    );
 
     impl WebSocket for MockWebSocketStream {
-        type Message = Bytes;
-        type Error = std::io::Error;
         fn poll_ready_unpin(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), crate::Error>> {
             Poll::Ready(Ok(()))
         }
 
         fn start_send_unpin(&mut self, item: Message) -> Result<(), crate::Error> {
-            self.0
-                .send(item.into())
-                .map_err(|_| std::io::ErrorKind::BrokenPipe)?;
+            self.0.send(item.into()).map_err(|_| crate::Error::Closed)?;
             Ok(())
         }
 
@@ -59,12 +79,9 @@ mod mock {
 
         fn poll_next_unpin(
             &mut self,
-            _cx: &mut Context<'_>,
+            cx: &mut Context<'_>,
         ) -> Poll<Option<Result<Message, crate::Error>>> {
-            match self.1.recv().await {
-                Some(msg) => Poll::Ready(Some(Ok(msg.into()))),
-                None => Poll::Ready(None),
-            }
+            self.1.poll_recv(cx).map(|x| x.map(Ok))
         }
     }
 
@@ -608,7 +625,7 @@ async fn test_flow_id_contention_will_give_up() {
         // This side receives frames `Connect` and simply `Reset`s them
         while let Some(message) = server.next().await {
             let message = message.unwrap();
-            let Message::Binary(payload) = message.into() else {
+            let Message::Binary(payload) = message else {
                 continue;
             };
             let frame = crate::frame::Frame::try_from(payload).unwrap();
@@ -616,7 +633,7 @@ async fn test_flow_id_contention_will_give_up() {
                 debug!("Server received Connect frame, sending Reset");
                 let reset_frame = crate::frame::Frame::new_reset(frame.id);
                 server
-                    .send(Message::Binary((&reset_frame).into()).into())
+                    .send(Message::Binary((&reset_frame).into()))
                     .await
                     .unwrap();
             }
@@ -642,7 +659,7 @@ async fn test_flow_id_contention_can_succeed() {
         // This side receives frames `Connect` and `Reset`s the first one
         let mut rx_flow_ids = (0, 0);
         let message = server.next().await.unwrap().unwrap();
-        let Message::Binary(payload) = message.into() else {
+        let Message::Binary(payload) = message else {
             return;
         };
         let frame = crate::frame::Frame::try_from(payload).unwrap();
@@ -651,13 +668,13 @@ async fn test_flow_id_contention_can_succeed() {
             debug!("Server received the first Connect frame, sending Reset");
             let reset_frame = crate::frame::Frame::new_reset(frame.id);
             server
-                .send(Message::Binary((&reset_frame).into()).into())
+                .send(Message::Binary((&reset_frame).into()))
                 .await
                 .unwrap();
         }
 
         let message = server.next().await.unwrap().unwrap();
-        let Message::Binary(payload) = message.into() else {
+        let Message::Binary(payload) = message else {
             return;
         };
         let frame = crate::frame::Frame::try_from(payload).unwrap();
@@ -666,7 +683,7 @@ async fn test_flow_id_contention_can_succeed() {
             debug!("Server received the second Connect frame, sending Acknowledge");
             let reset_frame = crate::frame::Frame::new_acknowledge(frame.id, 10);
             server
-                .send(Message::Binary((&reset_frame).into()).into())
+                .send(Message::Binary((&reset_frame).into()))
                 .await
                 .unwrap();
         }

@@ -29,7 +29,7 @@ base64 = { version = "0.22", optional = true }
 bytes = "1"
 clap = { version = "4", features = ["cargo", "derive"], optional = true }
 console-subscriber = { version = "0.4", features = ["parking_lot"], optional = true }
-futures-util = { version = "0.3", features = ["alloc", "sink"], default-features = false }
+futures-util = { version = "0.3", default-features = false }
 http = "1"
 http-body-util = { version = "0.1", optional = true }
 hyper = { version = "1", features = ["server", "http1", "http2"], optional = true }
@@ -69,7 +69,7 @@ rustls-native-roots = ["dep:rustls-native-certs", "tokio-tungstenite/rustls-tls-
 __rustls = ["dep:rustls", "dep:rustls-pemfile", "dep:tokio-rustls"]
 nativetls = ["dep:tokio-native-tls", "tokio-tungstenite/native-tls", "reqwest/native-tls"]
 # Dependencies for testing
-dev-dependencies = ["dep:rcgen", "dep:tracing-subscriber", "tungstenite", "tokio/io-util", "tokio/net", "tokio/rt-multi-thread"]
+dev-dependencies = ["dep:rcgen", "dep:tracing-subscriber", "tokio/io-util", "tokio/net", "tokio/rt-multi-thread"]
 # Allow some tests that require real internet connection
 tests-real-internet4 = []
 tests-real-internet6 = []

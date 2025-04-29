@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use std::task::{Context, Poll};
-
 use bytes::Bytes;
+use std::task::{Context, Poll};
 
 /// Types of messages we need
 #[derive(Clone, PartialEq, Eq)]
@@ -35,10 +34,6 @@ impl std::fmt::Debug for Message {
 /// Specialized for our [`Message`] type similar to [`futures_util::Stream`] and [`futures_util::Sink`].
 /// See [`futures_util::Stream`] and [`futures_util::Sink`] for more details on the required methods.
 pub trait WebSocket: Send + 'static {
-    /// The internal type this `WebSocket` uses to represent `WebSocket` protocol messages
-    type Message: Into<Message> + From<Message> + Send + Unpin;
-    /// The internal type this `WebSocket` uses to represent errors
-    type Error: std::error::Error + Into<crate::Error> + Send;
     /// Attempt to prepare the `Sink` to receive a value.
     ///
     /// # Errors
@@ -125,9 +120,6 @@ mod tokio_tungstenite {
     where
         RW: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
     {
-        type Message = tungstenite::Message;
-        type Error = tungstenite::Error;
-
         #[inline]
         fn poll_ready_unpin(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), crate::Error>> {
             Pin::new(self).poll_ready(cx).map_err(Into::into)
@@ -135,7 +127,7 @@ mod tokio_tungstenite {
 
         #[inline]
         fn start_send_unpin(&mut self, item: Message) -> Result<(), crate::Error> {
-            let item: Self::Message = item.into();
+            let item: tungstenite::Message = item.into();
             Pin::new(self).start_send(item).map_err(Into::into)
         }
 

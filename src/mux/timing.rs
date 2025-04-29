@@ -130,7 +130,7 @@ impl OptionalInterval {
             interval.tick().await
         } else {
             // We shall never resolve
-            futures_util::future::pending::<tokio::time::Instant>().await
+            std::future::pending::<tokio::time::Instant>().await
         }
     }
 }

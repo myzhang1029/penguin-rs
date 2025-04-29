@@ -9,10 +9,10 @@ use crate::{
     BindRequest, Datagram, Dupe, Error, EstablishedStreamData, FlowSlot, MuxStream, Result, config,
 };
 use bytes::Bytes;
-use futures_util::future::poll_fn;
 use futures_util::task::AtomicWaker;
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
+use std::future::poll_fn;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::task::{Context, Poll, ready};
