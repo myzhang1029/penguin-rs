@@ -418,6 +418,7 @@ macro_rules! check_remaining {
         if remaining < $len {
             // Make sure we catch any mistakes during debug but prevent
             // incorrect peers from crashing the server in production
+            #[cfg(not(fuzzing))]
             debug_assert!(
                 false,
                 "`FrameTooShort` at {}:{}, have {}/{}",
