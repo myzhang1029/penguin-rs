@@ -270,9 +270,6 @@ impl<S: WebSocket> Task<S> {
             // Since we've called `close` on `tx_frame_rx`, this loop will
             // terminate once existing frames are processed.
             while let Some(frame) = tx_frame_rx.recv().await {
-                if frame.is_empty() {
-                    continue;
-                }
                 debug!("sending remaining frame after mux drop");
                 let message = Message::Binary(frame.into());
                 let r = poll_fn(|cx| self.ws.lock().poll_ready_unpin(cx))

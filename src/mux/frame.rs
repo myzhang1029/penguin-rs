@@ -564,12 +564,6 @@ impl From<&Frame<'_>> for Bytes {
 pub(crate) struct FinalizedFrame(Bytes);
 
 impl FinalizedFrame {
-    /// Check if the frame is empty
-    #[inline]
-    pub const fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
     /// Check the opcode of the frame
     #[inline]
     pub fn opcode(&self) -> Result<OpCode, Error> {
