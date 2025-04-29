@@ -31,6 +31,7 @@ impl std::fmt::Debug for Message {
 }
 
 /// A generic WebSocket stream
+///
 /// Specialized for our [`Message`] type similar to [`futures_util::Stream`] and [`futures_util::Sink`].
 /// See [`futures_util::Stream`] and [`futures_util::Sink`] for more details on the required methods.
 pub trait WebSocket: Send + 'static {
@@ -39,14 +40,30 @@ pub trait WebSocket: Send + 'static {
     /// The internal type this `WebSocket` uses to represent errors
     type Error: std::error::Error + Into<crate::Error> + Send;
     /// Attempt to prepare the `Sink` to receive a value.
+    ///
+    /// # Errors
+    /// Indicates the underlying sink is permanently be unable to receive items.
     fn poll_ready_unpin(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), crate::Error>>;
     /// Begin the process of sending a value to the sink.
+    ///
+    /// # Errors
+    /// Indicates the underlying sink is permanently be unable to receive items.
     fn start_send_unpin(&mut self, item: Message) -> Result<(), crate::Error>;
     /// Flush any remaining output from this sink.
+    ///
+    /// # Errors
+    /// Indicates the underlying sink is permanently be unable to receive items.
     fn poll_flush_unpin(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), crate::Error>>;
     /// Flush any remaining output and close this sink, if necessary.
+    ///
+    /// # Errors
+    /// Indicates the underlying sink is unable to be closed properly but is nonetheless
+    /// permanently be unable to receive items.
     fn poll_close_unpin(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), crate::Error>>;
     /// Attempt to pull out the next value of this stream.
+    ///
+    /// # Errors
+    /// Indicates the underlying stream is otherwise unable to produce items.
     fn poll_next_unpin(
         &mut self,
         cx: &mut Context<'_>,
@@ -111,46 +128,28 @@ mod tokio_tungstenite {
         type Message = tungstenite::Message;
         type Error = tungstenite::Error;
 
-        /// Attempt to prepare the `Sink` to receive a value.
-        ///
-        /// # Errors
-        /// It returns the error from the underlying sink.
         #[inline]
         fn poll_ready_unpin(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), crate::Error>> {
             Pin::new(self).poll_ready(cx).map_err(Into::into)
         }
 
-        /// Begin the process of sending a value to the sink.
-        /// Specialized for our [`Message`] type. See [`futures_util::Sink::start_send`] for more details.
-        ///
-        /// # Errors
-        /// It returns the error from the underlying sink.
         #[inline]
         fn start_send_unpin(&mut self, item: Message) -> Result<(), crate::Error> {
             let item: Self::Message = item.into();
             Pin::new(self).start_send(item).map_err(Into::into)
         }
 
-        /// Flush any remaining output from this sink.
-        /// Specialized for our [`Message`] type. See [`futures_util::Sink::poll_flush`] for more details.
         #[inline]
         fn poll_flush_unpin(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), crate::Error>> {
             Pin::new(self).poll_flush(cx).map_err(Into::into)
         }
 
-        /// Flush any remaining output and close this sink, if necessary.
-        /// Specialized for our [`Message`] type. See [`futures_util::Sink::poll_close`] for more details.
         #[inline]
         fn poll_close_unpin(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), crate::Error>> {
             let this = Pin::new(self);
             futures_util::Sink::poll_close(this, cx).map_err(Into::into)
         }
 
-        /// Attempt to pull out the next value of this stream.
-        /// Specialized for our [`Message`] type. See [`futures_util::Stream::poll_next`] for more details.
-        ///
-        /// # Errors
-        /// It returns the error from the underlying sink.
         #[inline]
         fn poll_next_unpin(
             &mut self,
