@@ -418,6 +418,7 @@ async fn test_socks5_connect_reliability_v6() {
 }
 
 #[tokio::test]
+#[cfg(feature = "tests-udp")]
 async fn test_socks5_udp_v4v4() {
     static SERVER_ARGS: LazyLock<arg::ServerArgs> =
         LazyLock::new(|| make_server_args("127.0.0.1", 14119));
@@ -509,6 +510,7 @@ async fn test_socks5_udp_v4v4() {
 }
 
 #[tokio::test]
+#[cfg(feature = "tests-udp")]
 async fn test_socks5_udp_v4v6() {
     // The target server is IPv6, but the client here is IPv4 here to test their interaction.
     static SERVER_ARGS: LazyLock<arg::ServerArgs> =
@@ -606,6 +608,7 @@ async fn test_socks5_udp_v4v6() {
 }
 
 #[tokio::test]
+#[cfg(feature = "tests-udp")]
 async fn test_socks5_udp_v6v6() {
     static SERVER_ARGS: LazyLock<arg::ServerArgs> =
         LazyLock::new(|| make_server_args("::1", 31370));
@@ -757,7 +760,7 @@ async fn test_socks4_works() {
     client_task.abort();
 }
 
-#[cfg(feature = "tests-real-internet4")]
+#[cfg(all(feature = "tests-real-internet4", feature = "tests-udp"))]
 #[tokio::test]
 async fn test_it_works_dns_v4() {
     static SERVER_ARGS: LazyLock<arg::ServerArgs> =
@@ -798,7 +801,7 @@ async fn test_it_works_dns_v4() {
     client_task.abort();
 }
 
-#[cfg(feature = "tests-real-internet6")]
+#[cfg(all(feature = "tests-real-internet6", feature = "tests-udp"))]
 #[tokio::test]
 async fn test_it_works_dns_v6() {
     static SERVER_ARGS: LazyLock<arg::ServerArgs> =

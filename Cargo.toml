@@ -61,7 +61,7 @@ tempfile = "3"
 rusty-penguin = { path = ".", default-features = false, features = ["dev-dependencies"] }
 
 [features]
-default = ["rustls-native-roots", "tests-real-internet4", "penguin-binary", "acme", "tungstenite"]
+default = ["rustls-native-roots", "tests-real-internet4", "tests-udp", "penguin-binary", "acme", "tungstenite"]
 # Note that it does not make sense to use more than one TLS implementations
 # at the same time, but there must be at least one if `penguin-binary` is
 # enabled.
@@ -74,6 +74,9 @@ dev-dependencies = ["dep:rcgen", "dep:tracing-subscriber", "tokio/io-util", "tok
 # Allow some tests that require real internet connection
 tests-real-internet4 = []
 tests-real-internet6 = []
+# Allow some tests that uses UDP sockets. They may be flaky depending on the
+# network environment.
+tests-udp = []
 # Test the ACME client with a local ACME server at https://localhost:14000/dir
 tests-acme-has-pebble = ["acme"]
 # Set the default localhost or unspecified address to IPv6
