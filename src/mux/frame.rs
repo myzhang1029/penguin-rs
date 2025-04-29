@@ -240,7 +240,6 @@ impl<'data> From<&Payload<'data>> for OpCode {
 ///
 /// See PROTOCOL.md for details.
 #[derive(Clone, PartialEq, Eq)]
-#[repr(C)]
 pub struct Frame<'data> {
     /// Flow ID
     pub id: u32,
