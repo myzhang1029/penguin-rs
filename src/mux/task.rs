@@ -4,14 +4,13 @@
 
 use crate::frame::{ConnectPayload, FinalizedFrame, Frame, Payload};
 use crate::timing::{OptionalDuration, OptionalInterval};
+use crate::ws::{Message, WebSocket};
 use crate::{
-    BindRequest, Datagram, Dupe, Error, EstablishedStreamData, FlowSlot, Message, MuxStream,
-    Result, WebSocketStream, WsError, config,
+    BindRequest, Datagram, Dupe, Error, EstablishedStreamData, FlowSlot, MuxStream, Result, config,
 };
 use bytes::Bytes;
 use futures_util::future::poll_fn;
 use futures_util::task::AtomicWaker;
-use futures_util::{SinkExt, StreamExt};
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -25,7 +24,7 @@ use tracing::{debug, error, info, trace, warn};
 
 /// Internal type used for spawning the multiplexor task
 #[derive(Debug)]
-pub struct TaskData<S: WebSocketStream<WsError>> {
+pub struct TaskData<S: WebSocket> {
     pub task: Task<S>,
     // To be taken out when the task is spawned
     pub tx_frame_rx: mpsc::UnboundedReceiver<FinalizedFrame>,
@@ -33,7 +32,7 @@ pub struct TaskData<S: WebSocketStream<WsError>> {
     pub dropped_ports_rx: mpsc::UnboundedReceiver<u32>,
 }
 
-impl<S: WebSocketStream<WsError>> TaskData<S> {
+impl<S: WebSocket> TaskData<S> {
     /// Spawn the multiplexor task.
     /// This function and [`new_no_task`] are implementation details and not exposed in the public API.
     #[inline]
@@ -67,7 +66,7 @@ impl<S: WebSocketStream<WsError>> TaskData<S> {
 /// Data owned by the multiplexor task.
 // Not `Clone` because cloning it makes no sense.
 #[derive(Debug)]
-pub struct Task<S: WebSocketStream<WsError>> {
+pub struct Task<S: WebSocket> {
     /// Underlying WebSocket
     pub ws: Mutex<S>,
     /// Open stream channels: `flow_id` -> `FlowSlot`
@@ -89,7 +88,7 @@ pub struct Task<S: WebSocketStream<WsError>> {
     pub keepalive_interval: OptionalDuration,
 }
 
-impl<S: WebSocketStream<WsError>> Task<S> {
+impl<S: WebSocket> Task<S> {
     /// Processing task
     /// Does the following:
     /// - Receives messages from `WebSocket` and processes them
@@ -189,7 +188,7 @@ impl<S: WebSocketStream<WsError>> Task<S> {
                 _ = interval.tick() => {
                     trace!("sending keepalive ping");
                     poll_fn(|cx| self.ws.lock().poll_ready_unpin(cx)).await?;
-                    self.ws.lock().start_send_unpin(Message::Ping(Bytes::new()))?;
+                    self.ws.lock().start_send_unpin(Message::Ping)?;
                 }
             }
             poll_fn(|cx| self.ws.lock().poll_flush_unpin(cx)).await?;
@@ -228,7 +227,7 @@ impl<S: WebSocketStream<WsError>> Task<S> {
     async fn process_ws_next(&self) -> Result<()> {
         while let Some(m) = poll_fn(|cx| self.ws.lock().poll_next_unpin(cx)).await {
             let msg = m?;
-            trace!("received message len = {}", msg.len());
+            trace!("received message {msg:?}");
             if self.process_message(msg, false).await? {
                 // Received a `Close` message
                 debug!("WebSocket gracefully closed by peer");
@@ -293,10 +292,7 @@ impl<S: WebSocketStream<WsError>> Task<S> {
         // The above line only closes the `Sink`. Before we terminate connections,
         // we dispatch the remaining frames in the `Source` to our streams.
         while let Some(Ok(msg)) = poll_fn(|cx| self.ws.lock().poll_next_unpin(cx)).await {
-            debug!(
-                "processing remaining message after closure length = {}",
-                msg.len()
-            );
+            debug!("processing remaining message after closure {msg:?}");
             self.process_message(msg, true).await?;
         }
         // Finally, we send EOF to all established streams.
@@ -318,21 +314,14 @@ impl<S: WebSocketStream<WsError>> Task<S> {
                 self.process_frame(frame, ignore_bind).await?;
                 Ok(false)
             }
-            Message::Ping(_) | Message::Pong(_) => {
+            Message::Ping | Message::Pong => {
                 // `tokio-tungstenite` handles `Ping` messages automatically
                 trace!("received ping/pong");
                 Ok(false)
             }
-            Message::Close(_) => {
+            Message::Close => {
                 debug!("received close");
                 Ok(true)
-            }
-            Message::Text(text) => {
-                debug!("received `Text` message: `{text}'");
-                Err(Error::TextMessage)
-            }
-            Message::Frame(_) => {
-                unreachable!("`Frame` message should not be received");
             }
         }
     }

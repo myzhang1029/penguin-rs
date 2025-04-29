@@ -146,7 +146,7 @@ impl AsyncRead for MuxStream {
 
 impl AsyncWrite for MuxStream {
     /// Write data to the stream. Each invocation of this method will send a
-    /// separate frame in a new [`Message`](crate::Message), so it may be
+    /// separate frame in a new [`Message`](crate::ws::Message), so it may be
     /// beneficial to wrap it in a [`BufWriter`](tokio::io::BufWriter) where
     /// appropriate.
     #[tracing::instrument(skip(cx, buf), level = "trace")]

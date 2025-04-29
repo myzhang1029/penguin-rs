@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::*;
+use crate::ws::Message;
 use futures_util::{SinkExt, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
-use tokio_tungstenite::tungstenite::protocol::Role;
+use tokio_tungstenite::{WebSocketStream, tungstenite::protocol::Role};
 use tracing::{debug, info};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -19,15 +20,10 @@ pub fn setup_logging() {
 
 async fn get_pair(
     link_mss: Option<usize>,
-) -> (
-    tokio_tungstenite::WebSocketStream<DuplexStream>,
-    tokio_tungstenite::WebSocketStream<DuplexStream>,
-) {
+) -> (WebSocketStream<DuplexStream>, WebSocketStream<DuplexStream>) {
     let (client, server) = tokio::io::duplex(link_mss.unwrap_or(2048));
-    let client =
-        tokio_tungstenite::WebSocketStream::from_raw_socket(client, Role::Client, None).await;
-    let server =
-        tokio_tungstenite::WebSocketStream::from_raw_socket(server, Role::Server, None).await;
+    let client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
+    let server = WebSocketStream::from_raw_socket(server, Role::Server, None).await;
     (client, server)
 }
 
@@ -365,7 +361,6 @@ async fn test_shutdown_has_effect() {
     server_task.await.unwrap();
 }
 
-#[cfg(feature = "penguin-binary")]
 #[tokio::test(flavor = "multi_thread")]
 async fn test_contention() {
     const NUM_CONCURRENT: usize = 16;
@@ -434,9 +429,7 @@ async fn test_with_tcpsocket_inner() {
     let mut s_payload = all_payload.dupe();
     tokio::spawn(async move {
         let tcpstream = s_socket.accept().await.unwrap().0;
-        let server =
-            tokio_tungstenite::WebSocketStream::from_raw_socket(tcpstream, Role::Server, None)
-                .await;
+        let server = WebSocketStream::from_raw_socket(tcpstream, Role::Server, None).await;
         let mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
         let mut stream = mux.accept_stream_channel().await.unwrap();
         for _ in 0..ITERATIONS {
@@ -446,8 +439,7 @@ async fn test_with_tcpsocket_inner() {
         stream.shutdown().await.unwrap();
     });
     let tcpstream = tokio::net::TcpStream::connect(s_addr).await.unwrap();
-    let client =
-        tokio_tungstenite::WebSocketStream::from_raw_socket(tcpstream, Role::Client, None).await;
+    let client = WebSocketStream::from_raw_socket(tcpstream, Role::Client, None).await;
     let mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
     let mut stream = mux.new_stream_channel(&[], 0).await.unwrap();
     stream.shutdown().await.unwrap();
@@ -562,7 +554,7 @@ async fn test_flow_id_contention_will_give_up() {
         // This side receives frames `Connect` and simply `Reset`s them
         while let Some(message) = server.next().await {
             let message = message.unwrap();
-            let Message::Binary(payload) = message else {
+            let Message::Binary(payload) = message.into() else {
                 continue;
             };
             let frame = crate::frame::Frame::try_from(payload).unwrap();
@@ -570,9 +562,7 @@ async fn test_flow_id_contention_will_give_up() {
                 debug!("Server received Connect frame, sending Reset");
                 let reset_frame = crate::frame::Frame::new_reset(frame.id);
                 server
-                    .send(tokio_tungstenite::tungstenite::Message::Binary(
-                        (&reset_frame).into(),
-                    ))
+                    .send(Message::Binary((&reset_frame).into()).into())
                     .await
                     .unwrap();
             }
@@ -598,7 +588,7 @@ async fn test_flow_id_contention_can_succeed() {
         // This side receives frames `Connect` and `Reset`s the first one
         let mut rx_flow_ids = (0, 0);
         let message = server.next().await.unwrap().unwrap();
-        let Message::Binary(payload) = message else {
+        let Message::Binary(payload) = message.into() else {
             return;
         };
         let frame = crate::frame::Frame::try_from(payload).unwrap();
@@ -607,15 +597,13 @@ async fn test_flow_id_contention_can_succeed() {
             debug!("Server received the first Connect frame, sending Reset");
             let reset_frame = crate::frame::Frame::new_reset(frame.id);
             server
-                .send(tokio_tungstenite::tungstenite::Message::Binary(
-                    (&reset_frame).into(),
-                ))
+                .send(Message::Binary((&reset_frame).into()).into())
                 .await
                 .unwrap();
         }
 
         let message = server.next().await.unwrap().unwrap();
-        let Message::Binary(payload) = message else {
+        let Message::Binary(payload) = message.into() else {
             return;
         };
         let frame = crate::frame::Frame::try_from(payload).unwrap();
@@ -624,9 +612,7 @@ async fn test_flow_id_contention_can_succeed() {
             debug!("Server received the second Connect frame, sending Acknowledge");
             let reset_frame = crate::frame::Frame::new_acknowledge(frame.id, 10);
             server
-                .send(tokio_tungstenite::tungstenite::Message::Binary(
-                    (&reset_frame).into(),
-                ))
+                .send(Message::Binary((&reset_frame).into()).into())
                 .await
                 .unwrap();
         }

@@ -16,13 +16,15 @@ mod task;
 #[cfg(test)]
 mod tests;
 pub mod timing;
+pub mod ws;
 
 use crate::frame::{BindPayload, BindType, FinalizedFrame, Frame};
 use crate::task::{Task, TaskData};
 use crate::timing::OptionalDuration;
+use crate::ws::WebSocket;
 use bytes::Bytes;
+use futures_util::future::poll_fn;
 use futures_util::task::AtomicWaker;
-use futures_util::{Sink, Stream, future::poll_fn};
 use parking_lot::{Mutex, RwLock};
 use rand::distr::uniform::SampleUniform;
 use std::collections::HashMap;
@@ -33,7 +35,6 @@ use thiserror::Error;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
-use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 use tracing::{error, trace, warn};
 
 pub use crate::dupe::Dupe;
@@ -63,7 +64,7 @@ pub enum Error {
 
     /// WebSocket errors
     #[error("WebSocket Error: {0}")]
-    WebSocket(Box<WsError>),
+    WebSocket(Box<dyn std::error::Error + Send>),
 
     // These are the ones that shouldn't normally happen
     /// A `Datagram` frame with a target host longer than 255 octets.
@@ -82,13 +83,6 @@ pub enum Error {
     /// An internal channel closed
     #[error("Internal channel `{0}` closed")]
     ChannelClosed(&'static str),
-}
-
-impl From<WsError> for Error {
-    #[inline]
-    fn from(e: WsError) -> Self {
-        Self::WebSocket(Box::new(e))
-    }
 }
 
 /// A variant of [`std::result::Result`] with [`enum@Error`] as the error type.
@@ -126,7 +120,7 @@ impl Multiplexor {
     ///   that the caller can notice if the task exits. If it is `None`, the
     ///   task will be spawned by `tokio::spawn` and errors will be logged.
     #[tracing::instrument(skip_all, level = "debug")]
-    pub fn new<S: WebSocketStream<WsError>>(
+    pub fn new<S: WebSocket>(
         ws: S,
         keepalive_interval: OptionalDuration,
         accept_bnd: bool,
@@ -139,7 +133,7 @@ impl Multiplexor {
 
     /// Create a new `Multiplexor` without spawning the task.
     #[inline]
-    fn new_no_task<S: WebSocketStream<WsError>>(
+    fn new_no_task<S: WebSocket>(
         ws: S,
         keepalive_interval: OptionalDuration,
         accept_bnd: bool,
@@ -528,23 +522,6 @@ impl Drop for BindRequest<'_> {
     fn drop(&mut self) {
         self.reply(false).ok();
     }
-}
-
-/// A generic WebSocket stream
-pub trait WebSocketStream<E>
-where
-    Self: Stream<Item = std::result::Result<Message, E>>
-        + Sink<Message, Error = E>
-        + Send
-        + Unpin
-        + 'static,
-    E: Into<Error>,
-{
-}
-
-impl<RW> WebSocketStream<WsError> for tokio_tungstenite::WebSocketStream<RW> where
-    RW: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static
-{
 }
 
 /// Randomly generate a new number

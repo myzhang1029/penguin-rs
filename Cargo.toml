@@ -29,7 +29,7 @@ base64 = { version = "0.22", optional = true }
 bytes = "1"
 clap = { version = "4", features = ["cargo", "derive"], optional = true }
 console-subscriber = { version = "0.4", features = ["parking_lot"], optional = true }
-futures-util = { version = "0.3", default-features = false }
+futures-util = { version = "0.3", features = ["alloc", "sink"], default-features = false }
 http = "1"
 http-body-util = { version = "0.1", optional = true }
 hyper = { version = "1", features = ["server", "http1", "http2"], optional = true }
@@ -48,7 +48,7 @@ thiserror = "2"
 tokio = { version = "^1, >=1.23.1", features = ["macros", "parking_lot", "rt", "sync", "time"] }
 tokio-native-tls = { version = "0.3", optional = true }
 tokio-rustls = { version = "0.26", features = ["logging", "ring", "tls12"], default-features = false, optional = true }
-tokio-tungstenite = { version = "0.26", default-features = false }
+tokio-tungstenite = { version = "0.26", default-features = false, optional = true }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
 webpki-roots = { version = "0.26", optional = true }
@@ -56,11 +56,11 @@ webpki-roots = { version = "0.26", optional = true }
 [dev-dependencies]
 divan = "0.1"
 tempfile = "3"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-rcgen = "0.13"
+# Hack; https://stackoverflow.com/q/73015087
+rusty-penguin = { path = ".", default-features = false, features = ["dev-dependencies"] }
 
 [features]
-default = ["rustls-native-roots", "tests-real-internet4", "penguin-binary", "acme"]
+default = ["rustls-native-roots", "tests-real-internet4", "penguin-binary", "acme", "tungstenite"]
 # Note that it does not make sense to use more than one TLS implementations
 # at the same time, but there must be at least one if `penguin-binary` is
 # enabled.
@@ -68,6 +68,8 @@ rustls-webpki-roots = ["dep:webpki-roots", "tokio-tungstenite/rustls-tls-webpki-
 rustls-native-roots = ["dep:rustls-native-certs", "tokio-tungstenite/rustls-tls-native-roots", "reqwest/rustls-tls-native-roots", "__rustls"]
 __rustls = ["dep:rustls", "dep:rustls-pemfile", "dep:tokio-rustls"]
 nativetls = ["dep:tokio-native-tls", "tokio-tungstenite/native-tls", "reqwest/native-tls"]
+# Dependencies for testing
+dev-dependencies = ["dep:rcgen", "dep:tracing-subscriber", "tungstenite", "tokio/io-util", "tokio/net", "tokio/rt-multi-thread"]
 # Allow some tests that require real internet connection
 tests-real-internet4 = []
 tests-real-internet6 = []
@@ -85,8 +87,11 @@ remove-logging = ["tracing/max_level_trace", "tracing/release_max_level_debug", 
 deadlock-detection = ["parking_lot/deadlock_detection"]
 # obtaining certificate automatically using ACME protocol
 acme = ["penguin-binary", "dep:instant-acme", "dep:rcgen", "tokio/process"]
+# use tungstenite as the WebSocket implementation
+tungstenite = ["dep:tokio-tungstenite"]
 # `penguin` binary
 penguin-binary = [
+    "tungstenite",
     "dep:arc-swap",
     "dep:base64",
     "dep:clap",
@@ -96,7 +101,7 @@ penguin-binary = [
     "dep:reqwest",
     "dep:sha1",
     "dep:tracing-subscriber",
-    "tokio/fs", "tokio/io-std", "tokio/net", "tokio/rt-multi-thread", "tokio/signal",
+    "tokio/fs", "tokio/io-std", "tokio/io-util", "tokio/net", "tokio/rt-multi-thread", "tokio/signal",
     "tokio-tungstenite/default",
 ]
 
