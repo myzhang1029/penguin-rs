@@ -1284,6 +1284,8 @@ dependencies = [
  "bytes",
  "libfuzzer-sys",
  "rusty-penguin",
+ "tokio",
+ "tokio-tungstenite",
 ]
 
 [[package]]
