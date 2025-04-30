@@ -218,7 +218,7 @@ where
         v4::write_response(&mut stream, 0x5a).await?;
     }
     stream.flush().await?;
-    tokio::io::copy_bidirectional(&mut stream, &mut channel).await?;
+    channel.copy_bidirectional(&mut stream).await?;
     Ok(())
 }
 
