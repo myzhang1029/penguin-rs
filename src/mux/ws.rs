@@ -152,4 +152,59 @@ mod tokio_tungstenite {
                 .map(|opt| opt.map(|res| res.map(Into::into).map_err(Into::into)))
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+
+        #[test]
+        fn test_binary_message() {
+            let msg = tungstenite::Message::Binary(Bytes::from_static(b"Hello"));
+            let converted: Message = msg.clone().into();
+            assert_eq!(converted, Message::Binary(Bytes::from_static(b"Hello")));
+            assert_eq!(tungstenite::Message::from(converted), msg);
+        }
+
+        #[test]
+        fn test_text_message() {
+            let msg = tungstenite::Message::Text("Hello".into());
+            let converted: Message = msg.clone().into();
+            assert_eq!(converted, Message::Binary(Bytes::from_static(b"Hello")));
+            assert_eq!(
+                tungstenite::Message::from(converted),
+                tungstenite::Message::Binary(Bytes::from_static(b"Hello"))
+            );
+        }
+
+        #[test]
+        fn test_ping_message() {
+            let msg = tungstenite::Message::Ping(Bytes::from_static(b"Ping"));
+            let converted: Message = msg.clone().into();
+            assert_eq!(converted, Message::Ping);
+            assert_eq!(
+                tungstenite::Message::from(converted),
+                tungstenite::Message::Ping(Bytes::new())
+            );
+
+            let msg = tungstenite::Message::Pong(Bytes::from_static(b"Pong"));
+            let converted: Message = msg.clone().into();
+            assert_eq!(converted, Message::Pong);
+            assert_eq!(
+                tungstenite::Message::from(converted),
+                tungstenite::Message::Pong(Bytes::new())
+            );
+        }
+
+        #[test]
+        fn test_close_message() {
+            let close_msg =
+                tungstenite::Message::Close(Some(tungstenite::protocol::frame::CloseFrame {
+                    code: CloseCode::Reserved(1000),
+                    reason: "Normal".into(),
+                }));
+            let converted: Message = close_msg.into();
+            assert_eq!(converted, Message::Close);
+        }
+    }
 }
