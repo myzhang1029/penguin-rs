@@ -169,7 +169,7 @@ mod tokio_tungstenite {
         #[test]
         fn test_text_message() {
             let msg = tungstenite::Message::Text("Hello".into());
-            let converted: Message = msg.clone().into();
+            let converted: Message = msg.into();
             assert_eq!(converted, Message::Binary(Bytes::from_static(b"Hello")));
             assert_eq!(
                 tungstenite::Message::from(converted),
@@ -180,7 +180,7 @@ mod tokio_tungstenite {
         #[test]
         fn test_ping_message() {
             let msg = tungstenite::Message::Ping(Bytes::from_static(b"Ping"));
-            let converted: Message = msg.clone().into();
+            let converted: Message = msg.into();
             assert_eq!(converted, Message::Ping);
             assert_eq!(
                 tungstenite::Message::from(converted),
@@ -188,7 +188,7 @@ mod tokio_tungstenite {
             );
 
             let msg = tungstenite::Message::Pong(Bytes::from_static(b"Pong"));
-            let converted: Message = msg.clone().into();
+            let converted: Message = msg.into();
             assert_eq!(converted, Message::Pong);
             assert_eq!(
                 tungstenite::Message::from(converted),
