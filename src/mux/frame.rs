@@ -627,6 +627,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_cow_bytes_eq() {
+        crate::tests::setup_logging();
+        let cow1 = CowBytes::Borrowed(b"1234");
+        let cow2 = CowBytes::Owned(Bytes::from_static(b"1234"));
+        assert_eq!(cow1, cow2);
+        let cow3 = CowBytes::Borrowed(b"12345");
+        assert_ne!(cow1, cow3);
+    }
+
+    #[test]
     fn test_cow_bytes() {
         crate::tests::setup_logging();
         let cow1 = CowBytes::Borrowed(&[1, 2, 3]);
