@@ -276,13 +276,13 @@ impl MuxStream {
                         self.shutdown().await?;
                         // Wait for EOF from our side too
                     } else {
-                        let len = buf.len() as u64;
-                        write_bytes += len;
+                        let len = buf.len();
+                        write_bytes += len as u64;
                         // `write_all` will always produce a single chunk because
                         // our `poll_write` implementation always consumes the
                         // entire buffer.
                         self.write_all(buf).await?;
-                        other_bufreader.consume(len as usize);
+                        other_bufreader.consume(len);
                     }
                 }
                 else => break,
@@ -434,6 +434,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_copy_bidirectional_normal() {
+        const TX1: Bytes = Bytes::from_static(b"hello from mux");
+        const RX1: Bytes = Bytes::from_static(b"hello from other");
+        const TX2: Bytes = Bytes::from_static(b"short");
+        const RX2: Bytes = Bytes::from_static(b"hello after half-close");
+        const RX3: Bytes = Bytes::from_static(b"stout");
         setup_logging();
         let (rx_frame_tx, rx_frame_rx) = mpsc::channel(10);
         let (tx_frame_tx, mut tx_frame_rx) = mpsc::unbounded_channel();
@@ -464,12 +469,6 @@ mod tests {
         let mut rbuf = ReadBuf::new(&mut buf);
         let rs = Pin::new(&mut check_side).poll_read(&mut cx, &mut rbuf);
         assert!(matches!(rs, Poll::Pending));
-
-        const TX1: Bytes = Bytes::from_static(b"hello from mux");
-        const RX1: Bytes = Bytes::from_static(b"hello from other");
-        const TX2: Bytes = Bytes::from_static(b"short");
-        const RX2: Bytes = Bytes::from_static(b"hello after half-close");
-        const RX3: Bytes = Bytes::from_static(b"stout");
 
         // Send data to the MuxStream
         rx_frame_tx.send(TX1.dupe()).await.unwrap();
