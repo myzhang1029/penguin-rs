@@ -364,4 +364,42 @@ mod tests {
             panic!("Expected a `Push` frame");
         }
     }
+
+    #[tokio::test]
+    async fn test_mux_stream_shutdown() {
+        setup_logging();
+        let (_, rx_frame_rx) = mpsc::channel(10);
+        let (tx_frame_tx, mut tx_frame_rx) = mpsc::unbounded_channel();
+        let (dropped_ports_tx, mut dropped_ports_rx) = mpsc::unbounded_channel();
+        let stream = MuxStream {
+            frame_rx: rx_frame_rx,
+            flow_id: 15,
+            dest_host: Bytes::new(),
+            dest_port: 8080,
+            finish_sent: Arc::new(AtomicBool::new(false)),
+            psh_send_remaining: Arc::new(AtomicU32::new(2)),
+            psh_recvd_since: 0,
+            writer_waker: Arc::new(AtomicWaker::new()),
+            frame_tx: tx_frame_tx,
+            buf: Bytes::new(),
+            dropped_ports_tx,
+            rwnd_threshold: 2,
+        };
+        let mut stream = pin!(stream);
+        let waker = futures_util::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        let rs = stream.as_mut().poll_shutdown(&mut cx);
+        assert!(matches!(rs, Poll::Ready(Ok(()))));
+        // Check the frame sent
+        let frame = tx_frame_rx.recv().await.unwrap();
+        assert_eq!(frame.opcode().unwrap(), crate::frame::OpCode::Finish);
+        let frame = Frame::try_from(frame).unwrap();
+        assert_eq!(frame.id, 15);
+
+        drop(stream);
+        // Check that `Drop` sends its information
+        let dropped_port = dropped_ports_rx.recv().await.unwrap();
+        assert_eq!(dropped_port, 15);
+    }
 }
