@@ -371,7 +371,7 @@ mod tests {
         let (_, rx_frame_rx) = mpsc::channel(10);
         let (tx_frame_tx, mut tx_frame_rx) = mpsc::unbounded_channel();
         let (dropped_ports_tx, mut dropped_ports_rx) = mpsc::unbounded_channel();
-        let stream = MuxStream {
+        let mut stream = MuxStream {
             frame_rx: rx_frame_rx,
             flow_id: 15,
             dest_host: Bytes::new(),
@@ -385,11 +385,10 @@ mod tests {
             dropped_ports_tx,
             rwnd_threshold: 2,
         };
-        let mut stream = pin!(stream);
         let waker = futures_util::task::noop_waker();
         let mut cx = Context::from_waker(&waker);
 
-        let rs = stream.as_mut().poll_shutdown(&mut cx);
+        let rs = Pin::new(&mut stream).as_mut().poll_shutdown(&mut cx);
         assert!(matches!(rs, Poll::Ready(Ok(()))));
         // Check the frame sent
         let frame = tx_frame_rx.recv().await.unwrap();
