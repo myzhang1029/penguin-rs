@@ -11,7 +11,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::task::{Context, Poll, ready};
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 use tracing::{debug, trace, warn};
 
@@ -223,6 +223,75 @@ impl AsyncWrite for MuxStream {
                 .map_err(|_| BrokenPipe)?;
         }
         Poll::Ready(Ok(()))
+    }
+}
+
+impl MuxStream {
+    /// A specialized version of [`tokio::io::copy_bidirectional`] that
+    /// works better on a `MuxStream` because of the lack of an extra copy.
+    /// If this function is used, `poll_read` provided by `AsyncRead` should
+    /// not be used directly, because this function ignores the data buffered
+    /// in the implementation of `AsyncRead`.
+    ///
+    /// # Errors
+    /// Returns the underlying error if any of the IO operations fail. When
+    /// this happens, some data from the other side might be lost.
+    ///
+    /// # Cancel Safety
+    /// This function is not cancel safe. Cancelling the future might cause
+    /// data loss.
+    #[inline]
+    pub async fn copy_bidirectional<RW>(&mut self, other: &mut RW) -> io::Result<(u64, u64)>
+    where
+        RW: AsyncRead + AsyncWrite + Unpin,
+    {
+        let mut other_bufreader = BufReader::new(other);
+        let mut read_bytes = 0u64;
+        let mut write_bytes = 0u64;
+        let mut us_has_more = true;
+        let mut other_has_more = true;
+
+        loop {
+            tokio::select! {
+                // Both branches are cancel safe per tokio's docs
+                maybe = self.frame_rx.recv(), if us_has_more => {
+                    if let Some(data) = maybe {
+                        read_bytes += data.len() as u64;
+                        // Here we don't buffer anymore, so we can combine
+                        // the two copy operations from `self.buf` to `ReadBuf`
+                        // and from `ReadBuf` to `other`'s internal buffer into
+                        // one.
+                        other_bufreader.write_all(&data).await?;
+                    } else {
+                        us_has_more = false;
+                        other_bufreader.shutdown().await?;
+                        // Wait for EOF from the other side too
+                    }
+                }
+                maybe = other_bufreader.fill_buf(), if other_has_more => {
+                    let buf = maybe?;
+                    // This half still requires our implementation of `AsyncWrite`
+                    if buf.is_empty() {
+                        other_has_more = false;
+                        self.shutdown().await?;
+                        // Wait for EOF from our side too
+                    } else {
+                        let len = buf.len() as u64;
+                        write_bytes += len;
+                        // `write_all` will always produce a single chunk because
+                        // our `poll_write` implementation always consumes the
+                        // entire buffer.
+                        self.write_all(buf).await?;
+                        other_bufreader.consume(len as usize);
+                    }
+                }
+                else => {
+                    debug!("transfer finished");
+                    break;
+                }
+            };
+        }
+        Ok((read_bytes, write_bytes))
     }
 }
 
