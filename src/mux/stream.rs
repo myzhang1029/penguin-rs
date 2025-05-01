@@ -107,26 +107,7 @@ impl AsyncRead for MuxStream {
             // already ensure that such frames are filtered out.
             debug_assert!(!next.is_empty());
             self.buf = next;
-            let new = self.psh_recvd_since + 1;
-            self.psh_recvd_since = new;
-            trace!(
-                "received a frame len = {}, psh_recvd_since: {}",
-                self.buf.len(),
-                new
-            );
-            if new >= self.rwnd_threshold {
-                // Reset the counter
-                self.psh_recvd_since = 0;
-                // Send an `Acknowledge` frame
-                trace!("sending `Acknowledge` of {new} frames");
-                self.frame_tx
-                    .send(Frame::new_acknowledge(self.flow_id, new).finalize())
-                    .ok();
-                // If the previous line fails, the task has exited.
-                // In this case, we don't care about the `Acknowledge` frame and the
-                // user will discover the error when they try to write or read
-                // to EOF.
-            }
+            self.increment_psh_recvd_since();
         } else {
             // There is some data left in `self.buf`.
             trace!("using the remaining buffer");
@@ -227,6 +208,29 @@ impl AsyncWrite for MuxStream {
 }
 
 impl MuxStream {
+    /// Increment the number of `Push` frames received since the last `Acknowledge`
+    /// and send an `Acknowledge` frame if the threshold is reached.
+    #[tracing::instrument(level = "trace", fields(flow_id = self.flow_id, count = self.psh_recvd_since + 1))]
+    #[inline]
+    fn increment_psh_recvd_since(&mut self) {
+        trace!("received a frame");
+        let new = self.psh_recvd_since + 1;
+        self.psh_recvd_since = new;
+        if new >= self.rwnd_threshold {
+            // Reset the counter
+            self.psh_recvd_since = 0;
+            // Send an `Acknowledge` frame
+            trace!("sending `Acknowledge` of {new} frames");
+            self.frame_tx
+                .send(Frame::new_acknowledge(self.flow_id, new).finalize())
+                .ok();
+            // If the previous line fails, the task has exited.
+            // In this case, we don't care about the `Acknowledge` frame and the
+            // user will discover the error when they try to write or read
+            // to EOF.
+        }
+    }
+
     /// A specialized version of [`tokio::io::copy_bidirectional`] that
     /// works better on a `MuxStream` because of the lack of an extra copy.
     /// If this function is used, `poll_read` provided by `AsyncRead` should
@@ -262,6 +266,7 @@ impl MuxStream {
                         // and from `ReadBuf` to `other`'s internal buffer into
                         // one.
                         other_bufreader.write_all(&data).await?;
+                        self.increment_psh_recvd_since();
                     } else {
                         us_has_more = false;
                         other_bufreader.shutdown().await?;
