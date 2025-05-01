@@ -30,12 +30,6 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-      with:
-        submodules: true
-
-    - name: Install nasm on Windows for aws-lc-sys (Taken from rustls)
-      if: matrix.config.name == 'Windows'
-      uses: ilammy/setup-nasm@v1
 
     - name: Install Rust toolchain
       run:
