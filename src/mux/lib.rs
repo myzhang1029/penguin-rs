@@ -119,6 +119,9 @@ impl Multiplexor {
     ///
     /// * `ws`: The `WebSocket` connection to multiplex over.
     ///
+    /// * `options`: Multiplexor options. See [`config::Options`] for more details.
+    ///   If `None`, the default options will be used.
+    ///
     /// * `task_joinset`: A [`JoinSet`] to spawn the multiplexor task into so
     ///   that the caller can notice if the task exits. If it is `None`, the
     ///   task will be spawned by `tokio::spawn` and errors will be logged.

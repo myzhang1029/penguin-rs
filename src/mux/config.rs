@@ -1,4 +1,4 @@
-//! Default configuration parameters of the multiplexor.
+//! Multiplexor configuration
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
@@ -80,9 +80,10 @@ impl Options {
         self
     }
 
-    /// Number of `Bind` requests to buffer in the channels on the receiving end.
+    /// Number of [`Bind`](crate::frame::OpCode::Bind) requests to buffer
+    /// in the channels on the receiving end.
     /// Setting this to zero disallows the multiplexor from accepting any
-    /// [`Bind`](crate::frame::OpCode::Bind) requests from the other end and
+    /// `Bind` requests from the other end and
     /// is the default. Make sure the security implications are understood
     /// before enabling this.
     #[must_use]
@@ -116,7 +117,7 @@ impl Options {
         self
     }
 
-    /// Number of [`Push`](frame::OpCode::Push) frames between [`Acknowledge`](frame::OpCode::Acknowledge)s:
+    /// Number of [`Push`](crate::frame::OpCode::Push) frames between [`Acknowledge`](crate::frame::OpCode::Acknowledge)s:
     /// If too low, `Acknowledge`s will consume too much bandwidth;
     /// If too high, writers may block.
     ///
