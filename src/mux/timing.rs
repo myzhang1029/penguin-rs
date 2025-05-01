@@ -114,7 +114,11 @@ impl fmt::Display for OptionalDuration {
 
 impl From<Duration> for OptionalDuration {
     fn from(duration: Duration) -> Self {
-        Self(Some(duration))
+        if duration.is_zero() {
+            Self(None)
+        } else {
+            Self(Some(duration))
+        }
     }
 }
 
@@ -181,6 +185,12 @@ mod tests {
     #[test]
     fn test_optional_duration() {
         crate::tests::setup_logging();
+        let std_dur = Duration::from_secs(0);
+        let opt_dur = OptionalDuration::from(std_dur);
+        assert_eq!(opt_dur, OptionalDuration::NONE);
+        let std_dur = Duration::from_secs(10);
+        let opt_dur = OptionalDuration::from(std_dur);
+        assert_eq!(opt_dur, OptionalDuration::from_secs(10));
         let dur = OptionalDuration::from_secs(10);
         assert_eq!(dur.to_string(), "10s");
         let dur_none = OptionalDuration::NONE;
