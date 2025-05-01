@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use divan::{Bencher, counter::BytesCount};
-use penguin_mux::{Dupe, Multiplexor, timing::OptionalDuration};
+use penguin_mux::{Dupe, Multiplexor};
 use std::sync::LazyLock;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -40,13 +40,13 @@ fn baseline_ws(b: Bencher<'_, '_>) {
             tokio::spawn(async move {
                 let tcpstream = s_socket.accept().await.unwrap().0;
                 let server = WebSocketStream::from_raw_socket(tcpstream, Role::Server, None).await;
-                let mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
+                let mux = Multiplexor::new(server, None, None);
                 let mut stream = mux.accept_stream_channel().await.unwrap();
                 stream.shutdown().await.unwrap();
             });
             let tcpstream = TcpStream::connect(s_addr).await.unwrap();
             let client = WebSocketStream::from_raw_socket(tcpstream, Role::Client, None).await;
-            let mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
+            let mux = Multiplexor::new(client, None, None);
             let mut stream = mux.new_stream_channel(&[], 0).await.unwrap();
             stream.shutdown().await.unwrap();
         });
@@ -128,7 +128,7 @@ fn bench_stream_throughput(b: Bencher<'_, '_>, num_writes: usize) {
                     let tcpstream = s_socket.accept().await.unwrap().0;
                     let server =
                         WebSocketStream::from_raw_socket(tcpstream, Role::Server, None).await;
-                    let mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
+                    let mux = Multiplexor::new(server, None, None);
                     let mut stream = mux.accept_stream_channel().await.unwrap();
                     for _ in 0..num_writes {
                         stream.write_all(&s_payload).await.unwrap();
@@ -137,7 +137,7 @@ fn bench_stream_throughput(b: Bencher<'_, '_>, num_writes: usize) {
                 });
                 let tcpstream = TcpStream::connect(s_addr).await.unwrap();
                 let client = WebSocketStream::from_raw_socket(tcpstream, Role::Client, None).await;
-                let mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
+                let mux = Multiplexor::new(client, None, None);
                 let mut stream = mux.new_stream_channel(&[], 0).await.unwrap();
                 stream.shutdown().await.unwrap();
                 //tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -164,7 +164,7 @@ fn bench_stream_throughput_bidir(b: Bencher<'_, '_>, num_writes: usize) {
                     let tcpstream = s_socket.accept().await.unwrap().0;
                     let server =
                         WebSocketStream::from_raw_socket(tcpstream, Role::Server, None).await;
-                    let mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
+                    let mux = Multiplexor::new(server, None, None);
                     let mut stream = mux.accept_stream_channel().await.unwrap();
                     let mut buf = vec![0; len];
                     for _ in 0..num_writes {
@@ -176,7 +176,7 @@ fn bench_stream_throughput_bidir(b: Bencher<'_, '_>, num_writes: usize) {
                 });
                 let tcpstream = TcpStream::connect(s_addr).await.unwrap();
                 let client = WebSocketStream::from_raw_socket(tcpstream, Role::Client, None).await;
-                let mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
+                let mux = Multiplexor::new(client, None, None);
                 let mut stream = mux.new_stream_channel(&[], 0).await.unwrap();
                 //tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                 let mut buf = vec![0; len];
@@ -208,7 +208,7 @@ fn bench_stream_throughput_with_contention(b: Bencher<'_, '_>, num_concurrent: u
                     let tcpstream = s_socket.accept().await.unwrap().0;
                     let server =
                         WebSocketStream::from_raw_socket(tcpstream, Role::Server, None).await;
-                    let mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
+                    let mux = Multiplexor::new(server, None, None);
                     for _ in 0..num_concurrent {
                         let mut stream = mux.accept_stream_channel().await.unwrap();
                         let s_payload = s_payload.dupe();
@@ -228,7 +228,7 @@ fn bench_stream_throughput_with_contention(b: Bencher<'_, '_>, num_concurrent: u
                 });
                 let tcpstream = TcpStream::connect(s_addr).await.unwrap();
                 let client = WebSocketStream::from_raw_socket(tcpstream, Role::Client, None).await;
-                let mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
+                let mux = Multiplexor::new(client, None, None);
                 for _ in 0..num_concurrent {
                     let mut stream = mux.new_stream_channel(&[], 0).await.unwrap();
                     jobs.spawn(async move {

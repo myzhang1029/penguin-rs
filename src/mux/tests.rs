@@ -109,8 +109,8 @@ async fn connect_succeeds() {
     setup_logging();
     let (client, server) = get_pair(None).await;
 
-    let client_mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
-    let server_mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
+    let client_mux = Multiplexor::new(client, None, None);
+    let server_mux = Multiplexor::new(server, None, None);
 
     let server_task = tokio::spawn(async move {
         let stream = server_mux.accept_stream_channel().await.unwrap();
@@ -132,8 +132,8 @@ async fn datagram_channel_passes_data_tiny_mtu() {
     // 8 bytes is the IPv4 minimum segment size. Let's try that
     let (client, server) = get_pair(Some(8)).await;
 
-    let client_mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
-    let server_mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
+    let client_mux = Multiplexor::new(client, None, None);
+    let server_mux = Multiplexor::new(server, None, None);
 
     let server_task = tokio::spawn(async move {
         for _ in 0..64 {
@@ -171,8 +171,8 @@ async fn datagram_channel_passes_data() {
     setup_logging();
     let (client, server) = get_pair(None).await;
 
-    let client_mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
-    let server_mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
+    let client_mux = Multiplexor::new(client, None, None);
+    let server_mux = Multiplexor::new(server, None, None);
 
     let server_task = tokio::spawn(async move {
         for _ in 0..64 {
@@ -210,8 +210,8 @@ async fn test_datagram_reject_long_host() {
     setup_logging();
     let (client, server) = get_pair(None).await;
 
-    let client_mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
-    let server_mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
+    let client_mux = Multiplexor::new(client, None, None);
+    let server_mux = Multiplexor::new(server, None, None);
     // Make it 256 bytes long
     let long_host = Bytes::from(b"example1".repeat(32));
     let data = Bytes::from_static(b"hello");
@@ -247,10 +247,8 @@ async fn connected_stream_passes_data_tiny_mtu_rwndminusone() {
     setup_logging();
     let (client, server) = get_pair(Some(8)).await;
 
-    let (client_mux, mut taskdata_client) =
-        Multiplexor::new_no_task(client, OptionalDuration::NONE, false);
-    let (server_mux, mut taskdata_server) =
-        Multiplexor::new_no_task(server, OptionalDuration::NONE, false);
+    let (client_mux, mut taskdata_client) = Multiplexor::new_no_task(client, None);
+    let (server_mux, mut taskdata_server) = Multiplexor::new_no_task(server, None);
 
     taskdata_client.task.default_rwnd_threshold = crate::config::RWND - 1;
     taskdata_server.task.default_rwnd_threshold = crate::config::RWND - 1;
@@ -298,8 +296,12 @@ async fn connected_stream_passes_data_tiny_mtu_with_keepalive() {
     setup_logging();
     let (client, server) = get_pair(Some(1)).await;
 
-    let client_mux = Multiplexor::new(client, OptionalDuration::from_secs(1), false, None);
-    let server_mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
+    let client_option = crate::config::Options {
+        keepalive_interval: crate::timing::OptionalDuration::from_secs(1),
+        ..Default::default()
+    };
+    let client_mux = Multiplexor::new(client, Some(client_option), None);
+    let server_mux = Multiplexor::new(server, None, None);
 
     let input_bytes: Vec<u8> = (0..1024 * 256).map(|_| rand::random::<u8>()).collect();
     let len = input_bytes.len();
@@ -332,8 +334,8 @@ async fn connected_stream_passes_data_tiny_mtu() {
     setup_logging();
     let (client, server) = get_pair(Some(8)).await;
 
-    let client_mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
-    let server_mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
+    let client_mux = Multiplexor::new(client, None, None);
+    let server_mux = Multiplexor::new(server, None, None);
 
     let input_bytes: Vec<u8> = (0..(1024 * 1024)).map(|_| rand::random::<u8>()).collect();
     let len = input_bytes.len();
@@ -375,8 +377,8 @@ async fn connected_stream_passes_data() {
     setup_logging();
     let (client, server) = get_pair(None).await;
 
-    let client_mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
-    let server_mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
+    let client_mux = Multiplexor::new(client, None, None);
+    let server_mux = Multiplexor::new(server, None, None);
 
     let input_bytes: Vec<u8> = (0..(1024 * 1024)).map(|_| rand::random::<u8>()).collect();
     let len = input_bytes.len();
@@ -418,8 +420,8 @@ async fn connected_stream_passes_data_one_sided_lots() {
     setup_logging();
     let (client, server) = get_pair(None).await;
 
-    let client_mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
-    let server_mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
+    let client_mux = Multiplexor::new(client, None, None);
+    let server_mux = Multiplexor::new(server, None, None);
 
     let input_bytes: Vec<u8> = (0..(32 * 0x20000)).map(|_| rand::random::<u8>()).collect();
     let len = input_bytes.len();
@@ -460,8 +462,8 @@ async fn test_shutdown_has_effect() {
     setup_logging();
     let (client, server) = get_pair(None).await;
 
-    let client_mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
-    let server_mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
+    let client_mux = Multiplexor::new(client, None, None);
+    let server_mux = Multiplexor::new(server, None, None);
 
     let server_task = tokio::spawn(async move {
         let mut conn = server_mux.accept_stream_channel().await.unwrap();
@@ -482,8 +484,8 @@ async fn test_contention() {
     setup_logging();
     let (client, server) = get_pair(None).await;
 
-    let client_mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
-    let server_mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
+    let client_mux = Multiplexor::new(client, None, None);
+    let server_mux = Multiplexor::new(server, None, None);
 
     let payload: Bytes = (0..(1024 * 1024)).map(|_| rand::random::<u8>()).collect();
     let len = payload.len();
@@ -546,7 +548,7 @@ async fn test_with_tcpsocket_inner() {
     tokio::spawn(async move {
         let tcpstream = s_socket.accept().await.unwrap().0;
         let server = WebSocketStream::from_raw_socket(tcpstream, Role::Server, None).await;
-        let mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
+        let mux = Multiplexor::new(server, None, None);
         let mut stream = mux.accept_stream_channel().await.unwrap();
         for _ in 0..ITERATIONS {
             let payload = s_payload.split_to(SINGLE_WRITE_LEN);
@@ -556,7 +558,7 @@ async fn test_with_tcpsocket_inner() {
     });
     let tcpstream = tokio::net::TcpStream::connect(s_addr).await.unwrap();
     let client = WebSocketStream::from_raw_socket(tcpstream, Role::Client, None).await;
-    let mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
+    let mux = Multiplexor::new(client, None, None);
     let mut stream = mux.new_stream_channel(&[], 0).await.unwrap();
     stream.shutdown().await.unwrap();
     // Make sure any mishandling of half-close pop up in the test
@@ -582,8 +584,8 @@ async fn test_early_eof_detected() {
 async fn test_early_eof_detected_inner() {
     let (client, server) = get_pair(None).await;
 
-    let client_mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
-    let server_mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
+    let client_mux = Multiplexor::new(client, None, None);
+    let server_mux = Multiplexor::new(server, None, None);
 
     let input_bytes: Vec<u8> = (0..1024).map(|_| rand::random::<u8>()).collect();
     let len = input_bytes.len();
@@ -618,8 +620,8 @@ async fn test_several_channels() {
     setup_logging();
     let (client, server) = get_pair(None).await;
 
-    let client_mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
-    let server_mux = Multiplexor::new(server, OptionalDuration::NONE, false, None);
+    let client_mux = Multiplexor::new(client, None, None);
+    let server_mux = Multiplexor::new(server, None, None);
 
     let server_task = tokio::spawn(async move {
         let mut conn1 = server_mux.accept_stream_channel().await.unwrap();
@@ -664,7 +666,7 @@ async fn test_flow_id_contention_will_give_up() {
     setup_logging();
     let (client, mut server) = get_pair(None).await;
 
-    let client_mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
+    let client_mux = Multiplexor::new(client, None, None);
 
     let server_task = tokio::spawn(async move {
         // This side receives frames `Connect` and simply `Reset`s them
@@ -696,7 +698,7 @@ async fn test_flow_id_contention_can_succeed() {
     setup_logging();
     let (client, mut server) = get_pair(None).await;
 
-    let client_mux = Multiplexor::new(client, OptionalDuration::NONE, false, None);
+    let client_mux = Multiplexor::new(client, None, None);
 
     let (serverside_received_ports_tx, serverside_received_ports_rx) = oneshot::channel();
 

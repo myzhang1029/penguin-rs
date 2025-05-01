@@ -21,6 +21,7 @@ pub const RWND_USIZE: usize = RWND as usize;
 #[cfg(not(test))]
 pub const RWND: u32 = 1 << 9;
 #[cfg(test)]
+/// Number of `StreamFrame`s to buffer in `MuxStream`'s channels before blocking
 pub const RWND: u32 = 4;
 /// Number of [`Push`](frame::OpCode::Push) frames between [`Acknowledge`](frame::OpCode::Acknowledge)s:
 /// If too low, `Acknowledge`s will consume too much bandwidth;
@@ -41,3 +42,15 @@ const _: () = {
     assert!(RWND as usize == RWND_USIZE);
     assert!(DEFAULT_RWND_THRESHOLD > 0);
 };
+
+/// Configuration parameters for the multiplexor.
+/// Partially-initializing this struct with `Default::default()` is
+/// the recommended way to create a new `Options` struct.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Options {
+    /// The interval at which to send [`Ping`](tokio_tungstenite::tungstenite::protocol::Message::Ping) frames
+    pub keepalive_interval: crate::timing::OptionalDuration,
+    /// Whether this multiplexor should accept [`Bind`](frame::OpCode::Bind) requests
+    /// from the other end. This may be a security risk, so be careful.
+    pub accept_bind: bool,
+}

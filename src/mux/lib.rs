@@ -7,7 +7,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 #![deny(missing_docs, missing_debug_implementations)]
 
-mod config;
+pub mod config;
 mod dupe;
 pub mod frame;
 mod proto_version;
@@ -20,7 +20,6 @@ pub mod ws;
 
 use crate::frame::{BindPayload, BindType, FinalizedFrame, Frame};
 use crate::task::{Task, TaskData};
-use crate::timing::OptionalDuration;
 use crate::ws::WebSocket;
 use bytes::Bytes;
 use futures_util::task::AtomicWaker;
@@ -114,30 +113,24 @@ impl Multiplexor {
     ///
     /// * `ws`: The `WebSocket` connection to multiplex over.
     ///
-    /// * `keepalive_interval`: The interval at which to send [`Ping`](tokio_tungstenite::tungstenite::protocol::Message::Ping) frames.
-    ///
     /// * `task_joinset`: A [`JoinSet`] to spawn the multiplexor task into so
     ///   that the caller can notice if the task exits. If it is `None`, the
     ///   task will be spawned by `tokio::spawn` and errors will be logged.
     #[tracing::instrument(skip_all, level = "debug")]
     pub fn new<S: WebSocket>(
         ws: S,
-        keepalive_interval: OptionalDuration,
-        accept_bnd: bool,
+        options: Option<config::Options>,
         task_joinset: Option<&mut JoinSet<Result<()>>>,
     ) -> Self {
-        let (mux, taskdata) = Self::new_no_task(ws, keepalive_interval, accept_bnd);
+        let (mux, taskdata) = Self::new_no_task(ws, options);
         taskdata.spawn(task_joinset);
         mux
     }
 
     /// Create a new `Multiplexor` without spawning the task.
     #[inline]
-    fn new_no_task<S: WebSocket>(
-        ws: S,
-        keepalive_interval: OptionalDuration,
-        accept_bnd: bool,
-    ) -> (Self, TaskData<S>) {
+    fn new_no_task<S: WebSocket>(ws: S, options: Option<config::Options>) -> (Self, TaskData<S>) {
+        let options = options.unwrap_or_default();
         let (datagram_tx, datagram_rx) = mpsc::channel(config::DATAGRAM_BUFFER_SIZE);
         let (con_recv_stream_tx, con_recv_stream_rx) = mpsc::channel(config::STREAM_BUFFER_SIZE);
         // This one is unbounded because the protocol provides its own flow control for `Push` frames
@@ -147,7 +140,7 @@ impl Multiplexor {
         // This one cannot be bounded because it needs to be used in Drop
         let (dropped_ports_tx, dropped_ports_rx) = mpsc::unbounded_channel();
 
-        let (bnd_request_tx, bnd_request_rx) = if accept_bnd {
+        let (bnd_request_tx, bnd_request_rx) = if options.accept_bind {
             let (tx, rx) = mpsc::channel(config::BND_BUFFER_SIZE);
             (Some(tx), Some(rx))
         } else {
@@ -173,7 +166,7 @@ impl Multiplexor {
                 default_rwnd_threshold: config::DEFAULT_RWND_THRESHOLD,
                 datagram_tx,
                 bnd_request_tx,
-                keepalive_interval,
+                keepalive_interval: options.keepalive_interval,
             },
             dropped_ports_rx,
             tx_frame_rx,
