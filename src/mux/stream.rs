@@ -295,7 +295,7 @@ impl MuxStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Dupe, tests::setup_logging};
+    use crate::{Dupe, config, tests::setup_logging};
     use std::pin::pin;
     use tokio::io::{AsyncReadExt, ReadBuf};
 
@@ -380,7 +380,7 @@ mod tests {
             frame_tx: tx_frame_tx,
             buf: Bytes::new(),
             dropped_ports_tx,
-            rwnd_threshold: 2,
+            rwnd_threshold: config::DEFAULT_RWND_THRESHOLD,
         };
         let mut stream = pin!(stream);
         let waker = futures_util::task::noop_waker();
@@ -457,7 +457,7 @@ mod tests {
             frame_tx: tx_frame_tx.clone(),
             buf: Bytes::new(),
             dropped_ports_tx: dropped_ports_tx.clone(),
-            rwnd_threshold: 5,
+            rwnd_threshold: config::DEFAULT_RWND_THRESHOLD,
         };
 
         let copy_task =
@@ -533,6 +533,100 @@ mod tests {
         // TX is copied from MuxStream to other_stream, which is `read_bytes` in `copy_bidirectional`
         assert_eq!(bytes_read, (TX1.len() + TX2.len()) as u64);
         assert_eq!(bytes_written, (RX1.len() + RX2.len() + RX3.len()) as u64);
+    }
+
+    #[tokio::test]
+    async fn test_flow_control() {
+        const TEST_ACK_THRESHOLD: usize = 5;
+        const TEST_ACK_THRESHOLD_U32: u32 = 5;
+        assert_eq!(TEST_ACK_THRESHOLD, TEST_ACK_THRESHOLD_U32 as usize);
+        setup_logging();
+        let (rx_frame_tx, rx_frame_rx) = mpsc::channel(TEST_ACK_THRESHOLD);
+        let (tx_frame_tx, mut tx_frame_rx) = mpsc::unbounded_channel();
+        let (dropped_ports_tx, _) = mpsc::unbounded_channel();
+        let (mut other_stream, mut check_side) = tokio::io::duplex(1024);
+        let mut mux_stream = MuxStream {
+            frame_rx: rx_frame_rx,
+            flow_id: 1,
+            dest_host: Bytes::new(),
+            dest_port: 8080,
+            finish_sent: Arc::new(AtomicBool::new(false)),
+            psh_send_remaining: Arc::new(AtomicU32::new(10)), // Allow more frames for this test
+            psh_recvd_since: 0,
+            writer_waker: Arc::new(AtomicWaker::new()),
+            frame_tx: tx_frame_tx.clone(),
+            buf: Bytes::new(),
+            dropped_ports_tx: dropped_ports_tx.clone(),
+            rwnd_threshold: TEST_ACK_THRESHOLD_U32,
+        };
+        // First clog the congestion window
+        for i in 0..TEST_ACK_THRESHOLD {
+            debug!("sending frame {i}");
+            rx_frame_tx
+                .send(Bytes::from_static(b"hello"))
+                .await
+                .unwrap();
+        }
+        // Test that the `Acknowledge` frame has not arrived yet
+        // The point is to confirm that the reader processed the frames
+        // so if we get `Acknowledge` even before we started reading, then
+        // it is pointless.
+        tx_frame_rx.try_recv().unwrap_err();
+        // First test with just `AsyncRead`
+        let mut buf = [0u8; 5 * TEST_ACK_THRESHOLD];
+        let n = mux_stream.read_exact(&mut buf).await.unwrap();
+        assert_eq!(n, 5 * TEST_ACK_THRESHOLD);
+        assert_eq!(&buf[..n], b"hello".repeat(TEST_ACK_THRESHOLD).as_slice());
+        // Check that the `Acknowledge` frame has arrived
+        let frame = tx_frame_rx.recv().await.unwrap();
+        let frame = Frame::try_from(frame).unwrap();
+        assert_eq!(frame.id, 1);
+        if let crate::frame::Payload::Acknowledge(ack) = frame.payload {
+            assert_eq!(ack, TEST_ACK_THRESHOLD_U32);
+        } else {
+            panic!("Expected an `Acknowledge` frame");
+        }
+        // Now test with `copy_bidirectional`
+        let task = tokio::spawn(async move {
+            mux_stream
+                .copy_bidirectional(&mut other_stream)
+                .await
+                .unwrap()
+        });
+        for i in 0..2 * TEST_ACK_THRESHOLD {
+            debug!("sending frame {i}");
+            rx_frame_tx
+                .send(Bytes::from_static(b"hello"))
+                .await
+                .unwrap();
+        }
+        let frame = tx_frame_rx.recv().await.unwrap();
+        let frame = Frame::try_from(frame).unwrap();
+        assert_eq!(frame.id, 1);
+        if let crate::frame::Payload::Acknowledge(ack) = frame.payload {
+            assert_eq!(ack, TEST_ACK_THRESHOLD_U32);
+        } else {
+            panic!("Expected an `Acknowledge` frame");
+        }
+        let frame = tx_frame_rx.recv().await.unwrap();
+        let frame = Frame::try_from(frame).unwrap();
+        assert_eq!(frame.id, 1);
+        if let crate::frame::Payload::Acknowledge(ack) = frame.payload {
+            assert_eq!(ack, TEST_ACK_THRESHOLD_U32);
+        } else {
+            panic!("Expected an `Acknowledge` frame");
+        }
+        // Check for data
+        let mut buf = [0u8; 5 * 2 * TEST_ACK_THRESHOLD];
+        let n = check_side.read_exact(&mut buf).await.unwrap();
+        assert_eq!(n, 5 * 2 * TEST_ACK_THRESHOLD);
+        assert_eq!(
+            &buf[..n],
+            b"hello".repeat(2 * TEST_ACK_THRESHOLD).as_slice()
+        );
+        drop(rx_frame_tx);
+        check_side.shutdown().await.unwrap();
+        task.await.unwrap();
     }
 
     #[tokio::test]
