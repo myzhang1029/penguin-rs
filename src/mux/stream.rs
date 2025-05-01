@@ -114,7 +114,7 @@ impl AsyncWrite for MuxStream {
     #[tracing::instrument(skip_all, level = "trace")]
     #[inline]
     fn poll_write(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
@@ -137,7 +137,7 @@ impl AsyncWrite for MuxStream {
     /// to the remote peer.
     #[tracing::instrument(skip(_cx), level = "trace")]
     #[inline]
-    fn poll_shutdown(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         Poll::Ready(self.shutdown_inner())
     }
 }
@@ -200,7 +200,9 @@ impl MuxStream {
     /// Attempt to obtain permission to send a [`Push`](crate::frame::OpCode::Push) frame.
     /// If we need an `Acknowledge` frame to continue, the task will be woken up
     /// once the `Acknowledge` frame is received.
-    fn poll_obtain_write_permission(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+    #[tracing::instrument(level = "trace", fields(flow_id = self.flow_id))]
+    #[inline]
+    fn poll_obtain_write_permission(&self, cx: &Context<'_>) -> Poll<io::Result<()>> {
         // Atomic ordering: if the operations around this line are reordered,
         // the sent frame will be `Rst`ed by the remote peer, which is harmless.
         // Both `close_port` and `shutdown` in `inner.rs` set this flag with
@@ -242,7 +244,7 @@ impl MuxStream {
 
     /// Send a [`Finish`](crate::frame::OpCode::Finish) frame to the remote peer
     /// and disallow further writes.
-    fn shutdown_inner(&mut self) -> io::Result<()> {
+    fn shutdown_inner(&self) -> io::Result<()> {
         // There is no need to send a `Finish` frame if the mux task has already removed the stream
         // because either:
         // 1. `MuxStream` was dropped before `poll_shutdown` is completed and the mux task should
@@ -285,10 +287,9 @@ impl MuxStream {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ReadState {
     // We have data
-    #[default]
     Transferring,
     // We are done and we are trying to shut down the other side
     ShuttingDown,
@@ -318,27 +319,27 @@ impl<RW> CopyBidirectional<RW>
 where
     RW: AsyncBufRead + AsyncWrite + Unpin,
 {
-    fn poll_read_us(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+    fn poll_read_us(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<u64>> {
         match self.read_state {
             ReadState::Transferring => {
                 // Loop until we are done or that some of the polls return `Pending`
                 loop {
                     let other = Pin::new(&mut self.other);
-                    if !ready!(self.us.poll_fill(cx)) {
-                        self.read_state = ReadState::ShuttingDown;
-                        ready!(other.poll_shutdown(cx))?;
-                        // If they return `Poll::Ready(Ok(()))`, we are done
-                        self.read_state = ReadState::Done;
-                        break Poll::Ready(Ok(()));
-                    } else {
+                    if ready!(self.us.poll_fill(cx)) {
                         // We either still have data or we got some new data. Try to
                         // write it to the other side.
                         let result = ready!(other.poll_write(cx, &self.us.buf))?;
                         self.us.buf.advance(result);
                         self.read_bytes += result as u64;
-                        if self.us.buf.is_empty() {
-                            continue;
-                        }
+                        // If this write finished it, the next `poll_fill` will fetch
+                        // more frames. Otherwise, the next loop will simply try to write
+                        // the rest of the buffer.
+                    } else {
+                        self.read_state = ReadState::ShuttingDown;
+                        ready!(other.poll_shutdown(cx))?;
+                        // If they return `Poll::Ready(Ok(()))`, we are done
+                        self.read_state = ReadState::Done;
+                        break Poll::Ready(Ok(self.read_bytes));
                     }
                 }
             }
@@ -347,17 +348,17 @@ where
                 // and wait for EOF
                 ready!(Pin::new(&mut self.other).poll_shutdown(cx))?;
                 self.read_state = ReadState::Done;
-                Poll::Ready(Ok(()))
+                Poll::Ready(Ok(self.read_bytes))
             }
             ReadState::Done => {
                 // We are done reading and the other side is EOF'd
                 // We don't need to do anything here
-                Poll::Ready(Ok(()))
+                Poll::Ready(Ok(self.read_bytes))
             }
         }
     }
 
-    fn poll_write_us(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+    fn poll_write_us(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<u64>> {
         match &mut self.write_state {
             WriteState::Transferring(data) => {
                 // Means that the peer still wants to send us data
@@ -376,13 +377,14 @@ where
                             // The other side is EOF'd
                             self.us.shutdown_inner()?;
                             self.write_state = WriteState::Done;
-                            break Poll::Ready(Ok(()));
+                            break Poll::Ready(Ok(self.wrote_bytes));
                         }
                         // First try sending now
                         if self.us.poll_obtain_write_permission(cx).is_pending() {
                             // The waker has been registered. We save the data and try again later
                             // TODO: Remove this `clone`
-                            debug_assert!(data.replace(Bytes::copy_from_slice(new_buf)).is_none());
+                            let replaced = data.replace(Bytes::copy_from_slice(new_buf));
+                            debug_assert!(replaced.is_none());
                         } else {
                             // Else, the data is allowed to be sent, and we can come back here in the next iteration
                             let frame = Frame::new_push(self.us.flow_id, new_buf).finalize();
@@ -396,7 +398,7 @@ where
             WriteState::Done => {
                 // We are done writing and the other side is EOF'd
                 // We don't need to do anything here
-                Poll::Ready(Ok(()))
+                Poll::Ready(Ok(self.wrote_bytes))
             }
         }
     }
@@ -412,16 +414,14 @@ where
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let w = self.poll_write_us(cx);
         let r = self.poll_read_us(cx);
-        ready!(w)?;
-        ready!(r)?;
-        Poll::Ready(Ok((self.read_bytes, self.wrote_bytes)))
+        Poll::Ready(Ok((ready!(w)?, ready!(r)?)))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Dupe, config, tests::setup_logging};
+    use crate::{Dupe, tests::setup_logging};
     use std::pin::pin;
     use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadBuf};
 
@@ -573,7 +573,7 @@ mod tests {
         let (dropped_ports_tx, _) = mpsc::unbounded_channel();
         let (mut other_stream, mut check_side) = tokio::io::duplex(1024);
 
-        let mut mux_stream = MuxStream {
+        let mux_stream = MuxStream {
             frame_rx: rx_frame_rx,
             flow_id: 1,
             dest_host: Bytes::new(),
