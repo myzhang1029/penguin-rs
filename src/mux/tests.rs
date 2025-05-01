@@ -249,8 +249,7 @@ async fn connected_stream_passes_data_tiny_mtu_rwndminusone() {
 
     let options = crate::config::Options::new()
         .rwnd(4)
-        .default_rwnd_threshold(4 - 1)
-        .checked();
+        .default_rwnd_threshold(4 - 1);
 
     let client_mux = Multiplexor::new(client, Some(options), None);
     let server_mux = Multiplexor::new(server, Some(options), None);
