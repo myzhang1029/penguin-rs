@@ -176,7 +176,7 @@ impl MuxStream {
 
     /// Increment the number of `Push` frames received since the last `Acknowledge`
     /// and send an `Acknowledge` frame if the threshold is reached.
-    #[tracing::instrument(level = "trace", fields(flow_id = self.flow_id, count = self.psh_recvd_since + 1))]
+    #[tracing::instrument(skip_all, level = "trace", fields(flow_id = self.flow_id, count = self.psh_recvd_since + 1))]
     #[inline]
     fn increment_psh_recvd_since(&mut self) {
         trace!("received a frame");
@@ -200,7 +200,7 @@ impl MuxStream {
     /// Attempt to obtain permission to send a [`Push`](crate::frame::OpCode::Push) frame.
     /// If we need an `Acknowledge` frame to continue, the task will be woken up
     /// once the `Acknowledge` frame is received.
-    #[tracing::instrument(level = "trace", fields(flow_id = self.flow_id))]
+    #[tracing::instrument(skip_all, level = "trace", fields(flow_id = self.flow_id))]
     #[inline]
     fn poll_obtain_write_permission(&self, cx: &Context<'_>) -> Poll<io::Result<()>> {
         // Atomic ordering: if the operations around this line are reordered,
@@ -244,6 +244,7 @@ impl MuxStream {
 
     /// Send a [`Finish`](crate::frame::OpCode::Finish) frame to the remote peer
     /// and disallow further writes.
+    #[inline]
     fn shutdown_inner(&self) -> io::Result<()> {
         // There is no need to send a `Finish` frame if the mux task has already removed the stream
         // because either:
@@ -262,6 +263,10 @@ impl MuxStream {
 
     /// A specialized version of [`tokio::io::copy_bidirectional`] that
     /// works better on a `MuxStream` because of the lack of an extra copy.
+    ///
+    /// The returned future will resolve to `io::Result<(u64, u64)>` where
+    /// the first value is the number of bytes read from `self` and
+    /// the second value is the number of bytes written to `self`.
     ///
     /// # Errors
     /// Returns the underlying error if any of the IO operations fail. When
@@ -299,8 +304,8 @@ enum ReadState {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum WriteState {
-    // Peer has more data
-    Transferring(Option<Bytes>),
+    // Peer has more data (payload size, frame)
+    Transferring(Option<(u64, FinalizedFrame)>),
     // Peer is done
     Done,
 }
@@ -324,11 +329,11 @@ where
             ReadState::Transferring => {
                 // Loop until we are done or that some of the polls return `Pending`
                 loop {
-                    let other = Pin::new(&mut self.other);
                     if ready!(self.us.poll_fill(cx)) {
                         // We either still have data or we got some new data. Try to
                         // write it to the other side.
-                        let result = ready!(other.poll_write(cx, &self.us.buf))?;
+                        let result =
+                            ready!(Pin::new(&mut self.other).poll_write(cx, &self.us.buf))?;
                         self.us.buf.advance(result);
                         self.read_bytes += result as u64;
                         // If this write finished it, the next `poll_fill` will fetch
@@ -336,7 +341,7 @@ where
                         // the rest of the buffer.
                     } else {
                         self.read_state = ReadState::ShuttingDown;
-                        ready!(other.poll_shutdown(cx))?;
+                        ready!(Pin::new(&mut self.other).poll_shutdown(cx))?;
                         // If they return `Poll::Ready(Ok(()))`, we are done
                         self.read_state = ReadState::Done;
                         break Poll::Ready(Ok(self.read_bytes));
@@ -360,37 +365,44 @@ where
 
     fn poll_write_us(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<u64>> {
         match &mut self.write_state {
-            WriteState::Transferring(data) => {
+            WriteState::Transferring(maybe_frame) => {
                 // Means that the peer still wants to send us data
                 loop {
-                    if data.is_some() {
+                    if maybe_frame.is_some() {
                         ready!(self.us.poll_obtain_write_permission(cx))?;
                         // Good. We have permission to send a frame
-                        let bytes = data.take().expect("data should be present (this is a bug)");
-                        self.wrote_bytes += bytes.len() as u64;
-                        let frame = Frame::new_push_owned(self.us.flow_id, bytes).finalize();
+                        let (size, frame) = maybe_frame
+                            .take()
+                            .expect("data should be present (this is a bug)");
+                        self.wrote_bytes += size;
                         self.us.frame_tx.send(frame).map_err(|_| BrokenPipe)?;
-                        trace!("sent a frame");
+                        trace!("sent a saved frame");
                     } else {
-                        let new_buf = ready!(Pin::new(&mut self.other).poll_fill_buf(cx))?;
-                        if new_buf.is_empty() {
-                            // The other side is EOF'd
-                            self.us.shutdown_inner()?;
-                            self.write_state = WriteState::Done;
-                            break Poll::Ready(Ok(self.wrote_bytes));
-                        }
+                        let mut other = Pin::new(&mut self.other);
+                        let (size, frame) = {
+                            let new_buf = ready!(other.as_mut().poll_fill_buf(cx))?;
+                            trace!("got {new_buf:?}");
+                            if new_buf.is_empty() {
+                                // The other side is EOF'd
+                                self.us.shutdown_inner()?;
+                                self.write_state = WriteState::Done;
+                                break Poll::Ready(Ok(self.wrote_bytes));
+                            }
+                            let frame = Frame::new_push(self.us.flow_id, new_buf).finalize();
+                            (new_buf.len(), frame)
+                        };
+                        other.consume(size);
+                        let size = size as u64;
                         // First try sending now
                         if self.us.poll_obtain_write_permission(cx).is_pending() {
-                            // The waker has been registered. We save the data and try again later
-                            // TODO: Remove this `clone`
-                            let replaced = data.replace(Bytes::copy_from_slice(new_buf));
+                            trace!("saving the frame for later, len {size}");
+                            let replaced = maybe_frame.replace((size, frame));
                             debug_assert!(replaced.is_none());
                         } else {
                             // Else, the data is allowed to be sent, and we can come back here in the next iteration
-                            let frame = Frame::new_push(self.us.flow_id, new_buf).finalize();
+                            trace!("fast path sending immediately, len {size}");
                             self.us.frame_tx.send(frame).map_err(|_| BrokenPipe)?;
-                            self.wrote_bytes += new_buf.len() as u64;
-                            trace!("sent a frame");
+                            self.wrote_bytes += size;
                         }
                     }
                 }
@@ -414,7 +426,7 @@ where
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let w = self.poll_write_us(cx);
         let r = self.poll_read_us(cx);
-        Poll::Ready(Ok((ready!(w)?, ready!(r)?)))
+        Poll::Ready(Ok((ready!(r)?, ready!(w)?)))
     }
 }
 
