@@ -112,6 +112,12 @@ impl fmt::Display for OptionalDuration {
     }
 }
 
+impl From<Duration> for OptionalDuration {
+    fn from(duration: Duration) -> Self {
+        Self(Some(duration))
+    }
+}
+
 /// An optional interval
 #[derive(Debug, Default)]
 pub struct OptionalInterval(Option<tokio::time::Interval>);

@@ -6,7 +6,7 @@ use crate::frame::{ConnectPayload, FinalizedFrame, Frame, Payload};
 use crate::timing::{OptionalDuration, OptionalInterval};
 use crate::ws::{Message, WebSocket};
 use crate::{
-    BindRequest, Datagram, Dupe, Error, EstablishedStreamData, FlowSlot, MuxStream, Result, config,
+    BindRequest, Datagram, Dupe, Error, EstablishedStreamData, FlowSlot, MuxStream, Result,
 };
 use bytes::Bytes;
 use futures_util::task::AtomicWaker;
@@ -80,8 +80,10 @@ pub struct Task<S: WebSocket> {
     /// if the user did not call `poll_shutdown` on the `MuxStream`.
     pub dropped_ports_tx: mpsc::UnboundedSender<u32>,
     pub con_recv_stream_tx: mpsc::Sender<MuxStream>,
-    /// Default threshold for `Acknowledge` replies. See [`MuxStream`] for more details.
+    /// Default threshold for `Acknowledge` replies. See [`config::Options`] for more details.
     pub default_rwnd_threshold: u32,
+    /// Our rwnd. See [`config::Options`] for more details.
+    pub rwnd: u32,
     pub datagram_tx: mpsc::Sender<Datagram>,
     pub bnd_request_tx: Option<mpsc::Sender<BindRequest<'static>>>,
     /// Interval between keepalive `Ping`s,
@@ -524,7 +526,7 @@ impl<S: WebSocket> Task<S> {
         dest_port: u16,
     ) -> (MuxStream, EstablishedStreamData) {
         // `tx` is our end, `rx` is the user's end
-        let (frame_tx, frame_rx) = mpsc::channel(config::RWND_USIZE);
+        let (frame_tx, frame_rx) = mpsc::channel(self.rwnd as usize);
         let finish_sent = Arc::new(AtomicBool::new(false));
         let psh_send_remaining = Arc::new(AtomicU32::new(peer_rwnd));
         let writer_waker = Arc::new(AtomicWaker::new());
@@ -594,7 +596,7 @@ impl<S: WebSocket> Task<S> {
         // so that the stream is `Established` when the user uses it.
         trace!("sending `Acknowledge`");
         self.tx_frame_tx
-            .send(Frame::new_acknowledge(flow_id, config::RWND).finalize())
+            .send(Frame::new_acknowledge(flow_id, self.rwnd).finalize())
             .map_err(|_| Error::Closed)?;
         // At the con_recv side, we use `con_recv_stream_tx` to send the new stream to the
         // user.

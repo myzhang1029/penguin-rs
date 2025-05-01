@@ -104,6 +104,12 @@ pub struct Multiplexor {
     con_recv_stream_rx: Mutex<mpsc::Receiver<MuxStream>>,
     /// Channel for `Bnd` requests.
     bnd_request_rx: Option<Mutex<mpsc::Receiver<BindRequest<'static>>>>,
+    /// Number of retries to find a suitable flow ID
+    /// See [`config::Options`] for more details.
+    max_flow_id_retries: usize,
+    /// Number of `StreamFrame`s to buffer in `MuxStream`'s channels before blocking
+    /// See [`config::Options`] for more details.
+    rwnd: u32,
 }
 
 impl Multiplexor {
@@ -122,17 +128,9 @@ impl Multiplexor {
         options: Option<config::Options>,
         task_joinset: Option<&mut JoinSet<Result<()>>>,
     ) -> Self {
-        let (mux, taskdata) = Self::new_no_task(ws, options);
-        taskdata.spawn(task_joinset);
-        mux
-    }
-
-    /// Create a new `Multiplexor` without spawning the task.
-    #[inline]
-    fn new_no_task<S: WebSocket>(ws: S, options: Option<config::Options>) -> (Self, TaskData<S>) {
         let options = options.unwrap_or_default();
-        let (datagram_tx, datagram_rx) = mpsc::channel(config::DATAGRAM_BUFFER_SIZE);
-        let (con_recv_stream_tx, con_recv_stream_rx) = mpsc::channel(config::STREAM_BUFFER_SIZE);
+        let (datagram_tx, datagram_rx) = mpsc::channel(options.datagram_buffer_size);
+        let (con_recv_stream_tx, con_recv_stream_rx) = mpsc::channel(options.stream_buffer_size);
         // This one is unbounded because the protocol provides its own flow control for `Push` frames
         // and other frame types are to be immediately processed without any backpressure,
         // so they are ok to be unbounded channels.
@@ -140,8 +138,8 @@ impl Multiplexor {
         // This one cannot be bounded because it needs to be used in Drop
         let (dropped_ports_tx, dropped_ports_rx) = mpsc::unbounded_channel();
 
-        let (bnd_request_tx, bnd_request_rx) = if options.accept_bind {
-            let (tx, rx) = mpsc::channel(config::BND_BUFFER_SIZE);
+        let (bnd_request_tx, bnd_request_rx) = if options.bind_buffer_size > 0 {
+            let (tx, rx) = mpsc::channel(options.bind_buffer_size);
             (Some(tx), Some(rx))
         } else {
             (None, None)
@@ -155,6 +153,8 @@ impl Multiplexor {
             datagram_rx: Mutex::new(datagram_rx),
             con_recv_stream_rx: Mutex::new(con_recv_stream_rx),
             bnd_request_rx: bnd_request_rx.map(Mutex::new),
+            max_flow_id_retries: options.max_flow_id_retries,
+            rwnd: options.rwnd,
         };
         let taskdata = TaskData {
             task: Task {
@@ -163,7 +163,8 @@ impl Multiplexor {
                 flows,
                 dropped_ports_tx,
                 con_recv_stream_tx,
-                default_rwnd_threshold: config::DEFAULT_RWND_THRESHOLD,
+                default_rwnd_threshold: options.default_rwnd_threshold,
+                rwnd: options.rwnd,
                 datagram_tx,
                 bnd_request_tx,
                 keepalive_interval: options.keepalive_interval,
@@ -171,7 +172,8 @@ impl Multiplexor {
             dropped_ports_rx,
             tx_frame_rx,
         };
-        (mux, taskdata)
+        taskdata.spawn(task_joinset);
+        mux
     }
 
     /// Request a channel for `host` and `port`.
@@ -190,7 +192,7 @@ impl Multiplexor {
     /// will result in a new channel being established.
     #[tracing::instrument(skip(self), level = "debug")]
     pub async fn new_stream_channel(&self, host: &[u8], port: u16) -> Result<MuxStream> {
-        let mut retries_left = config::MAX_FLOW_ID_RETRIES;
+        let mut retries_left = self.max_flow_id_retries;
         // Normally this should terminate in one loop
         while retries_left > 0 {
             retries_left -= 1;
@@ -205,7 +207,7 @@ impl Multiplexor {
             };
             trace!("sending `Connect`");
             self.tx_frame_tx
-                .send(Frame::new_connect(host, port, flow_id, config::RWND).finalize())
+                .send(Frame::new_connect(host, port, flow_id, self.rwnd).finalize())
                 .map_err(|_| Error::Closed)?;
             trace!("sending stream to user");
             let stream = stream_rx

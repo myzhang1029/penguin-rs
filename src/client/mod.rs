@@ -364,10 +364,9 @@ async fn on_connected(
     channel_timeout: Duration,
 ) -> Result<Infallible, Error> {
     let mut mux_task_joinset = JoinSet::new();
-    let options = penguin_mux::config::Options {
-        keepalive_interval: keepalive,
-        ..Default::default()
-    };
+    let options = penguin_mux::config::Options::new()
+        .keepalive_interval(keepalive)
+        .checked();
     let mut mux = Multiplexor::new(ws_stream, Some(options), Some(&mut mux_task_joinset));
     info!("Connected to server");
     // If we have a failed stream request, try it first

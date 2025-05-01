@@ -2,55 +2,132 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-/// Number of datagram frames to buffer in the channels on the receiving end.
-/// If the buffer is not read fast enough, excess datagrams will be dropped.
-pub const DATAGRAM_BUFFER_SIZE: usize = 1 << 9;
-/// Number of `MuxStream`s to buffer in the channels on the receiving end.
-/// Since there is a handshake to obtain `MuxStream`s, there should be no
-/// need to have a crazy high buffer size.
-pub const STREAM_BUFFER_SIZE: usize = 1 << 4;
-/// Number of `Bnd` requests to buffer in the channels on the receiving end.
-pub const BND_BUFFER_SIZE: usize = 1 << 4;
-/// Number of retries for establishing a connection if the other end rejects our flow_id selection.
-pub const MAX_FLOW_ID_RETRIES: usize = 3;
-
-/// Needs to be the same as `RWND` but as `usize`
-pub const RWND_USIZE: usize = RWND as usize;
-
-/// Number of `StreamFrame`s to buffer in `MuxStream`'s channels before blocking
-#[cfg(not(test))]
-pub const RWND: u32 = 1 << 9;
-#[cfg(test)]
-/// Number of `StreamFrame`s to buffer in `MuxStream`'s channels before blocking
-pub const RWND: u32 = 4;
-/// Number of [`Push`](frame::OpCode::Push) frames between [`Acknowledge`](frame::OpCode::Acknowledge)s:
-/// If too low, `Acknowledge`s will consume too much bandwidth;
-/// If too high, writers may block.
-#[cfg(not(test))]
-pub const DEFAULT_RWND_THRESHOLD: u32 = 1 << 8;
-/// Number of [`Push`](frame::OpCode::Push) frames between [`Acknowledge`](frame::OpCode::Acknowledge)s. In tests, we want to be able to
-/// test the `Acknowledge` mechanism, so we set this to be the same as the buffer size.
-/// The downside is that tests will be slower.
-#[cfg(test)]
-pub const DEFAULT_RWND_THRESHOLD: u32 = RWND;
-
-// Check for consistency at compile time
-#[allow(clippy::cast_possible_truncation)]
-const _: () = {
-    assert!(RWND >= DEFAULT_RWND_THRESHOLD);
-    assert!(RWND == RWND_USIZE as u32);
-    assert!(RWND as usize == RWND_USIZE);
-    assert!(DEFAULT_RWND_THRESHOLD > 0);
-};
-
 /// Configuration parameters for the multiplexor.
-/// Partially-initializing this struct with `Default::default()` is
-/// the recommended way to create a new `Options` struct.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+/// See each method for details on the parameters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Options {
-    /// The interval at which to send [`Ping`](tokio_tungstenite::tungstenite::protocol::Message::Ping) frames
-    pub keepalive_interval: crate::timing::OptionalDuration,
-    /// Whether this multiplexor should accept [`Bind`](frame::OpCode::Bind) requests
-    /// from the other end. This may be a security risk, so be careful.
-    pub accept_bind: bool,
+    pub(crate) keepalive_interval: crate::timing::OptionalDuration,
+    pub(crate) datagram_buffer_size: usize,
+    pub(crate) stream_buffer_size: usize,
+    pub(crate) bind_buffer_size: usize,
+    pub(crate) max_flow_id_retries: usize,
+    pub(crate) rwnd: u32,
+    pub(crate) default_rwnd_threshold: u32,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Options {
+    /// Create a new [`Options`] instance with default values.
+    #[must_use]
+    pub const fn new() -> Self {
+        const DATAGRAM_BUFFER_SIZE: usize = 1 << 9;
+        const STREAM_BUFFER_SIZE: usize = 1 << 4;
+        const MAX_FLOW_ID_RETRIES: usize = 3;
+
+        #[cfg(not(test))]
+        const RWND: u32 = 1 << 9;
+        #[cfg(test)]
+        const RWND: u32 = 4;
+        #[cfg(not(test))]
+        const DEFAULT_RWND_THRESHOLD: u32 = 1 << 8;
+        #[cfg(test)]
+        const DEFAULT_RWND_THRESHOLD: u32 = RWND;
+        Self {
+            keepalive_interval: crate::timing::OptionalDuration::NONE,
+            datagram_buffer_size: DATAGRAM_BUFFER_SIZE,
+            stream_buffer_size: STREAM_BUFFER_SIZE,
+            bind_buffer_size: 0,
+            max_flow_id_retries: MAX_FLOW_ID_RETRIES,
+            rwnd: RWND,
+            default_rwnd_threshold: DEFAULT_RWND_THRESHOLD,
+        }
+    }
+
+    /// Sets the interval at which to send [`Ping`](crate::ws::Message::Ping) frames.
+    #[must_use]
+    pub const fn keepalive_interval(mut self, interval: crate::timing::OptionalDuration) -> Self {
+        self.keepalive_interval = interval;
+        self
+    }
+
+    /// Number of datagram frames to buffer in the channels on the receiving end.
+    /// If the buffer is not read fast enough, excess datagrams will be dropped.
+    #[must_use]
+    pub const fn datagram_buffer_size(mut self, size: usize) -> Self {
+        self.datagram_buffer_size = size;
+        self
+    }
+
+    /// Number of `MuxStream`s to buffer in the channels on the receiving end.
+    /// Since there is a handshake to obtain `MuxStream`s, there should be no
+    /// need to have a crazy high buffer size.
+    #[must_use]
+    pub const fn stream_buffer_size(mut self, size: usize) -> Self {
+        self.stream_buffer_size = size;
+        self
+    }
+
+    /// Number of `Bind` requests to buffer in the channels on the receiving end.
+    /// Setting this to zero disallows the multiplexor from accepting any
+    /// [`Bind`](crate::frame::OpCode::Bind) requests from the other end and
+    /// is the default. Make sure the security implications are understood
+    /// before enabling this.
+    #[must_use]
+    pub const fn bind_buffer_size(mut self, size: usize) -> Self {
+        self.bind_buffer_size = size;
+        self
+    }
+
+    /// Number of retries for establishing a connection if the other end rejects our flow_id selection
+    #[must_use]
+    pub const fn max_flow_id_retries(mut self, retries: usize) -> Self {
+        self.max_flow_id_retries = retries;
+        self
+    }
+
+    /// Number of `StreamFrame`s to buffer in `MuxStream`'s channels before blocking
+    #[must_use]
+    pub const fn rwnd(mut self, rwnd: u32) -> Self {
+        self.rwnd = rwnd;
+        self
+    }
+
+    /// Number of [`Push`](frame::OpCode::Push) frames between [`Acknowledge`](frame::OpCode::Acknowledge)s:
+    /// If too low, `Acknowledge`s will consume too much bandwidth;
+    /// If too high, writers may block.
+    ///
+    /// Note that if the peer indicates a lower `rwnd` value in the handshake,
+    /// this value will be ignored for that connection.
+    #[must_use]
+    pub const fn default_rwnd_threshold(mut self, threshold: u32) -> Self {
+        self.default_rwnd_threshold = threshold;
+        self
+    }
+
+    /// Check the configuration parameters for validity
+    #[must_use]
+    pub const fn checked(self) -> Self {
+        assert!(
+            self.default_rwnd_threshold > 0,
+            "default_rwnd_threshold must be greater than 0"
+        );
+        assert!(
+            self.rwnd > self.default_rwnd_threshold,
+            "rwnd must be greater than default_rwnd_threshold"
+        );
+        assert!(
+            self.datagram_buffer_size > 0,
+            "datagram_buffer_size must be greater than 0"
+        );
+        assert!(
+            self.stream_buffer_size > 0,
+            "stream_buffer_size must be greater than 0"
+        );
+        self
+    }
 }
