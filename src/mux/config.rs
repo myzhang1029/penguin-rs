@@ -32,3 +32,12 @@ pub const DEFAULT_RWND_THRESHOLD: u32 = 1 << 8;
 /// The downside is that tests will be slower.
 #[cfg(test)]
 pub const DEFAULT_RWND_THRESHOLD: u32 = RWND;
+
+// Check for consistency at compile time
+#[allow(clippy::cast_possible_truncation)]
+const _: () = {
+    assert!(RWND >= DEFAULT_RWND_THRESHOLD);
+    assert!(RWND == RWND_USIZE as u32);
+    assert!(RWND as usize == RWND_USIZE);
+    assert!(DEFAULT_RWND_THRESHOLD > 0);
+};
