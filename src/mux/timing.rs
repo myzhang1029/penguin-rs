@@ -113,7 +113,7 @@ impl fmt::Display for OptionalDuration {
 }
 
 /// An optional interval
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct OptionalInterval(Option<tokio::time::Interval>);
 
 impl OptionalInterval {

@@ -15,7 +15,7 @@ use std::{fmt::Debug, mem::size_of};
 use thiserror::Error;
 
 /// Errors that can occur when parsing a frame.
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum Error {
     /// Frame is invalid or incomplete
     #[error("Frame is invalid or incomplete")]
@@ -64,6 +64,13 @@ impl AsRef<[u8]> for CowBytes<'_> {
             Self::Borrowed(data) => data,
             Self::Owned(bytes) => bytes.as_ref(),
         }
+    }
+}
+
+impl Default for CowBytes<'_> {
+    #[inline]
+    fn default() -> Self {
+        Self::Borrowed(&[])
     }
 }
 
@@ -646,7 +653,7 @@ mod tests {
                 payload: Payload::Connect(ConnectPayload {
                     rwnd: 128,
                     target_port: 5678,
-                    target_host: CowBytes::Borrowed(&[]),
+                    target_host: CowBytes::default(),
                 })
             }
         );
