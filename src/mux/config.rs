@@ -136,3 +136,28 @@ impl Options {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn test_options() {
+        let options = Options::new()
+            .keepalive_interval(Duration::from_secs(100).into())
+            .datagram_buffer_size(33)
+            .stream_buffer_size(44)
+            .bind_buffer_size(55)
+            .max_flow_id_retries(66)
+            .rwnd(77)
+            .default_rwnd_threshold(88);
+        assert_eq!(options.keepalive_interval, Duration::from_secs(100).into());
+        assert_eq!(options.datagram_buffer_size, 33);
+        assert_eq!(options.stream_buffer_size, 44);
+        assert_eq!(options.bind_buffer_size, 55);
+        assert_eq!(options.max_flow_id_retries, 66);
+        assert_eq!(options.rwnd, 77);
+        assert_eq!(options.default_rwnd_threshold, 88);
+    }
+}
