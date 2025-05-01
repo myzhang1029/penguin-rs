@@ -208,7 +208,7 @@ where
 {
     debug!("SOCKS connect");
     // Establish a connection to the remote host
-    let mut channel = request_tcp_channel(stream_command_tx_permit, rhost, rport)
+    let channel = request_tcp_channel(stream_command_tx_permit, rhost, rport)
         .await
         .map_err(|_| super::FatalError::MainLoopExitWithoutSendingStream)?;
     // Send back a successful response
@@ -218,7 +218,7 @@ where
         v4::write_response(&mut stream, 0x5a).await?;
     }
     stream.flush().await?;
-    channel.copy_bidirectional(&mut stream).await?;
+    channel.into_copy_bidirectional(&mut stream).await?;
     Ok(())
 }
 

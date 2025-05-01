@@ -118,7 +118,7 @@ pub(super) async fn udp_forward_to(
 /// It carries the errors from the underlying TCP or channel IO functions.
 #[tracing::instrument(skip(channel), level = "debug")]
 pub(super) async fn tcp_forwarder_on_channel(
-    mut channel: super::websocket::MuxStream,
+    channel: super::websocket::MuxStream,
 ) -> Result<(), Error> {
     let rhost = std::str::from_utf8(&channel.dest_host)?;
     let rport = channel.dest_port;
@@ -126,7 +126,7 @@ pub(super) async fn tcp_forwarder_on_channel(
     let mut rstream = TcpStream::connect((rhost, rport)).await?;
     // Here `rstream` should be connected. Pass the error (unlikely) otherwise
     debug!("TCP forwarding to {}", rstream.peer_addr()?);
-    channel.copy_bidirectional(&mut rstream).await?;
+    channel.into_copy_bidirectional(&mut rstream).await?;
     trace!("TCP forwarding finished");
     Ok(())
 }

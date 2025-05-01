@@ -73,13 +73,13 @@ pub(super) async fn handle_tcp(
         let (mut tcp_stream, _) = listener.accept().await.map_err(FatalError::ClientIo)?;
         // A new channel is created for each incoming TCP connection.
         // It's already TCP, anyways.
-        let mut channel =
+        let channel =
             request_tcp_channel(stream_command_tx_permit, Bytes::from_static(rhost), rport)
                 .await
                 .map_err(|_| FatalError::MainLoopExitWithoutSendingStream)?;
         // Transient errors in the forwarder don't matter.
         tokio::spawn(async move {
-            if let Err(error) = channel.copy_bidirectional(&mut tcp_stream).await {
+            if let Err(error) = channel.into_copy_bidirectional(&mut tcp_stream).await {
                 warn!("TCP forwarder failed: {error}");
             }
         });
@@ -103,11 +103,11 @@ pub(super) async fn handle_tcp_stdio(
             .reserve()
             .await
             .map_err(|_| FatalError::RequestStream)?;
-        let mut channel =
+        let channel =
             request_tcp_channel(stream_command_tx_permit, Bytes::from_static(rhost), rport)
                 .await
                 .map_err(|_| FatalError::MainLoopExitWithoutSendingStream)?;
-        match channel.copy_bidirectional(&mut stdio).await {
+        match channel.into_copy_bidirectional(&mut stdio).await {
             Ok(_) => {
                 info!("TCP stdio connection closed");
                 break Ok(());
