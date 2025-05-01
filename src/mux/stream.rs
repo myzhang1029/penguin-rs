@@ -398,11 +398,15 @@ where
                             trace!("saving the frame for later, len {size}");
                             let replaced = maybe_frame.replace((size, frame));
                             debug_assert!(replaced.is_none());
+                            // We will be woken up when we can send the frame
+                            break Poll::Pending;
                         } else {
                             // Else, the data is allowed to be sent, and we can come back here in the next iteration
                             trace!("fast path sending immediately, len {size}");
                             self.us.frame_tx.send(frame).map_err(|_| BrokenPipe)?;
                             self.wrote_bytes += size;
+                            // Nothing should go into `maybe_frame` in this case
+                            debug_assert!(maybe_frame.is_none());
                         }
                     }
                 }

@@ -15,8 +15,7 @@ pub use penguin_mux::MuxStream;
 /// Multiplex the `WebSocket` connection and handle the forwarding requests.
 #[tracing::instrument(skip(ws_stream), level = "debug")]
 pub async fn handle_websocket(ws_stream: WebSocket, reverse: bool) {
-    let options = penguin_mux::config::Options::new()
-    .bind_buffer_size(if reverse {
+    let options = penguin_mux::config::Options::new().bind_buffer_size(if reverse {
         config::BIND_BUFFER_SIZE
     } else {
         0
