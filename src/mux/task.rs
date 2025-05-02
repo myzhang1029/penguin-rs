@@ -641,7 +641,7 @@ impl<S: WebSocket> Task<S> {
     }
 
     /// EOF the local end, and wake up the writer.
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(skip_all, level = "debug", fields(flow_id = %format_args!("{flow_id:08x}")))]
     #[inline]
     fn close_port_local(&self, removed: FlowSlot, flow_id: u32, inhibit_rst: bool) {
         match removed {
