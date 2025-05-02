@@ -100,7 +100,7 @@ impl AsyncWrite for MuxStream {
     /// separate frame in a new [`Message`](crate::ws::Message), so it may be
     /// beneficial to wrap it in a [`BufWriter`](tokio::io::BufWriter) where
     /// appropriate.
-    #[tracing::instrument(skip_all, level = "trace")]
+    #[tracing::instrument(skip_all, level = "trace", fields(flow_id = self.flow_id))]
     #[inline]
     fn poll_write(
         self: Pin<&mut Self>,
@@ -114,7 +114,7 @@ impl AsyncWrite for MuxStream {
         Poll::Ready(Ok(buf.len()))
     }
 
-    #[tracing::instrument(skip(_cx), level = "trace")]
+    #[tracing::instrument(skip(_cx), level = "trace", fields(flow_id = self.flow_id))]
     #[inline]
     fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         // All writes are flushed immediately, so we don't need to do anything
@@ -124,7 +124,7 @@ impl AsyncWrite for MuxStream {
     /// Close the write end of the stream (`shutdown(SHUT_WR)`).
     /// This function will send a [`Finish`](crate::frame::OpCode::Finish) frame
     /// to the remote peer.
-    #[tracing::instrument(skip(_cx), level = "trace")]
+    #[tracing::instrument(skip(_cx), level = "trace", fields(flow_id = self.flow_id))]
     #[inline]
     fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         Poll::Ready(self.shutdown_inner())
@@ -135,7 +135,7 @@ impl AsyncBufRead for MuxStream {
     /// Poll for another `Push` frame to fill the internal buffer.
     /// Returns a reference to the internal buffer on success.
     /// See [`AsyncBufRead::poll_fill_buf`].
-    #[tracing::instrument(skip_all, level = "trace")]
+    #[tracing::instrument(skip_all, level = "trace", fields(flow_id = self.flow_id))]
     #[inline]
     fn poll_fill_buf(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<&[u8]>> {
         if self.buf.is_empty() {
@@ -174,7 +174,7 @@ impl AsyncBufRead for MuxStream {
 impl MuxStream {
     /// Increment the number of `Push` frames received since the last `Acknowledge`
     /// and send an `Acknowledge` frame if the threshold is reached.
-    #[tracing::instrument(skip_all, level = "trace", fields(flow_id = self.flow_id, count = self.psh_recvd_since + 1))]
+    #[tracing::instrument(skip_all, level = "trace", fields(count = self.psh_recvd_since + 1))]
     #[inline]
     fn increment_psh_recvd_since(&mut self) {
         trace!("received a frame");
@@ -198,7 +198,7 @@ impl MuxStream {
     /// Attempt to obtain permission to send a [`Push`](crate::frame::OpCode::Push) frame.
     /// If we need an `Acknowledge` frame to continue, the task will be woken up
     /// once the `Acknowledge` frame is received.
-    #[tracing::instrument(skip_all, level = "trace", fields(flow_id = self.flow_id))]
+    #[tracing::instrument(skip_all, level = "trace")]
     #[inline]
     fn poll_obtain_write_permission(&self, cx: &Context<'_>) -> Poll<io::Result<()>> {
         // Atomic ordering: if the operations around this line are reordered,
@@ -322,12 +322,13 @@ impl<RW> CopyBidirectional<RW>
 where
     RW: AsyncBufRead + AsyncWrite + Unpin,
 {
+    #[tracing::instrument(skip_all, level = "trace")]
     fn poll_read_us(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<u64>> {
         match self.read_state {
             ReadState::Transferring => {
                 // Loop until we are done or that some of the polls return `Pending`
                 loop {
-                    trace!("poll_read_us loop");
+                    trace!("polling us");
                     let new_buf = ready!(Pin::new(&mut self.us).poll_fill_buf(cx))?;
                     if new_buf.is_empty() {
                         // Our side EOF
@@ -407,7 +408,7 @@ where
 {
     type Output = io::Result<(u64, u64)>;
 
-    #[tracing::instrument(skip_all, level = "trace")]
+    #[tracing::instrument(skip_all, level = "trace", fields(flow_id = self.us.flow_id))]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let r = self.poll_read_us(cx);
         let w = self.poll_write_us(cx);
