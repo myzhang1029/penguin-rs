@@ -79,10 +79,10 @@ impl OptionalDuration {
     ///
     /// # Errors
     /// Returns an `Err` variant if the future does not finish in the specified duration.
-    pub async fn timeout<T>(&self, future: T) -> Result<T::Output, tokio::time::error::Elapsed>
-    where
-        T: std::future::Future,
-    {
+    pub async fn timeout<T: Future>(
+        &self,
+        future: T,
+    ) -> Result<T::Output, tokio::time::error::Elapsed> {
         match self.0 {
             Some(duration) => tokio::time::timeout(duration, future).await,
             None => Ok(future.await),

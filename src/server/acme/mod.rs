@@ -248,9 +248,8 @@ mod tests_need_pebble {
             req: http::Request<http_body_util::Full<Bytes>>,
         ) -> std::pin::Pin<
             Box<
-                dyn std::future::Future<
-                        Output = Result<instant_acme::BytesResponse, instant_acme::Error>,
-                    > + Send,
+                dyn Future<Output = Result<instant_acme::BytesResponse, instant_acme::Error>>
+                    + Send,
             >,
         > {
             let (reqwest_req, body) = req.into_parts();

@@ -14,7 +14,6 @@ use hyper::upgrade::OnUpgrade;
 use hyper_util::rt::TokioIo;
 use penguin_mux::{Dupe, PROTOCOL_VERSION, timing::OptionalDuration};
 use sha1::{Digest, Sha1};
-use std::future::Future;
 use std::pin::Pin;
 use thiserror::Error;
 use tokio_tungstenite::WebSocketStream;
