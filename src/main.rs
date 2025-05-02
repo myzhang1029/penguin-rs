@@ -15,7 +15,6 @@ mod tls;
 
 use thiserror::Error;
 use tracing::{error, trace};
-#[cfg(not(feature = "tokio-console"))]
 use tracing_subscriber::{filter, fmt, prelude::*, reload};
 
 /// Errors
@@ -36,15 +35,10 @@ impl std::fmt::Debug for Error {
     }
 }
 
-#[cfg(not(feature = "tokio-console"))]
 const QUIET_QUIET_LOG_LEVEL: filter::LevelFilter = filter::LevelFilter::ERROR;
-#[cfg(not(feature = "tokio-console"))]
 const QUIET_LOG_LEVEL: filter::LevelFilter = filter::LevelFilter::WARN;
-#[cfg(not(feature = "tokio-console"))]
 const DEFAULT_LOG_LEVEL: filter::LevelFilter = filter::LevelFilter::INFO;
-#[cfg(not(feature = "tokio-console"))]
 const VERBOSE_LOG_LEVEL: filter::LevelFilter = filter::LevelFilter::DEBUG;
-#[cfg(not(feature = "tokio-console"))]
 const VERBOSE_VERBOSE_LOG_LEVEL: filter::LevelFilter = filter::LevelFilter::TRACE;
 
 #[cfg(feature = "deadlock-detection")]
@@ -75,44 +69,39 @@ fn spawn_deadlock_detection() {
 #[tokio::main]
 /// Entry point
 async fn main() -> Result<(), Box<Error>> {
+    let (level_layer, reload_handle) = reload::Layer::new(DEFAULT_LOG_LEVEL);
+    let fmt_layer = fmt::Layer::default()
+        .compact()
+        .with_timer(fmt::time::time())
+        .with_writer(std::io::stderr)
+        .with_filter(level_layer);
     #[cfg(not(feature = "tokio-console"))]
-    let reload_handle = {
-        let fmt_layer = fmt::Layer::default()
-            .compact()
-            .with_timer(fmt::time::time())
-            .with_writer(std::io::stderr);
-        let (level_layer, reload_handle) = reload::Layer::new(DEFAULT_LOG_LEVEL);
-        tracing_subscriber::registry()
-            .with(level_layer)
-            .with(fmt_layer)
-            .init();
-        reload_handle
-    };
+    tracing_subscriber::registry().with(fmt_layer).init();
     #[cfg(feature = "tokio-console")]
-    console_subscriber::init();
+    tracing_subscriber::registry()
+        .with(console_subscriber::spawn())
+        .with(fmt_layer)
+        .init();
     arg::PenguinCli::parse_global();
     let cli_args = arg::PenguinCli::get_global();
     trace!("cli_args = {cli_args:#?}");
-    #[cfg(not(feature = "tokio-console"))]
-    {
-        match cli_args.verbose {
-            0 => {}
-            1 => reload_handle
-                .reload(VERBOSE_LOG_LEVEL)
-                .expect("Resetting log level failed (this is a bug)"),
-            _ => reload_handle
-                .reload(VERBOSE_VERBOSE_LOG_LEVEL)
-                .expect("Resetting log level failed (this is a bug)"),
-        }
-        match cli_args.quiet {
-            0 => {}
-            1 => reload_handle
-                .reload(QUIET_LOG_LEVEL)
-                .expect("Resetting log level failed (this is a bug)"),
-            _ => reload_handle
-                .reload(QUIET_QUIET_LOG_LEVEL)
-                .expect("Resetting log level failed (this is a bug)"),
-        }
+    match cli_args.verbose {
+        0 => {}
+        1 => reload_handle
+            .reload(VERBOSE_LOG_LEVEL)
+            .expect("Resetting log level failed (this is a bug)"),
+        _ => reload_handle
+            .reload(VERBOSE_VERBOSE_LOG_LEVEL)
+            .expect("Resetting log level failed (this is a bug)"),
+    }
+    match cli_args.quiet {
+        0 => {}
+        1 => reload_handle
+            .reload(QUIET_LOG_LEVEL)
+            .expect("Resetting log level failed (this is a bug)"),
+        _ => reload_handle
+            .reload(QUIET_QUIET_LOG_LEVEL)
+            .expect("Resetting log level failed (this is a bug)"),
     }
     #[cfg(feature = "deadlock-detection")]
     spawn_deadlock_detection();
@@ -133,3 +122,5 @@ compile_error!("Only one of rustls-native-roots and rustls-webpki-roots can be e
 compile_error!(
     "Only one of rustls-native-roots, rustls-webpki-roots, and nativetls can be enabled at a time"
 );
+#[cfg(all(feature = "tokio-console", feature = "remove-logging"))]
+compile_error!("tokio-console without trace-level logging is likely not desired");
