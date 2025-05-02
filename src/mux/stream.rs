@@ -87,21 +87,10 @@ impl AsyncRead for MuxStream {
         cx: &mut Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        if !ready!(self.poll_fill(cx)) {
-            // The stream has been closed. Do nothing to indicate EOF
-            return Poll::Ready(Ok(()));
-        }
-        let remaining = buf.remaining();
-        // The stream has been closed, just return 0 bytes read
-        if remaining < self.buf.len() {
-            // The buffer is too small. Fill it and advance `self.buf`
-            let to_write = self.buf.split_to(remaining);
-            buf.put_slice(&to_write);
-        } else {
-            // The buffer is large enough. Copy the frame into it
-            buf.put_slice(&self.buf);
-            self.buf.clear();
-        }
+        let got = ready!(self.as_mut().poll_fill_buf(cx))?;
+        let amt = std::cmp::min(got.len(), buf.remaining());
+        buf.put_slice(&got[..amt]);
+        self.consume(amt);
         Poll::Ready(Ok(()))
     }
 }
@@ -142,12 +131,13 @@ impl AsyncWrite for MuxStream {
     }
 }
 
-impl MuxStream {
+impl AsyncBufRead for MuxStream {
     /// Poll for another `Push` frame to fill the internal buffer.
-    /// Returns `false` if the stream has been closed.
+    /// Returns a reference to the internal buffer on success.
+    /// See [`AsyncBufRead::poll_fill_buf`].
     #[tracing::instrument(skip_all, level = "trace")]
     #[inline]
-    fn poll_fill(&mut self, cx: &mut Context<'_>) -> Poll<bool> {
+    fn poll_fill_buf(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<&[u8]>> {
         if self.buf.is_empty() {
             trace!("polling the stream");
             let Some(next) = ready!(self.frame_rx.poll_recv(cx)) else {
@@ -160,7 +150,7 @@ impl MuxStream {
                 // However, this is not an inconsistent state so we should not
                 // panic a production setup.
                 debug_assert!(self.frame_rx.try_recv().is_err());
-                return Poll::Ready(false);
+                return Poll::Ready(Ok(&[]));
             };
             // Putting no data into the buffer is EOF, and other code should
             // already ensure that such frames are filtered out.
@@ -171,9 +161,16 @@ impl MuxStream {
             // There is some data left in `self.buf`.
             trace!("using the remaining buffer");
         }
-        Poll::Ready(true)
+
+        Poll::Ready(Ok(&self.get_mut().buf))
     }
 
+    fn consume(mut self: Pin<&mut Self>, amt: usize) {
+        self.buf.advance(amt);
+    }
+}
+
+impl MuxStream {
     /// Increment the number of `Push` frames received since the last `Acknowledge`
     /// and send an `Acknowledge` frame if the threshold is reached.
     #[tracing::instrument(skip_all, level = "trace", fields(flow_id = self.flow_id, count = self.psh_recvd_since + 1))]
@@ -287,7 +284,7 @@ impl MuxStream {
             read_bytes: 0,
             wrote_bytes: 0,
             read_state: ReadState::Transferring,
-            write_state: WriteState::Transferring(None),
+            write_state: WriteState::Transferring,
         }
     }
 }
@@ -302,10 +299,10 @@ enum ReadState {
     Done,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WriteState {
-    // Peer has more data (payload size, frame)
-    Transferring(Option<(u64, FinalizedFrame)>),
+    // Peer has more data
+    Transferring,
     // Peer is done
     Done,
 }
@@ -329,23 +326,24 @@ where
             ReadState::Transferring => {
                 // Loop until we are done or that some of the polls return `Pending`
                 loop {
-                    if ready!(self.us.poll_fill(cx)) {
-                        // We either still have data or we got some new data. Try to
-                        // write it to the other side.
-                        let result =
-                            ready!(Pin::new(&mut self.other).poll_write(cx, &self.us.buf))?;
-                        self.us.buf.advance(result);
-                        self.read_bytes += result as u64;
-                        // If this write finished it, the next `poll_fill` will fetch
-                        // more frames. Otherwise, the next loop will simply try to write
-                        // the rest of the buffer.
-                    } else {
+                    trace!("poll_read_us loop");
+                    let new_buf = ready!(Pin::new(&mut self.us).poll_fill_buf(cx))?;
+                    if new_buf.is_empty() {
+                        // Our side EOF
                         self.read_state = ReadState::ShuttingDown;
                         ready!(Pin::new(&mut self.other).poll_shutdown(cx))?;
                         // If they return `Poll::Ready(Ok(()))`, we are done
                         self.read_state = ReadState::Done;
                         break Poll::Ready(Ok(self.read_bytes));
                     }
+                    // We either still have data or we got some new data. Try to
+                    // write it to the other side.
+                    let result = ready!(Pin::new(&mut self.other).poll_write(cx, new_buf))?;
+                    Pin::new(&mut self.us).consume(result);
+                    self.read_bytes += result as u64;
+                    // If this write finished it, the next `poll_fill` will fetch
+                    // more frames. Otherwise, the next loop will simply try to write
+                    // the rest of the buffer.
                 }
             }
             ReadState::ShuttingDown => {
@@ -365,50 +363,23 @@ where
 
     fn poll_write_us(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<u64>> {
         match &mut self.write_state {
-            WriteState::Transferring(maybe_frame) => {
+            WriteState::Transferring => {
                 // Means that the peer still wants to send us data
                 loop {
-                    if maybe_frame.is_some() {
-                        ready!(self.us.poll_obtain_write_permission(cx))?;
-                        // Good. We have permission to send a frame
-                        let (size, frame) = maybe_frame
-                            .take()
-                            .expect("data should be present (this is a bug)");
-                        self.wrote_bytes += size;
-                        self.us.frame_tx.send(frame).map_err(|_| BrokenPipe)?;
-                        trace!("sent a saved frame");
-                    } else {
-                        let mut other = Pin::new(&mut self.other);
-                        let (size, frame) = {
-                            let new_buf = ready!(other.as_mut().poll_fill_buf(cx))?;
-                            trace!("got {new_buf:?}");
-                            if new_buf.is_empty() {
-                                // The other side is EOF'd
-                                self.us.shutdown_inner()?;
-                                self.write_state = WriteState::Done;
-                                break Poll::Ready(Ok(self.wrote_bytes));
-                            }
-                            let frame = Frame::new_push(self.us.flow_id, new_buf).finalize();
-                            (new_buf.len(), frame)
-                        };
-                        other.consume(size);
-                        let size = size as u64;
-                        // First try sending now
-                        if self.us.poll_obtain_write_permission(cx).is_pending() {
-                            trace!("saving the frame for later, len {size}");
-                            let replaced = maybe_frame.replace((size, frame));
-                            debug_assert!(replaced.is_none());
-                            // We will be woken up when we can send the frame
-                            break Poll::Pending;
-                        } else {
-                            // Else, the data is allowed to be sent, and we can come back here in the next iteration
-                            trace!("fast path sending immediately, len {size}");
-                            self.us.frame_tx.send(frame).map_err(|_| BrokenPipe)?;
-                            self.wrote_bytes += size;
-                            // Nothing should go into `maybe_frame` in this case
-                            debug_assert!(maybe_frame.is_none());
-                        }
+                    trace!("poll_write_us loop");
+                    let new_buf = ready!(Pin::new(&mut self.other).poll_fill_buf(cx))?;
+                    if new_buf.is_empty() {
+                        // The other side is EOF'd
+                        self.us.shutdown_inner()?;
+                        self.write_state = WriteState::Done;
+                        break Poll::Ready(Ok(self.wrote_bytes));
                     }
+                    ready!(self.us.poll_obtain_write_permission(cx))?;
+                    let frame = Frame::new_push(self.us.flow_id, new_buf).finalize();
+                    self.us.frame_tx.send(frame).map_err(|_| BrokenPipe)?;
+                    let size = new_buf.len();
+                    Pin::new(&mut self.other).consume(size);
+                    self.wrote_bytes += size as u64;
                 }
             }
             WriteState::Done => {
@@ -428,8 +399,8 @@ where
 
     #[tracing::instrument(skip_all, level = "trace")]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let w = self.poll_write_us(cx);
         let r = self.poll_read_us(cx);
+        let w = self.poll_write_us(cx);
         Poll::Ready(Ok((ready!(r)?, ready!(w)?)))
     }
 }
