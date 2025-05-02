@@ -36,15 +36,14 @@ jobs:
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --component llvm-tools-preview
 
     - name: Install grcov
-      uses: baptiste0928/cargo-install@v1
+      uses: baptiste0928/cargo-install@v3
       with:
         crate: grcov
 
     - name: Install cargo-nextest
-      uses: baptiste0928/cargo-install@v1
+      uses: baptiste0928/cargo-install@v3
       with:
         crate: cargo-nextest
-        args: --locked
 
     - name: Set up Go for Pebble
       uses: actions/setup-go@v5
