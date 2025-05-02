@@ -3,7 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::*;
-use crate::ws::{Message, WebSocket};
+use crate::{
+    frame,
+    ws::{Message, WebSocket},
+};
 use std::future::poll_fn;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[cfg(feature = "tungstenite")]
@@ -614,6 +617,93 @@ async fn test_early_eof_detected_inner() {
 }
 
 #[tokio::test]
+async fn test_close_port_behaviour() {
+    setup_logging();
+    let (mut client, server) = get_pair(None).await;
+    // Let's handle the client side of the handshake by hand
+    let server_mux = Multiplexor::new(server, None, None);
+
+    let server_task = tokio::spawn(async move {
+        // In conn1 we shut down the write side properly and check for `Finish`
+        // We deliberately `accept` in the "client" side to demonstrate
+        // that the multiplexor is fully symmetric
+        let mut conn1 = server_mux.new_stream_channel(&[], 0).await.unwrap();
+        conn1.shutdown().await.unwrap();
+        drop(conn1);
+        // In conn2 we just drop the connection and check for `Reset`
+        // This time we  `accept` in the "server" side, just for fun
+        let conn2 = server_mux.accept_stream_channel().await.unwrap();
+        drop(conn2);
+    });
+    let Message::Binary(payload) = client.next().await.unwrap().unwrap() else {
+        panic!("Expected a binary message");
+    };
+    let frame = frame::Frame::try_from(payload).unwrap();
+    let Frame {
+        payload: frame::Payload::Connect(_),
+        id: flow_id,
+    } = frame
+    else {
+        panic!("Expected a Connect frame");
+    };
+    client
+        .send(Message::Binary(
+            frame::Frame::new_acknowledge(flow_id, 10).finalize().into(),
+        ))
+        .await
+        .unwrap();
+    // Expecting a `Finish` frame
+    let Message::Binary(payload) = client.next().await.unwrap().unwrap() else {
+        panic!("Expected a binary message");
+    };
+    let frame = frame::Frame::try_from(payload).unwrap();
+    let Frame {
+        payload: frame::Payload::Finish,
+        id: flow_id2,
+    } = frame
+    else {
+        panic!("Expected a Finish frame");
+    };
+    assert_eq!(flow_id, flow_id2);
+    // Send a `Connect` frame to conn2
+    client
+        .send(Message::Binary(
+            frame::Frame::new_connect(&[], 0, 41352u32, 20)
+                .finalize()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    // Expecting a `Acknowledge` frame
+    let Message::Binary(payload) = client.next().await.unwrap().unwrap() else {
+        panic!("Expected a binary message");
+    };
+    let frame = frame::Frame::try_from(payload).unwrap();
+    let Frame {
+        payload: frame::Payload::Acknowledge(_),
+        id: flow_id,
+    } = frame
+    else {
+        panic!("Expected a Acknowledge frame");
+    };
+    assert_eq!(flow_id, 41352);
+    // Expecting a `Reset` frame
+    let Message::Binary(payload) = client.next().await.unwrap().unwrap() else {
+        panic!("Expected a binary message");
+    };
+    let frame = frame::Frame::try_from(payload).unwrap();
+    let Frame {
+        payload: frame::Payload::Reset,
+        id: flow_id,
+    } = frame
+    else {
+        panic!("Expected a Reset frame");
+    };
+    assert_eq!(flow_id, 41352);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
 async fn test_several_channels() {
     setup_logging();
     let (client, server) = get_pair(None).await;
@@ -673,10 +763,10 @@ async fn test_flow_id_contention_will_give_up() {
             let Message::Binary(payload) = message else {
                 continue;
             };
-            let frame = crate::frame::Frame::try_from(payload).unwrap();
+            let frame = frame::Frame::try_from(payload).unwrap();
             if matches!(frame.payload, crate::frame::Payload::Connect(_)) {
                 debug!("Server received Connect frame, sending Reset");
-                let reset_frame = crate::frame::Frame::new_reset(frame.id);
+                let reset_frame = frame::Frame::new_reset(frame.id);
                 server
                     .send(Message::Binary((&reset_frame).into()))
                     .await
@@ -707,11 +797,11 @@ async fn test_flow_id_contention_can_succeed() {
         let Message::Binary(payload) = message else {
             return;
         };
-        let frame = crate::frame::Frame::try_from(payload).unwrap();
+        let frame = frame::Frame::try_from(payload).unwrap();
         rx_flow_ids.0 = frame.id;
         if matches!(frame.payload, crate::frame::Payload::Connect(_)) {
             debug!("Server received the first Connect frame, sending Reset");
-            let reset_frame = crate::frame::Frame::new_reset(frame.id);
+            let reset_frame = frame::Frame::new_reset(frame.id);
             server
                 .send(Message::Binary((&reset_frame).into()))
                 .await
@@ -722,11 +812,11 @@ async fn test_flow_id_contention_can_succeed() {
         let Message::Binary(payload) = message else {
             return;
         };
-        let frame = crate::frame::Frame::try_from(payload).unwrap();
+        let frame = frame::Frame::try_from(payload).unwrap();
         rx_flow_ids.1 = frame.id;
         if matches!(frame.payload, crate::frame::Payload::Connect(_)) {
             debug!("Server received the second Connect frame, sending Acknowledge");
-            let reset_frame = crate::frame::Frame::new_acknowledge(frame.id, 10);
+            let reset_frame = frame::Frame::new_acknowledge(frame.id, 10);
             server
                 .send(Message::Binary((&reset_frame).into()))
                 .await
