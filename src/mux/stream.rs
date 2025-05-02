@@ -282,10 +282,8 @@ impl MuxStream {
         CopyBidirectional {
             us: self,
             other: other_bufreader,
-            read_bytes: 0,
-            wrote_bytes: 0,
-            read_state: ReadState::Transferring,
-            write_state: WriteState::Transferring,
+            read_state: ReadState::Transferring(0),
+            write_state: WriteState::Transferring(0),
         }
     }
 }
@@ -293,27 +291,25 @@ impl MuxStream {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ReadState {
     // We have data
-    Transferring,
+    Transferring(u64),
     // We are done and we are trying to shut down the other side
-    ShuttingDown,
+    ShuttingDown(u64),
     // The other side is EOF'd
-    Done,
+    Done(u64),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WriteState {
     // Peer has more data
-    Transferring,
+    Transferring(u64),
     // Peer is done
-    Done,
+    Done(u64),
 }
 
 #[derive(Debug)]
 pub struct CopyBidirectional<RW> {
     us: MuxStream,
     other: RW,
-    read_bytes: u64,
-    wrote_bytes: u64,
     read_state: ReadState,
     write_state: WriteState,
 }
@@ -325,47 +321,46 @@ where
     #[tracing::instrument(skip_all, level = "trace")]
     fn poll_read_us(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<u64>> {
         match self.read_state {
-            ReadState::Transferring => {
+            ReadState::Transferring(mut read_amt) => {
                 // Loop until we are done or that some of the polls return `Pending`
                 loop {
                     trace!("polling us");
                     let new_buf = ready!(Pin::new(&mut self.us).poll_fill_buf(cx))?;
                     if new_buf.is_empty() {
                         // Our side EOF
-                        self.read_state = ReadState::ShuttingDown;
+                        self.read_state = ReadState::ShuttingDown(read_amt);
                         ready!(Pin::new(&mut self.other).poll_shutdown(cx))?;
                         // If they return `Poll::Ready(Ok(()))`, we are done
-                        self.read_state = ReadState::Done;
-                        break Poll::Ready(Ok(self.read_bytes));
+                        self.read_state = ReadState::Done(read_amt);
+                        break Poll::Ready(Ok(read_amt));
                     }
                     // We either still have data or we got some new data. Try to
                     // write it to the other side.
-                    let result = ready!(Pin::new(&mut self.other).poll_write(cx, new_buf))?;
-                    Pin::new(&mut self.us).consume(result);
-                    self.read_bytes += result as u64;
+                    let processed = ready!(Pin::new(&mut self.other).poll_write(cx, new_buf))?;
+                    Pin::new(&mut self.us).consume(processed);
+                    read_amt += processed as u64;
+                    self.read_state = ReadState::Transferring(read_amt);
                     // If this write finished it, the next `poll_fill` will fetch
                     // more frames. Otherwise, the next loop will simply try to write
                     // the rest of the buffer.
                 }
             }
-            ReadState::ShuttingDown => {
+            ReadState::ShuttingDown(read_amt) => {
                 // We are done reading, but we need to shut down the other side
                 // and wait for EOF
                 ready!(Pin::new(&mut self.other).poll_shutdown(cx))?;
-                self.read_state = ReadState::Done;
-                Poll::Ready(Ok(self.read_bytes))
+                self.read_state = ReadState::Done(read_amt);
+                Poll::Ready(Ok(read_amt))
             }
-            ReadState::Done => {
-                // We are done reading and the other side is EOF'd
-                // We don't need to do anything here
-                Poll::Ready(Ok(self.read_bytes))
-            }
+            // We are done reading and the other side is EOF'd
+            // We don't need to do anything here
+            ReadState::Done(read_amt) => Poll::Ready(Ok(read_amt)),
         }
     }
 
     fn poll_write_us(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<u64>> {
-        match &mut self.write_state {
-            WriteState::Transferring => {
+        match self.write_state {
+            WriteState::Transferring(mut written_amt) => {
                 // Means that the peer still wants to send us data
                 loop {
                     let mut other = Pin::new(&mut self.other);
@@ -382,22 +377,19 @@ where
                     if new_buf.is_empty() {
                         // The other side is EOF'd
                         self.us.shutdown_inner()?;
-                        self.write_state = WriteState::Done;
-                        break Poll::Ready(Ok(self.wrote_bytes));
+                        self.write_state = WriteState::Done(written_amt);
+                        break Poll::Ready(Ok(written_amt));
                     }
                     ready!(self.us.poll_obtain_write_permission(cx))?;
                     let frame = Frame::new_push(self.us.flow_id, new_buf).finalize();
                     self.us.frame_tx.send(frame).map_err(|_| BrokenPipe)?;
-                    let size = new_buf.len();
-                    Pin::new(&mut self.other).consume(size);
-                    self.wrote_bytes += size as u64;
+                    let processed = new_buf.len();
+                    Pin::new(&mut self.other).consume(processed);
+                    written_amt += processed as u64;
+                    self.write_state = WriteState::Transferring(written_amt);
                 }
             }
-            WriteState::Done => {
-                // We are done writing and the other side is EOF'd
-                // We don't need to do anything here
-                Poll::Ready(Ok(self.wrote_bytes))
-            }
+            WriteState::Done(written_amt) => Poll::Ready(Ok(written_amt)),
         }
     }
 }
