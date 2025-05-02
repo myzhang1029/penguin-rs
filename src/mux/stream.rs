@@ -367,8 +367,17 @@ where
             WriteState::Transferring => {
                 // Means that the peer still wants to send us data
                 loop {
-                    trace!("poll_write_us loop");
-                    let new_buf = ready!(Pin::new(&mut self.other).poll_fill_buf(cx))?;
+                    let mut other = Pin::new(&mut self.other);
+                    trace!("polling other");
+                    let new_buf = if let Poll::Ready(res) = other.as_mut().poll_fill_buf(cx) {
+                        res?
+                    } else {
+                        // Pending. Might want to flush away the data
+                        trace!("flushing other");
+                        ready!(other.as_mut().poll_flush(cx))?;
+                        // Still fine to return `Pending` here because `poll_fill_buf` has our waker
+                        break Poll::Pending;
+                    };
                     if new_buf.is_empty() {
                         // The other side is EOF'd
                         self.us.shutdown_inner()?;
