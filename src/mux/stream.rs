@@ -165,6 +165,7 @@ impl AsyncBufRead for MuxStream {
         Poll::Ready(Ok(&self.get_mut().buf))
     }
 
+    #[inline]
     fn consume(mut self: Pin<&mut Self>, amt: usize) {
         self.buf.advance(amt);
     }
@@ -742,8 +743,30 @@ mod tests {
             b"hello".repeat(2 * TEST_ACK_THRESHOLD).as_slice()
         );
         drop(rx_frame_tx);
+        // Write in the other side
+        for i in 0..TEST_ACK_THRESHOLD {
+            debug!("sending data chunk {i}");
+            check_side.write_all(b"hello").await.unwrap();
+            check_side.flush().await.unwrap();
+        }
         check_side.shutdown().await.unwrap();
         task.await.unwrap();
+        // Check that the data has been sent
+        let mut buf = [0u8; 5 * TEST_ACK_THRESHOLD];
+        while let Some(frame) = tx_frame_rx.recv().await {
+            let frame = Frame::try_from(frame).unwrap();
+            assert_eq!(frame.id, 1);
+            match frame.payload {
+                crate::frame::Payload::Push(push) => {
+                    buf.copy_from_slice(push.as_ref());
+                }
+                crate::frame::Payload::Finish => {
+                    break;
+                }
+                _ => panic!("Expected a `Push` frame"),
+            }
+        }
+        assert_eq!(&buf[..], b"hello".repeat(TEST_ACK_THRESHOLD).as_slice());
     }
 
     #[tokio::test]
