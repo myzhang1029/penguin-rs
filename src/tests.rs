@@ -234,6 +234,7 @@ async fn test_it_works_tls_simple() {
         keepalive: OptionalDuration::NONE,
         max_retry_count: 10,
         max_retry_interval: 10,
+        handshake_timeout: OptionalDuration::NONE,
         proxy: None,
         header: vec![],
         tls_ca: None,
