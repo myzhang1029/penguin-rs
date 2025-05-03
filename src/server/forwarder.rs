@@ -111,7 +111,7 @@ pub(super) async fn udp_forward_on(
                 socket.send_to(&datagram_frame.data, target).await?;
             }
             // Check if the timeout has expired
-            _ = this_round_timeout => {
+            () = this_round_timeout => {
                 trace!("UDP prune timeout expired");
                 break;
             }
