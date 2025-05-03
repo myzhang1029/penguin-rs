@@ -403,7 +403,7 @@ mod tests {
         );
         let req = Request::builder()
             .method(Method::GET)
-            .uri("http://example.com/health")
+            .uri("http://example.com/version")
             .body(EmptyBody::new())
             .unwrap();
         let resp = state.call(req).await.unwrap();
@@ -578,5 +578,36 @@ mod tests {
         assert_eq!(result.status(), StatusCode::NOT_FOUND);
         let body_bytes = result.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(body_bytes, "not found in the test");
+    }
+
+    #[tokio::test]
+    async fn test_stealth_websocket_upgrade_correct_psk() {
+        // Test correct PSK
+        static PSK: HeaderValue = HeaderValue::from_static("correct PSK");
+        crate::tests::setup_logging();
+        let state = State::new(
+            None,
+            Some(&PSK),
+            "not found in the test",
+            false,
+            false,
+            OptionalDuration::NONE,
+            OptionalDuration::NONE,
+        );
+        let on_upgrade = hyper::upgrade::on(http::Request::new(EmptyBody::new()));
+        let req = Request::builder()
+            .uri("wss://example.com/ws")
+            .method(Method::GET)
+            .header("connection", "UpGrAdE")
+            .header("upgrade", "WEBSOCKET")
+            .header("sec-websocket-version", "13")
+            .header("sec-websocket-protocol", &WANTED_PROTOCOL)
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .header("x-penguin-psk", &PSK)
+            .extension(on_upgrade)
+            .body(EmptyBody::new())
+            .unwrap();
+        let result = state.call(req).await.unwrap();
+        assert_eq!(result.status(), StatusCode::SWITCHING_PROTOCOLS);
     }
 }
