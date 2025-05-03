@@ -154,23 +154,34 @@ pub async fn write_response<W>(writer: &mut W, response: u8, local: SocketAddr) 
 where
     W: AsyncWrite + Unpin,
 {
-    let (address_type, address) = match local {
-        SocketAddr::V4(addr) => (0x01, addr.ip().octets().to_vec()),
-        SocketAddr::V6(addr) => (0x04, addr.ip().octets().to_vec()),
+    let mut buf = match local {
+        SocketAddr::V4(addr) => {
+            // 4 bytes header + 4 bytes address + 2 bytes port
+            let total_len = 4 + 4 + 2;
+            let mut buf = vec![0; total_len];
+            buf[3] = 0x01; // address type
+            buf[4..8].copy_from_slice(&addr.ip().octets());
+            buf
+        }
+        SocketAddr::V6(addr) => {
+            // 4 bytes header + 16 bytes address + 2 bytes port
+            let total_len = 4 + 16 + 2;
+            let mut buf = vec![0; total_len];
+            buf[3] = 0x04; // address type
+            buf[4..20].copy_from_slice(&addr.ip().octets());
+            buf
+        }
     };
+    buf[0] = 0x05; // version
+    buf[1] = response; // response code
+    buf[2] = 0x00; // reserved
     let port = local.port();
+    let len = buf.len();
+    buf[len - 2..len].copy_from_slice(&port.to_be_bytes());
     writer
-        .write_all(&[0x05, response, 0x00, address_type])
+        .write_all(&buf)
         .await
         .map_err(|e| Error::ProcessSocksRequest("write response", e))?;
-    writer
-        .write_all(&address)
-        .await
-        .map_err(|e| Error::ProcessSocksRequest("write address", e))?;
-    writer
-        .write_u16(port)
-        .await
-        .map_err(|e| Error::ProcessSocksRequest("write port", e))?;
     writer
         .flush()
         .await
