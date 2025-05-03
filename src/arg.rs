@@ -131,6 +131,10 @@ pub struct ClientArgs {
     /// disconnection.
     #[arg(long, default_value_t = 300000)]
     pub max_retry_interval: u64,
+    /// Timeout for the initial `WebSocket` handshake (in seconds).
+    /// A value of 0 disables the timeout.
+    #[arg(long, default_value = "10")]
+    pub handshake_timeout: OptionalDuration,
     /// An optional HTTP CONNECT or SOCKS5 proxy which will be
     /// used to reach the penguin server. Authentication can be specified
     /// inside the URL.
@@ -575,6 +579,8 @@ mod tests {
             "400",
             "--max-retry-interval",
             "1000",
+            "--handshake-timeout",
+            "5",
             "--proxy",
             "socks5://abc:123@localhost:1080",
             "--header",
@@ -607,6 +613,7 @@ mod tests {
             assert_eq!(args.keepalive, OptionalDuration::from_secs(10));
             assert_eq!(args.max_retry_count, 400);
             assert_eq!(args.max_retry_interval, 1000);
+            assert_eq!(args.handshake_timeout, OptionalDuration::from_secs(5));
             assert_eq!(
                 args.proxy,
                 Some("socks5://abc:123@localhost:1080".to_string())

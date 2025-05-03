@@ -45,6 +45,8 @@ pub enum Error {
     Tls(#[from] crate::tls::Error),
     #[error(transparent)]
     Mux(#[from] penguin_mux::Error),
+    #[error("Initial WebSocket handshake timed out")]
+    HandshakeTimeout,
     #[error("Stream request timed out")]
     StreamRequestTimeout,
     #[error("Remote disconnected normally")]
@@ -312,19 +314,16 @@ pub async fn client_main_inner(
                         args.keepalive,
                         args.channel_timeout,
                     )
-                    .inspect_err(|error| {
-                        warn!("Disconnected from server: {error}");
-                        // Since we once connected, reset the retry count
-                        backoff.reset();
-                    })
+                    // Since we once connected, reset the retry count
+                    .inspect_err(|_| backoff.reset())
                 })
                 .await;
             match r {
-                // Get `Ok` only if the user wants to quit
+                // Will get `Ok` only if the user wants to quit
                 Ok(()) => return Ok(()),
                 Err(e) if !e.retryable() => return Err(e.into()),
                 // else, retry
-                Err(_) => {}
+                Err(e) => warn!("Connection failed: {e}"),
             }
             let Some(current_retry_interval) = backoff.advance() else {
                 warn!("Max retry count reached, giving up");
