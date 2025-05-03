@@ -68,9 +68,7 @@ pub(super) async fn handle_socks(
             result = listener.accept() => {
                 // A failed accept() is a fatal error and should be propagated.
                 let (stream, _) = result.map_err(super::FatalError::ClientIo)?;
-                socks_jobs.spawn(async move {
-                    handle_socks_connection(stream, lhost, handler_resources).await
-                });
+                socks_jobs.spawn(handle_socks_connection(stream, lhost, handler_resources));
             }
         }
     }
