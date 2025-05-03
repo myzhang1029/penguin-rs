@@ -372,7 +372,7 @@ async fn on_connected(
     loop {
         tokio::select! {
             Some(mux_task_joinset_result) = mux_task_joinset.join_next() => {
-                mux_task_joinset_result.expect("JoinSet panicked (this is a bug)")?;
+                mux_task_joinset_result.expect("Task panicked (this is a bug)")?;
             }
             Some(sender) = stream_command_rx.recv() => {
                 get_send_stream_chan(&mux, sender, failed_stream_request, channel_timeout).await?;
@@ -400,9 +400,11 @@ async fn on_connected(
             }
             Ok(()) = tokio::signal::ctrl_c() => {
                 // `Err` means unable to listen for Ctrl-C, which we will ignore
-                info!("Received Ctrl-C, exiting in 1 second");
+                info!("Received Ctrl-C, exiting once all streams are closed");
                 drop(mux);
-                time::sleep(Duration::from_secs(1)).await;
+                while let Some(result) = mux_task_joinset.join_next().await {
+                    result.expect("Task panicked (this is a bug)")?;
+                }
                 return Ok(());
             }
             else => {
