@@ -39,7 +39,7 @@ pub async fn make_server_config_from_rcgen_pem(
         rustls_pemfile::certs(&mut certs.as_bytes()).collect();
     let crt_key = keypair.serialize_pem();
     let key = rustls_pemfile::private_key(&mut crt_key.as_bytes())?
-        .ok_or_else(|| Error::PrivateKeyNotSupported)?;
+        .ok_or(Error::PrivateKeyNotSupported)?;
     make_server_config_from_mem(certs?, key, client_ca_path).await
 }
 

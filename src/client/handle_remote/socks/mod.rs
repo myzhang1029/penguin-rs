@@ -133,7 +133,7 @@ where
             .stream_command_tx
             .reserve()
             .await
-            .map_err(|_| super::FatalError::RequestStream)?;
+            .or(Err(super::FatalError::RequestStream))?;
         handle_connect(stream, rhost, rport, stream_command_tx_permit, false).await
     } else {
         v4::write_response(&mut stream, 0x5b).await?;
@@ -172,7 +172,7 @@ where
                 .stream_command_tx
                 .reserve()
                 .await
-                .map_err(|_| super::FatalError::RequestStream)?;
+                .or(Err(super::FatalError::RequestStream))?;
             handle_connect(stream, rhost, rport, stream_command_tx_permit, true).await
         }
         0x03 => {
@@ -210,7 +210,7 @@ where
     // Establish a connection to the remote host
     let channel = request_tcp_channel(stream_command_tx_permit, rhost, rport)
         .await
-        .map_err(|_| super::FatalError::MainLoopExitWithoutSendingStream)?;
+        .or(Err(super::FatalError::MainLoopExitWithoutSendingStream))?;
     // Send back a successful response
     if version_is_5 {
         v5::write_response_unspecified(&mut stream, 0x00).await?;
@@ -292,7 +292,7 @@ async fn udp_relay(
             .datagram_tx
             .send(datagram_frame)
             .await
-            .map_err(|_| super::FatalError::SendDatagram)?;
+            .or(Err(super::FatalError::SendDatagram))?;
     }
 }
 

@@ -66,7 +66,7 @@ pub(super) async fn handle_tcp(
             .stream_command_tx
             .reserve()
             .await
-            .map_err(|_| FatalError::RequestStream)?;
+            .or(Err(FatalError::RequestStream))?;
         // Only `accept` when we have a permit to send a request.
         // This way, the backpressure is propagated to the TCP listener.
         // Not being able to accept a TCP connection is a fatal error.
@@ -76,7 +76,7 @@ pub(super) async fn handle_tcp(
         let channel =
             request_tcp_channel(stream_command_tx_permit, Bytes::from_static(rhost), rport)
                 .await
-                .map_err(|_| FatalError::MainLoopExitWithoutSendingStream)?;
+                .or(Err(FatalError::MainLoopExitWithoutSendingStream))?;
         // Transient errors in the forwarder don't matter.
         tokio::spawn(async move {
             if let Err(error) = channel.into_copy_bidirectional(&mut tcp_stream).await {
@@ -102,11 +102,11 @@ pub(super) async fn handle_tcp_stdio(
             .stream_command_tx
             .reserve()
             .await
-            .map_err(|_| FatalError::RequestStream)?;
+            .or(Err(FatalError::RequestStream))?;
         let channel =
             request_tcp_channel(stream_command_tx_permit, Bytes::from_static(rhost), rport)
                 .await
-                .map_err(|_| FatalError::MainLoopExitWithoutSendingStream)?;
+                .or(Err(FatalError::MainLoopExitWithoutSendingStream))?;
         match channel.into_copy_bidirectional(&mut stdio).await {
             Ok(_) => {
                 info!("TCP stdio connection closed");

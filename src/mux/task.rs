@@ -597,7 +597,7 @@ impl<S: WebSocket> Task<S> {
         trace!("sending `Acknowledge`");
         self.tx_frame_tx
             .send(Frame::new_acknowledge(flow_id, self.rwnd).finalize())
-            .map_err(|_| Error::Closed)?;
+            .or(Err(Error::Closed))?;
         // At the con_recv side, we use `con_recv_stream_tx` to send the new stream to the
         // user.
         trace!("sending stream to user");
@@ -605,7 +605,7 @@ impl<S: WebSocket> Task<S> {
         self.con_recv_stream_tx
             .send(stream)
             .await
-            .map_err(|_| Error::SendStreamToClient)?;
+            .or(Err(Error::SendStreamToClient))?;
         Ok(())
     }
 
@@ -625,7 +625,7 @@ impl<S: WebSocket> Task<S> {
             .establish(stream_data)
             .ok_or(Error::ConnAckGone)?
             .send(Some(stream))
-            .map_err(|_| Error::SendStreamToClient)?;
+            .or(Err(Error::SendStreamToClient))?;
         Ok(())
     }
 

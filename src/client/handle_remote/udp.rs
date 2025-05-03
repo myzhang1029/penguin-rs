@@ -53,7 +53,7 @@ pub(super) async fn handle_udp(
             .datagram_tx
             .send(frame)
             .await
-            .map_err(|_| FatalError::SendDatagram)?;
+            .or(Err(FatalError::SendDatagram))?;
     }
 }
 
@@ -84,7 +84,7 @@ pub(super) async fn handle_udp_stdio(
             .datagram_tx
             .send(frame)
             .await
-            .map_err(|_| FatalError::SendDatagram)?;
+            .or(Err(FatalError::SendDatagram))?;
     }
 }
 
