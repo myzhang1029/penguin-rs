@@ -301,17 +301,20 @@ pub async fn client_main_inner(
             // TODO: Timeout for `ws_connect::handshake`.
             match ws_connect::handshake(args).await {
                 Ok(ws_stream) => {
-                    let error = on_connected(
+                    let Err(error) = on_connected(
                         ws_stream,
                         &mut stream_command_rx,
                         &mut failed_stream_request,
                         &mut datagram_rx,
                         &handler_resources.udp_client_map,
                         args.keepalive,
-                        channel_timeout,
+                        args.channel_timeout,
                     )
                     .await
-                    .expect_err("on_connected should never return `Ok` (this is a bug)");
+                    else {
+                        // Reach here only if the user wants to quit
+                        return Ok(());
+                    };
                     if error.retryable() {
                         warn!("Disconnected from server: {error}");
                         // Since we once connected, reset the retry count
@@ -362,7 +365,7 @@ async fn on_connected(
     udp_client_map: &RwLock<ClientIdMaps>,
     keepalive: OptionalDuration,
     channel_timeout: Duration,
-) -> Result<Infallible, Error> {
+) -> Result<(), Error> {
     let mut mux_task_joinset = JoinSet::new();
     let options = penguin_mux::config::Options::new().keepalive_interval(keepalive);
     let mut mux = Multiplexor::new(ws_stream, Some(options), Some(&mut mux_task_joinset));
@@ -400,6 +403,13 @@ async fn on_connected(
                         info!("Received datagram for unknown client ID: {client_id:08x}");
                     }
                 }
+            }
+            Ok(()) = tokio::signal::ctrl_c() => {
+                // `Err` means unable to listen for Ctrl-C, which we will ignore
+                info!("Received Ctrl-C, exiting in 1 second");
+                drop(mux);
+                time::sleep(Duration::from_secs(1)).await;
+                return Ok(());
             }
             else => {
                 // The multiplexor has closed for some reason
