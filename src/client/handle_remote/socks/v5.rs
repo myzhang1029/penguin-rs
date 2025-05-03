@@ -14,7 +14,7 @@ use tracing::trace;
 /// # Errors
 /// Underlying I/O error with a description of the context.
 #[inline]
-pub async fn read_auth_methods<R>(mut reader: R) -> Result<Vec<u8>, Error>
+pub async fn read_auth_methods<R>(reader: &mut R) -> Result<Vec<u8>, Error>
 where
     R: AsyncRead + Unpin,
 {
@@ -35,7 +35,7 @@ where
 /// # Errors
 /// Underlying I/O error with a description of the context.
 #[inline]
-pub async fn write_auth_method<W>(mut writer: W, method: u8) -> Result<(), Error>
+pub async fn write_auth_method<W>(writer: &mut W, method: u8) -> Result<(), Error>
 where
     W: AsyncWrite + Unpin,
 {
@@ -57,7 +57,7 @@ where
 /// # Errors
 /// Underlying I/O error with a description of the context.
 #[inline]
-pub async fn read_request<RW>(mut stream: RW) -> Result<(u8, Bytes, u16), Error>
+pub async fn read_request<RW>(stream: &mut RW) -> Result<(u8, Bytes, u16), Error>
 where
     RW: AsyncRead + AsyncWrite + Unpin,
 {
@@ -76,7 +76,7 @@ where
         .read_u8()
         .await
         .map_err(|e| Error::ProcessSocksRequest("read reserved", e))?;
-    let address = read_address(&mut stream).await?;
+    let address = read_address(stream).await?;
     let port = stream
         .read_u16()
         .await
@@ -89,7 +89,7 @@ where
 /// # Errors
 /// Underlying I/O error with a description of the context.
 #[inline]
-async fn read_address<RW>(mut stream: RW) -> Result<Bytes, Error>
+async fn read_address<RW>(stream: &mut RW) -> Result<Bytes, Error>
 where
     RW: AsyncRead + AsyncWrite + Unpin,
 {
@@ -150,7 +150,7 @@ where
 /// # Errors
 /// Underlying I/O error with a description of the context.
 #[inline]
-pub async fn write_response<W>(mut writer: W, response: u8, local: SocketAddr) -> Result<(), Error>
+pub async fn write_response<W>(writer: &mut W, response: u8, local: SocketAddr) -> Result<(), Error>
 where
     W: AsyncWrite + Unpin,
 {
@@ -183,7 +183,7 @@ where
 /// # Errors
 /// Underlying I/O error with a description of the context.
 #[inline]
-pub async fn write_response_unspecified<W>(mut writer: W, response: u8) -> Result<(), Error>
+pub async fn write_response_unspecified<W>(writer: &mut W, response: u8) -> Result<(), Error>
 where
     W: AsyncWrite + Unpin,
 {

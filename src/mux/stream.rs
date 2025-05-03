@@ -279,9 +279,19 @@ impl MuxStream {
         RW: AsyncRead + AsyncWrite + Unpin,
     {
         let other_bufreader = BufReader::new(other);
+        self.into_copy_bidirectional_with_buf(other_bufreader)
+    }
+
+    /// See [`into_copy_bidirectional`]. This version allows you to
+    /// provide your own read buffer for the other side.
+    #[inline]
+    pub const fn into_copy_bidirectional_with_buf<BRW>(self, other: BRW) -> CopyBidirectional<BRW>
+    where
+        BRW: AsyncBufRead + AsyncWrite + Unpin,
+    {
         CopyBidirectional {
             us: self,
-            other: other_bufreader,
+            other,
             read_state: ReadState::Transferring(0),
             write_state: WriteState::Transferring(0),
         }

@@ -2,10 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use std::net::Ipv4Addr;
-
 use super::Error;
 use bytes::Bytes;
+use std::net::Ipv4Addr;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tracing::trace;
 
@@ -16,7 +15,7 @@ use tracing::trace;
 /// # Errors
 /// Underlying I/O error with a description of the context.
 #[inline]
-pub async fn read_request<R>(mut reader: R) -> Result<(u8, Bytes, u16), Error>
+pub async fn read_request<R>(reader: &mut R) -> Result<(u8, Bytes, u16), Error>
 where
     R: AsyncBufRead + Unpin,
 {
@@ -39,7 +38,7 @@ where
         .map_err(|e| Error::ProcessSocksRequest("read user id", e))?;
     // Remove the null byte
     user_id.pop();
-    trace!("User ID: {:?}", user_id);
+    trace!("User ID: {user_id:?}");
     let rhost = if ip >> 24 == 0 {
         let mut domain = Vec::new();
         reader
@@ -60,7 +59,7 @@ where
 /// # Errors
 /// Underlying I/O error with a description of the context.
 #[inline]
-pub async fn write_response<W>(mut writer: W, response: u8) -> Result<(), Error>
+pub async fn write_response<W>(writer: &mut W, response: u8) -> Result<(), Error>
 where
     W: AsyncWrite + Unpin,
 {
