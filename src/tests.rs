@@ -95,7 +95,52 @@ async fn test_client_handshake_timeout() {
     )
     .await
     .unwrap_err();
-    assert!(matches!(r, crate::client::Error::HandshakeTimeout));
+    let crate::client::Error::MaxRetryCountReached(e) = r else {
+        panic!("Expected MaxRetryCountReached, got {r:?}");
+    };
+    assert!(
+        matches!(*e, crate::client::Error::HandshakeTimeout),
+        "Expected HandshakeTimeout, got {e:?}",
+    );
+}
+
+#[tokio::test]
+async fn test_client_handshake_timeout_will_retry() {
+    static CLIENT_ARGS: OnceLock<arg::ClientArgs> = OnceLock::new();
+    static HANDLER_RESOURCES: OnceLock<crate::client::HandlerResources> = OnceLock::new();
+    setup_logging();
+    let blackhole = TcpListener::bind("[::1]:0").await.unwrap();
+    let addr = blackhole.local_addr().unwrap();
+    let client_args = arg::ClientArgs {
+        server: ServerUrl::from_str(&format!("ws://{addr}/ws")).unwrap(),
+        remote: vec![Remote::from_str("[::1]:0:socks").unwrap()],
+        keepalive: OptionalDuration::NONE,
+        max_retry_count: 3,
+        handshake_timeout: OptionalDuration::from_secs(1),
+        ..Default::default()
+    };
+    CLIENT_ARGS.set(client_args).unwrap();
+    let (handler_resources, stream_command_rx, datagram_rx) =
+        crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let initial_time = std::time::Instant::now();
+    let r = crate::client::client_main_inner(
+        CLIENT_ARGS.get().unwrap(),
+        HANDLER_RESOURCES.get().unwrap(),
+        stream_command_rx,
+        datagram_rx,
+    )
+    .await
+    .unwrap_err();
+    let elapsed = initial_time.elapsed();
+    let crate::client::Error::MaxRetryCountReached(e) = r else {
+        panic!("Expected MaxRetryCountReached, got {r:?}");
+    };
+    assert!(
+        matches!(*e, crate::client::Error::HandshakeTimeout),
+        "Expected HandshakeTimeout, got {e:?}",
+    );
+    assert!(elapsed.as_secs() > 2);
 }
 
 #[tokio::test]

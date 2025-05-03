@@ -31,8 +31,8 @@ use tracing::{error, info, trace, warn};
 /// Errors
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("Maximum retry count reached")]
-    MaxRetryCountReached,
+    #[error("Maximum retry count reached (last error: {0})")]
+    MaxRetryCountReached(Box<Self>),
     #[error("Failed to parse remote: {0}")]
     ParseRemote(#[from] crate::parse_remote::Error),
     #[error("Remote handler exited: {0}")]
@@ -322,14 +322,16 @@ pub async fn client_main_inner(
                 Ok(()) => return Ok(()),
                 Err(ref e) if !e.retryable() => return r,
                 // else, retry
-                Err(e) => warn!("Connection failed: {e}"),
+                Err(e) => {
+                    warn!("Connection failed: {e}");
+                    let Some(current_retry_interval) = backoff.advance() else {
+                        warn!("Max retry count reached, giving up");
+                        return Err(Error::MaxRetryCountReached(Box::new(e)));
+                    };
+                    warn!("Reconnecting in {current_retry_interval:?}");
+                    time::sleep(current_retry_interval).await;
+                }
             }
-            let Some(current_retry_interval) = backoff.advance() else {
-                warn!("Max retry count reached, giving up");
-                return Err(Error::MaxRetryCountReached);
-            };
-            warn!("Reconnecting in {current_retry_interval:?}");
-            time::sleep(current_retry_interval).await;
         }
     };
     tokio::select! {
