@@ -302,7 +302,6 @@ pub async fn client_main_inner(
         let mut failed_stream_request: Option<StreamCommand> = None;
         // Retry loop
         loop {
-            // TODO: Timeout for `ws_connect::handshake`.
             let r = ws_connect::handshake(args)
                 .and_then(|ws_stream| {
                     on_connected(

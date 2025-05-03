@@ -69,6 +69,36 @@ async fn make_server_cert_ecdsa() -> TempDir {
 }
 
 #[tokio::test]
+async fn test_client_handshake_timeout() {
+    static CLIENT_ARGS: OnceLock<arg::ClientArgs> = OnceLock::new();
+    static HANDLER_RESOURCES: OnceLock<crate::client::HandlerResources> = OnceLock::new();
+    setup_logging();
+    let blackhole = TcpListener::bind("[::1]:0").await.unwrap();
+    let addr = blackhole.local_addr().unwrap();
+    let client_args = arg::ClientArgs {
+        server: ServerUrl::from_str(&format!("ws://{addr}/ws")).unwrap(),
+        remote: vec![Remote::from_str("[::1]:0:socks").unwrap()],
+        keepalive: OptionalDuration::NONE,
+        max_retry_count: 1,
+        handshake_timeout: OptionalDuration::from_secs(1),
+        ..Default::default()
+    };
+    CLIENT_ARGS.set(client_args).unwrap();
+    let (handler_resources, stream_command_rx, datagram_rx) =
+        crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let r = crate::client::client_main_inner(
+        CLIENT_ARGS.get().unwrap(),
+        HANDLER_RESOURCES.get().unwrap(),
+        stream_command_rx,
+        datagram_rx,
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(r, crate::client::Error::HandshakeTimeout));
+}
+
+#[tokio::test]
 async fn test_it_works() {
     static SERVER_ARGS: LazyLock<arg::ServerArgs> =
         LazyLock::new(|| make_server_args("127.0.0.1", 30554));
