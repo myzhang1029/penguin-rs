@@ -561,7 +561,7 @@ mod tests {
         let (rx_frame_tx, rx_frame_rx) = mpsc::channel(DEFAULT_RWND_THRESHOLD as usize);
         let (tx_frame_tx, mut tx_frame_rx) = mpsc::unbounded_channel();
         let (dropped_ports_tx, _) = mpsc::unbounded_channel();
-        let (mut other_stream, mut check_side) = tokio::io::duplex(1024);
+        let (other_stream, mut check_side) = tokio::io::duplex(1024);
 
         let mux_stream = MuxStream {
             frame_rx: rx_frame_rx,
@@ -578,10 +578,7 @@ mod tests {
             rwnd_threshold: DEFAULT_RWND_THRESHOLD,
         };
 
-        let copy_task =
-            tokio::spawn(
-                async move { mux_stream.into_copy_bidirectional(&mut other_stream).await },
-            );
+        let copy_task = tokio::spawn(mux_stream.into_copy_bidirectional(other_stream));
 
         let waker = futures_util::task::noop_waker();
         let mut cx = Context::from_waker(&waker);
@@ -664,7 +661,7 @@ mod tests {
         let (rx_frame_tx, rx_frame_rx) = mpsc::channel(TEST_ACK_THRESHOLD);
         let (tx_frame_tx, mut tx_frame_rx) = mpsc::unbounded_channel();
         let (dropped_ports_tx, _) = mpsc::unbounded_channel();
-        let (mut other_stream, mut check_side) = tokio::io::duplex(1024);
+        let (other_stream, mut check_side) = tokio::io::duplex(1024);
         let mut mux_stream = MuxStream {
             frame_rx: rx_frame_rx,
             flow_id: 1,
@@ -707,12 +704,7 @@ mod tests {
             panic!("Expected an `Acknowledge` frame");
         }
         // Now test with `copy_bidirectional`
-        let task = tokio::spawn(async move {
-            mux_stream
-                .into_copy_bidirectional(&mut other_stream)
-                .await
-                .unwrap()
-        });
+        let task = tokio::spawn(mux_stream.into_copy_bidirectional(other_stream));
         for i in 0..2 * TEST_ACK_THRESHOLD {
             debug!("sending frame {i}");
             rx_frame_tx
@@ -752,7 +744,7 @@ mod tests {
             check_side.flush().await.unwrap();
         }
         check_side.shutdown().await.unwrap();
-        task.await.unwrap();
+        task.await.unwrap().unwrap();
         // Check that the data has been sent
         let mut buf = [0u8; 5 * TEST_ACK_THRESHOLD];
         while let Some(frame) = tx_frame_rx.recv().await {
