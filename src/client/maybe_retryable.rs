@@ -70,7 +70,6 @@ impl MaybeRetryableError for super::Error {
     fn retryable(&self) -> bool {
         match self {
             Self::Tungstenite(e) => e.retryable(),
-            Self::Tls(_) => false,
             Self::Mux(e) => e.retryable(),
             Self::StreamRequestTimeout | Self::RemoteDisconnected => true,
             _ => false,

@@ -62,12 +62,12 @@ pub async fn handshake(
     };
     let (ws_stream, _response) = args
         .handshake_timeout
-        .timeout(connect_async_tls_with_config(
+        .timeout(Box::pin(connect_async_tls_with_config(
             req,
             None,
             false,
             Some(connector),
-        ))
+        )))
         .await
         .or(Err(super::Error::HandshakeTimeout))??;
     // We don't need to check the response now...
