@@ -331,7 +331,13 @@ pub async fn client_main_inner(
                         return Err(Error::MaxRetryCountReached(Box::new(e)));
                     };
                     warn!("Reconnecting in {current_retry_interval:?}");
-                    time::sleep(current_retry_interval).await;
+                    if time::timeout(current_retry_interval, tokio::signal::ctrl_c())
+                        .await
+                        .is_ok()
+                    {
+                        // Not timed out, which means the user pressed Ctrl-C
+                        return Err(Error::HandshakeCancelled);
+                    }
                 }
             }
         }
