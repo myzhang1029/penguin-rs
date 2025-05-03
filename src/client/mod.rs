@@ -160,7 +160,7 @@ pub struct ClientIdMaps {
     client_id_map: HashMap<u32, ClientIdMapEntry>,
     /// (client address, our address) -> client ID
     /// We need our address to make sure we send replies with the correct source address
-    /// because different remotes and socks5 associations use different listners
+    /// because different remotes and socks5 associations use different listeners
     client_addr_map: HashMap<(SocketAddr, SocketAddr), u32>,
 }
 
@@ -174,7 +174,7 @@ impl ClientIdMaps {
     }
 
     /// Send a datagram to a client
-    async fn send_datagram(
+    async fn send_datagram_reply(
         lock_self: &RwLock<Self>,
         client_id: u32,
         data: &[u8],
@@ -362,11 +362,11 @@ async fn on_connected(
 ) -> Result<(), Error> {
     let mut mux_task_joinset = JoinSet::new();
     let options = penguin_mux::config::Options::new().keepalive_interval(keepalive);
-    let mut mux = Multiplexor::new(ws_stream, Some(options), Some(&mut mux_task_joinset));
+    let mux = Multiplexor::new(ws_stream, Some(options), Some(&mut mux_task_joinset));
     info!("Connected to server");
     // If we have a failed stream request, try it first
     if let Some(sender) = failed_stream_request.take() {
-        get_send_stream_chan(&mut mux, sender, failed_stream_request, channel_timeout).await?;
+        get_send_stream_chan(&mux, sender, failed_stream_request, channel_timeout).await?;
     }
     // Main loop
     loop {
@@ -375,7 +375,7 @@ async fn on_connected(
                 mux_task_joinset_result.expect("JoinSet panicked (this is a bug)")?;
             }
             Some(sender) = stream_command_rx.recv() => {
-                get_send_stream_chan(&mut mux, sender, failed_stream_request, channel_timeout).await?;
+                get_send_stream_chan(&mux, sender, failed_stream_request, channel_timeout).await?;
             }
             Some(datagram) = datagram_rx.recv() => {
                 if let Err(e) = mux.send_datagram(datagram).await {
@@ -385,7 +385,7 @@ async fn on_connected(
             Ok(dgram_frame) = mux.get_datagram() => {
                 let client_id = dgram_frame.flow_id;
                 let data = dgram_frame.data;
-                match ClientIdMaps::send_datagram(udp_client_map, client_id, data.as_ref()).await {
+                match ClientIdMaps::send_datagram_reply(udp_client_map, client_id, data.as_ref()).await {
                     Some(Ok(())) => {
                         trace!("sent datagram to client {client_id:08x}");
                     }
@@ -417,7 +417,7 @@ async fn on_connected(
 /// If we fail, put the request back in the failed_stream_request slot.
 #[tracing::instrument(skip_all, level = "trace")]
 async fn get_send_stream_chan(
-    mux: &mut Multiplexor,
+    mux: &Multiplexor,
     stream_command: StreamCommand,
     failed_stream_request: &mut Option<StreamCommand>,
     channel_timeout: OptionalDuration,
