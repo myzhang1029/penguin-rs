@@ -60,17 +60,20 @@ pub async fn handshake(
         warn!("Using insecure WebSocket connection");
         Connector::Plain
     };
-    let (ws_stream, _response) = args
-        .handshake_timeout
-        .timeout(Box::pin(connect_async_tls_with_config(
-            req,
-            None,
-            false,
-            Some(connector),
-        )))
-        .await
-        .or(Err(super::Error::HandshakeTimeout))??;
-    // We don't need to check the response now...
-    debug!("WebSocket handshake succeeded");
-    Ok(ws_stream)
+    let handshake = Box::pin(connect_async_tls_with_config(
+        req,
+        None,
+        false,
+        Some(connector),
+    ));
+    tokio::select! {
+        result = handshake => {
+            let (ws_stream, _response) = result?;
+            // We don't need to check the response now...
+            debug!("WebSocket handshake succeeded");
+            Ok(ws_stream)
+        }
+        () = args.handshake_timeout.sleep() => Err(super::Error::HandshakeTimeout),
+        Ok(()) = tokio::signal::ctrl_c() => Err(super::Error::HandshakeCancelled),
+    }
 }

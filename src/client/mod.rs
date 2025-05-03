@@ -47,6 +47,8 @@ pub enum Error {
     Mux(#[from] penguin_mux::Error),
     #[error("Initial WebSocket handshake timed out")]
     HandshakeTimeout,
+    #[error("User cancelled initial WebSocket handshake")]
+    HandshakeCancelled,
     #[error("Stream request timed out")]
     StreamRequestTimeout,
     #[error("Remote disconnected normally")]

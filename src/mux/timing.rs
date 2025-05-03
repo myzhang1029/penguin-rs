@@ -88,6 +88,14 @@ impl OptionalDuration {
             None => Ok(future.await),
         }
     }
+
+    /// Use the optional duration to sleep
+    pub async fn sleep(&self) {
+        match self.0 {
+            Some(duration) => tokio::time::sleep(duration).await,
+            None => std::future::pending().await,
+        }
+    }
 }
 
 impl std::str::FromStr for OptionalDuration {
