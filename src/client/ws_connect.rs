@@ -6,7 +6,6 @@ use crate::arg::ClientArgs;
 use crate::tls::make_tls_connector;
 use http::header::HeaderValue;
 use penguin_mux::{Dupe, PROTOCOL_VERSION};
-use thiserror::Error;
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, handshake::client::Request};
 use tokio_tungstenite::{
@@ -14,22 +13,11 @@ use tokio_tungstenite::{
 };
 use tracing::{debug, warn};
 
-/// Error type for `WebSocket` connection.
-#[derive(Error, Debug)]
-pub enum Error {
-    /// Invalid URL or cannot connect
-    #[error(transparent)]
-    Tungstenite(#[from] tokio_tungstenite::tungstenite::Error),
-    /// TLS error
-    #[error(transparent)]
-    Tls(#[from] crate::tls::Error),
-}
-
 /// Perform a `WebSocket` handshake.
 #[tracing::instrument(skip_all, fields(server = %args.server.0), level = "debug")]
 pub async fn handshake(
     args: &ClientArgs,
-) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Error> {
+) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, super::Error> {
     // We already sanitized https URLs to wss
     let is_tls = args
         .server

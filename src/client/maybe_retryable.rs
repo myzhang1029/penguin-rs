@@ -66,19 +66,11 @@ impl MaybeRetryableError for penguin_mux::Error {
     }
 }
 
-impl MaybeRetryableError for super::ws_connect::Error {
+impl MaybeRetryableError for super::Error {
     fn retryable(&self) -> bool {
         match self {
             Self::Tungstenite(e) => e.retryable(),
             Self::Tls(_) => false,
-        }
-    }
-}
-
-impl MaybeRetryableError for super::Error {
-    fn retryable(&self) -> bool {
-        match self {
-            Self::Connect(e) => e.retryable(),
             Self::Mux(e) => e.retryable(),
             Self::StreamRequestTimeout | Self::RemoteDisconnected => true,
             _ => false,

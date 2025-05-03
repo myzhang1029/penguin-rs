@@ -11,11 +11,11 @@ use self::maybe_retryable::MaybeRetryableError;
 use crate::arg::ClientArgs;
 use crate::config;
 use bytes::Bytes;
+use futures_util::TryFutureExt;
 use parking_lot::RwLock;
 use penguin_mux::timing::{Backoff, OptionalDuration};
 use penguin_mux::{Datagram, Dupe, IntKey, Multiplexor, MuxStream};
 use std::collections::HashMap;
-use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -37,8 +37,12 @@ pub enum Error {
     ParseRemote(#[from] crate::parse_remote::Error),
     #[error("Remote handler exited: {0}")]
     RemoteHandlerExited(#[from] handle_remote::FatalError),
-    #[error("Failed to connect WebSocket: {0}")]
-    Connect(#[from] ws_connect::Error),
+    /// Invalid URL or cannot connect
+    #[error(transparent)]
+    Tungstenite(#[from] tokio_tungstenite::tungstenite::Error),
+    /// TLS error
+    #[error(transparent)]
+    Tls(#[from] crate::tls::Error),
     #[error(transparent)]
     Mux(#[from] penguin_mux::Error),
     #[error("Stream request timed out")]
@@ -294,14 +298,12 @@ pub async fn client_main_inner(
         );
         // Place to park one failed stream request so that it can be retried
         let mut failed_stream_request: Option<StreamCommand> = None;
-        // Timeout for channel requests
-        let channel_timeout = Duration::from_secs(args.channel_timeout);
         // Retry loop
         loop {
             // TODO: Timeout for `ws_connect::handshake`.
-            match ws_connect::handshake(args).await {
-                Ok(ws_stream) => {
-                    let Err(error) = on_connected(
+            let r = ws_connect::handshake(args)
+                .and_then(|ws_stream| {
+                    on_connected(
                         ws_stream,
                         &mut stream_command_rx,
                         &mut failed_stream_request,
@@ -310,28 +312,20 @@ pub async fn client_main_inner(
                         args.keepalive,
                         args.channel_timeout,
                     )
-                    .await
-                    else {
-                        // Reach here only if the user wants to quit
-                        return Ok(());
-                    };
-                    if error.retryable() {
+                    .inspect_err(|error| {
                         warn!("Disconnected from server: {error}");
                         // Since we once connected, reset the retry count
                         backoff.reset();
-                        // Now retry
-                    } else {
-                        return Err(error);
-                    }
-                }
-                Err(e) if !e.retryable() => {
-                    return Err(e.into());
-                }
-                Err(_) => {
-                    // else, retry
-                }
+                    })
+                })
+                .await;
+            match r {
+                // Get `Ok` only if the user wants to quit
+                Ok(()) => return Ok(()),
+                Err(e) if !e.retryable() => return Err(e.into()),
+                // else, retry
+                Err(_) => {}
             }
-            // If we get here, retry.
             let Some(current_retry_interval) = backoff.advance() else {
                 warn!("Max retry count reached, giving up");
                 return Err(Error::MaxRetryCountReached);
@@ -364,7 +358,7 @@ async fn on_connected(
     datagram_rx: &mut mpsc::Receiver<Datagram>,
     udp_client_map: &RwLock<ClientIdMaps>,
     keepalive: OptionalDuration,
-    channel_timeout: Duration,
+    channel_timeout: OptionalDuration,
 ) -> Result<(), Error> {
     let mut mux_task_joinset = JoinSet::new();
     let options = penguin_mux::config::Options::new().keepalive_interval(keepalive);
@@ -426,14 +420,12 @@ async fn get_send_stream_chan(
     mux: &mut Multiplexor,
     stream_command: StreamCommand,
     failed_stream_request: &mut Option<StreamCommand>,
-    channel_timeout: Duration,
+    channel_timeout: OptionalDuration,
 ) -> Result<(), Error> {
     trace!("requesting a new TCP channel");
-    match tokio::time::timeout(
-        channel_timeout,
-        mux.new_stream_channel(&stream_command.host, stream_command.port),
-    )
-    .await
+    match channel_timeout
+        .timeout(mux.new_stream_channel(&stream_command.host, stream_command.port))
+        .await
     {
         Ok(Ok(stream)) => {
             trace!("got a new channel");

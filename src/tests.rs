@@ -45,7 +45,7 @@ fn make_client_args(servhost: &str, servport: u16, remotes: Vec<Remote>) -> arg:
         max_retry_interval: 10,
         tls_skip_verify: false,
         hostname: Some(http::HeaderValue::from_static("localhost")),
-        channel_timeout: 10,
+        channel_timeout: OptionalDuration::from_secs(10),
         ..Default::default()
     }
 }
@@ -241,7 +241,7 @@ async fn test_it_works_tls_simple() {
         tls_key: None,
         tls_skip_verify: true,
         hostname: Some(http::HeaderValue::from_static("localhost")),
-        channel_timeout: 10,
+        channel_timeout: OptionalDuration::from_secs(10),
         _pid: false,
         _fingerprint: None,
         _auth: None,
