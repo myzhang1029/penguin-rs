@@ -75,7 +75,7 @@ mod mock {
             let Some(sender) = &self.0 else {
                 return Err(crate::Error::Closed);
             };
-            sender.send(item).map_err(|_| crate::Error::Closed)?;
+            sender.send(item).or(Err(crate::Error::Closed))?;
             Ok(())
         }
 

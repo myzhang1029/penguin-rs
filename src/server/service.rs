@@ -186,7 +186,7 @@ impl State<'static> {
             // downgrade to HTTP/1.1 and let them upgrade if they want to.
             // *req.version_mut() = http::version::Version::default();
             self.exec_request(req).await.or_else(|e| {
-                error!("Failed to proxy request to backend: {}", e);
+                error!("Failed to proxy request to backend: {e}");
                 self.not_found_handler()
             })
         } else {

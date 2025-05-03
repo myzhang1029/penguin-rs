@@ -211,13 +211,13 @@ impl Multiplexor {
             trace!("sending `Connect`");
             self.tx_frame_tx
                 .send(Frame::new_connect(host, port, flow_id, self.rwnd).finalize())
-                .map_err(|_| Error::Closed)?;
+                .or(Err(Error::Closed))?;
             trace!("sending stream to user");
             let stream = stream_rx
                 .await
                 // Happens if the task exits before sending the stream,
                 // thus `Closed` is the correct error
-                .map_err(|_| Error::Closed)?;
+                .or(Err(Error::Closed))?;
             if let Some(s) = stream {
                 return Ok(s);
             }
@@ -283,7 +283,7 @@ impl Multiplexor {
         );
         self.tx_frame_tx
             .send(frame.finalize())
-            .map_err(|_| Error::Closed)?;
+            .or(Err(Error::Closed))?;
         Ok(())
     }
 
@@ -311,10 +311,8 @@ impl Multiplexor {
             flow_id
         };
         let bnd_frame = Frame::new_bind(flow_id, bind_type, host, port).finalize();
-        self.tx_frame_tx
-            .send(bnd_frame)
-            .map_err(|_| Error::Closed)?;
-        let result = result_rx.await.map_err(|_| Error::Closed)?;
+        self.tx_frame_tx.send(bnd_frame).or(Err(Error::Closed))?;
+        let result = result_rx.await.or(Err(Error::Closed))?;
         Ok(result)
     }
 
@@ -511,7 +509,7 @@ impl BindRequest<'_> {
             self.tx_frame_tx
                 .send(Frame::new_reset(self.flow_id).finalize())
         }
-        .map_err(|_| Error::Closed)
+        .or(Err(Error::Closed))
     }
 }
 

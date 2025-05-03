@@ -109,7 +109,7 @@ impl AsyncWrite for MuxStream {
     ) -> Poll<io::Result<usize>> {
         ready!(self.poll_obtain_write_permission(cx))?;
         let frame = Frame::new_push(self.flow_id, buf).finalize();
-        self.frame_tx.send(frame).map_err(|_| BrokenPipe)?;
+        self.frame_tx.send(frame).or(Err(BrokenPipe))?;
         trace!("sent a frame");
         Poll::Ready(Ok(buf.len()))
     }
@@ -255,7 +255,7 @@ impl MuxStream {
         }
         self.frame_tx
             .send(Frame::new_finish(self.flow_id).finalize())
-            .map_err(|_| BrokenPipe)?;
+            .or(Err(BrokenPipe))?;
         Ok(())
     }
 
@@ -382,7 +382,7 @@ where
                     }
                     ready!(self.us.poll_obtain_write_permission(cx))?;
                     let frame = Frame::new_push(self.us.flow_id, new_buf).finalize();
-                    self.us.frame_tx.send(frame).map_err(|_| BrokenPipe)?;
+                    self.us.frame_tx.send(frame).or(Err(BrokenPipe))?;
                     let processed = new_buf.len();
                     Pin::new(&mut self.other).consume(processed);
                     written_amt += processed as u64;
