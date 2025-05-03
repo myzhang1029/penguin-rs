@@ -59,7 +59,7 @@ pub enum Protocol {
 }
 
 /// Errors that can occur when parsing a remote.
-#[derive(Error, Debug)]
+#[derive(Clone, Error, Debug, PartialEq, Eq)]
 pub enum Error {
     #[error("Invalid format")]
     Format,
