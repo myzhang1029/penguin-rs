@@ -63,22 +63,11 @@ pub async fn write_response<W>(writer: &mut W, response: u8) -> Result<(), Error
 where
     W: AsyncWrite + Unpin,
 {
+    let buf = [0x00, response, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
     writer
-        .write_u8(0)
-        .await
-        .map_err(|e| Error::ProcessSocksRequest("write null byte", e))?;
-    writer
-        .write_u8(response)
+        .write_all(&buf)
         .await
         .map_err(|e| Error::ProcessSocksRequest("write response", e))?;
-    writer
-        .write_u16(0)
-        .await
-        .map_err(|e| Error::ProcessSocksRequest("write port", e))?;
-    writer
-        .write_u32(0)
-        .await
-        .map_err(|e| Error::ProcessSocksRequest("write ip", e))?;
     writer
         .flush()
         .await

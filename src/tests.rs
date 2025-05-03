@@ -521,12 +521,13 @@ async fn test_socks5_udp_v4v4() {
 
     let input_bytes: Vec<u8> = (0..1024).map(|_| rand::random::<u8>()).collect();
     let input_len = input_bytes.len();
+    let udp_listener = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let listener_port = udp_listener.local_addr().unwrap().port();
     let target_server_task = tokio::spawn(async move {
-        let listener = UdpSocket::bind("127.0.0.1:14119").await.unwrap();
         for _ in 0..64 {
             let mut buf = vec![0u8; input_len];
-            let (n, src) = listener.recv_from(&mut buf).await.unwrap();
-            listener.send_to(&buf[..n], src).await.unwrap();
+            let (n, src) = udp_listener.recv_from(&mut buf).await.unwrap();
+            udp_listener.send_to(&buf[..n], src).await.unwrap();
         }
     });
 
@@ -539,9 +540,10 @@ async fn test_socks5_udp_v4v4() {
         let n = sock.read(&mut buf).await.unwrap();
         assert_eq!(n, 2);
         assert_eq!(&buf[..n], b"\x05\x00");
-        sock.write_all(b"\x05\x03\x00\x01\x7f\x00\x00\x01\x37\x27")
-            .await
-            .unwrap();
+        let mut cmd = Vec::from(b"\x05\x03\x00\x01\x7f\x00\x00\x01\xff\xff");
+        let len = cmd.len();
+        cmd[len - 2..].copy_from_slice(&listener_port.to_be_bytes());
+        sock.write_all(&cmd).await.unwrap();
         let n = sock.read(&mut buf).await.unwrap();
         assert!(n > 3);
         assert_eq!(&buf[..3], b"\x05\x00\x00");
@@ -566,7 +568,9 @@ async fn test_socks5_udp_v4v4() {
         };
         // We don't connect so that we can test if the server sends back
         // with the correct address.
-        let request_header = vec![0x00, 0x00, 0x00, 0x01, 0x7f, 0x00, 0x00, 0x01, 0x37, 0x27];
+        let mut request_header = vec![0x00, 0x00, 0x00, 0x01, 0x7f, 0x00, 0x00, 0x01, 0xff, 0xff];
+        let len = request_header.len();
+        request_header[len - 2..].copy_from_slice(&listener_port.to_be_bytes());
         let mut request = request_header.clone();
         request.extend(&input_bytes);
         udp_socket
@@ -614,12 +618,13 @@ async fn test_socks5_udp_v4v6() {
 
     let input_bytes: Vec<u8> = (0..1024).map(|_| rand::random::<u8>()).collect();
     let input_len = input_bytes.len();
+    let udp_listener = UdpSocket::bind("[::1]:0").await.unwrap();
+    let listener_port = udp_listener.local_addr().unwrap().port();
     let target_server_task = tokio::spawn(async move {
-        let listener = UdpSocket::bind("[::1]:25347").await.unwrap();
         for _ in 0..64 {
             let mut buf = vec![0u8; input_len];
-            let (n, src) = listener.recv_from(&mut buf).await.unwrap();
-            listener.send_to(&buf[..n], src).await.unwrap();
+            let (n, src) = udp_listener.recv_from(&mut buf).await.unwrap();
+            udp_listener.send_to(&buf[..n], src).await.unwrap();
         }
     });
 
@@ -632,9 +637,10 @@ async fn test_socks5_udp_v4v6() {
         let n = sock.read(&mut buf).await.unwrap();
         assert_eq!(n, 2);
         assert_eq!(&buf[..n], b"\x05\x00");
-        sock.write_all(b"\x05\x03\x00\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x63\x03")
-            .await
-            .unwrap();
+        let mut cmd = Vec::from(b"\x05\x03\x00\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\xff\xff");
+        let len = cmd.len();
+        cmd[len - 2..].copy_from_slice(&listener_port.to_be_bytes());
+        sock.write_all(&cmd).await.unwrap();
         let n = sock.read(&mut buf).await.unwrap();
         assert!(n > 3);
         assert_eq!(&buf[..3], b"\x05\x00\x00");
@@ -659,10 +665,12 @@ async fn test_socks5_udp_v4v6() {
         };
         // We don't connect so that we can test if the server sends back
         // with the correct address.
-        let request_header = vec![
+        let mut request_header = vec![
             0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x63, 0x03,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0xff, 0xff,
         ];
+        let len = request_header.len();
+        request_header[len - 2..].copy_from_slice(&listener_port.to_be_bytes());
         // Since the local server listens on IPv4, the response header is IPv4.
         let response_header_len = 10;
         let mut request = request_header.clone();
@@ -711,12 +719,13 @@ async fn test_socks5_udp_v6v6() {
 
     let input_bytes: Vec<u8> = (0..1024).map(|_| rand::random::<u8>()).collect();
     let input_len = input_bytes.len();
+    let udp_listener = UdpSocket::bind("[::1]:0").await.unwrap();
+    let listener_port = udp_listener.local_addr().unwrap().port();
     let target_server_task = tokio::spawn(async move {
-        let listener = UdpSocket::bind("[::1]:23931").await.unwrap();
         for _ in 0..64 {
             let mut buf = vec![0u8; input_len];
-            let (n, src) = listener.recv_from(&mut buf).await.unwrap();
-            listener.send_to(&buf[..n], src).await.unwrap();
+            let (n, src) = udp_listener.recv_from(&mut buf).await.unwrap();
+            udp_listener.send_to(&buf[..n], src).await.unwrap();
         }
     });
 
@@ -729,9 +738,10 @@ async fn test_socks5_udp_v6v6() {
         let n = sock.read(&mut buf).await.unwrap();
         assert_eq!(n, 2);
         assert_eq!(&buf[..n], b"\x05\x00");
-        sock.write_all(b"\x05\x03\x00\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x5d\x7b")
-            .await
-            .unwrap();
+        let mut cmd = Vec::from(b"\x05\x03\x00\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\xff\xff");
+        let len = cmd.len();
+        cmd[len - 2..].copy_from_slice(&listener_port.to_be_bytes());
+        sock.write_all(&cmd).await.unwrap();
         let n = sock.read(&mut buf).await.unwrap();
         assert!(n > 3);
         assert_eq!(&buf[..3], b"\x05\x00\x00");
@@ -756,10 +766,12 @@ async fn test_socks5_udp_v6v6() {
         };
         // We don't connect so that we can test if the server sends back
         // with the correct address.
-        let request_header = vec![
+        let mut request_header = vec![
             0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x5d, 0x7b,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0xff, 0xff,
         ];
+        let len = request_header.len();
+        request_header[len - 2..].copy_from_slice(&listener_port.to_be_bytes());
         let mut request = request_header.clone();
         request.extend(&input_bytes);
         udp_socket
