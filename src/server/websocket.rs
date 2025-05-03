@@ -49,13 +49,21 @@ pub async fn handle_websocket(ws_stream: WebSocket, reverse: bool) {
             Ok(datagram_frame) = mux.get_datagram() => {
                 let flow_id = datagram_frame.flow_id;
                 if let Some(sender) = udp_clients.get_mut(&flow_id) {
-                    sender.send(datagram_frame).await.unwrap_or_else(|_| {
-                        // This client has been pruned, so we should
-                        // remove it from the map and hopefully
-                        // the client will try again.
-                        trace!("UDP client {flow_id} has been pruned");
-                        udp_clients.remove(&flow_id);
-                });
+                    sender.try_send(datagram_frame).unwrap_or_else(|err| {
+                        match err {
+                            mpsc::error::TrySendError::Closed(_) => {
+                                // This client has been pruned, so we should
+                                // remove it from the map and hopefully
+                                // the client will try again.
+                                trace!("UDP client {flow_id} has been pruned");
+                                udp_clients.remove(&flow_id);
+                            }
+                            mpsc::error::TrySendError::Full(_) => {
+                                // The channel is full, so just discard the datagram
+                                trace!("UDP client {flow_id} has a full channel");
+                            }
+                        }
+                    });
                 } else {
                     let (sender, receiver) = mpsc::channel::<Datagram>(config::INCOMING_DATAGRAM_BUFFER_SIZE);
                     udp_clients.insert(flow_id, sender);

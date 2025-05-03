@@ -61,7 +61,7 @@ async fn bind_for_target(target: (&str, u16)) -> Result<(UdpSocket, SocketAddr),
 
 /// Sit on a random port, send a UDP datagram to the given target,
 /// and wait for a response in the following `UDP_PRUNE_TIMEOUT` seconds.
-#[tracing::instrument(skip_all, level = "debug", fields(flow_id = first_datagram_frame.flow_id))]
+#[tracing::instrument(skip_all, level = "debug", fields(flow_id = %format_args!("{:08x}", first_datagram_frame.flow_id)))]
 pub(super) async fn udp_forward_on(
     first_datagram_frame: Datagram,
     mut datagram_rx: mpsc::Receiver<Datagram>,
@@ -93,9 +93,18 @@ pub(super) async fn udp_forward_on(
                     flow_id,
                     data: buf.into(),
                 };
-                if datagram_tx.send(frame).await.is_err() {
-                    // Mux loop has exited
-                    return Ok(());
+                if let Err(error) = datagram_tx.try_send(frame) {
+                    match error {
+                        mpsc::error::TrySendError::Closed(_) => {
+                            // The mux loop has exited
+                            trace!("UDP forwarder exiting due to closed mux");
+                            break;
+                        }
+                        mpsc::error::TrySendError::Full(_) => {
+                            // The channel is full, so just discard the datagram
+                            debug!("UDP forwarder channel is full");
+                        }
+                    }
                 }
             }
             // Check if the channel has received a datagram
