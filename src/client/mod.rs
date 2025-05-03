@@ -321,7 +321,7 @@ pub async fn client_main_inner(
             match r {
                 // Will get `Ok` only if the user wants to quit
                 Ok(()) => return Ok(()),
-                Err(e) if !e.retryable() => return Err(e.into()),
+                Err(ref e) if !e.retryable() => return r,
                 // else, retry
                 Err(e) => warn!("Connection failed: {e}"),
             }
