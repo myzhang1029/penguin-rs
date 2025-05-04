@@ -20,6 +20,10 @@ use thiserror::Error;
 use tracing::{error, trace};
 use tracing_subscriber::{filter, fmt, prelude::*, reload};
 
+#[cfg(feature = "tests-dhat")]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
+
 /// Errors
 #[derive(Error)]
 enum Error {
@@ -74,6 +78,8 @@ fn spawn_deadlock_detection() {
 #[tokio::main]
 /// Entry point
 async fn main() -> Result<(), Box<Error>> {
+    #[cfg(feature = "tests-dhat")]
+    let _profiler = dhat::Profiler::new_heap();
     let (level_layer, reload_handle) = reload::Layer::new(DEFAULT_LOG_LEVEL);
     let fmt_layer = fmt::Layer::default()
         .compact()
