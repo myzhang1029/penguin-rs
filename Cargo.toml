@@ -13,7 +13,7 @@ categories = ["asynchronous", "command-line-utilities", "network-programming"]
 [[bin]]
 name = "penguin"
 path = "src/main.rs"
-required-features = ["penguin-binary"]
+required-features = ["penguin-binary-common"]
 
 [[bench]]
 name = "stream_throughput"
@@ -90,24 +90,35 @@ remove-logging = ["tracing/max_level_trace", "tracing/release_max_level_debug", 
 # `parking_lot`'s deadlock detection in a separate thread
 deadlock-detection = ["parking_lot/deadlock_detection"]
 # obtaining certificate automatically using ACME protocol
-acme = ["penguin-binary", "dep:instant-acme", "dep:rcgen", "tokio/process"]
+acme = ["server", "dep:instant-acme", "dep:rcgen", "tokio/process"]
 # use tungstenite as the WebSocket implementation
 tungstenite = ["dep:tokio-tungstenite"]
-# `penguin` binary
-penguin-binary = [
-    "tungstenite",
+# `penguin` binary -- common
+penguin-binary-common = [
     "dep:arc-swap",
-    "dep:base64",
     "dep:clap",
+    "dep:tracing-subscriber",
+    "tungstenite",
+    "tokio/fs", "tokio/io-std", "tokio/io-util", "tokio/net", "tokio/rt-multi-thread", "tokio/signal",
+    "tokio-tungstenite/default",
+]
+# `penguin` binary -- server
+server = [
+    "dep:base64",
+    "dep:sha1",
     "dep:http-body-util",
     "dep:hyper",
     "dep:hyper-util",
     "dep:reqwest",
-    "dep:sha1",
-    "dep:tracing-subscriber",
-    "tokio/fs", "tokio/io-std", "tokio/io-util", "tokio/net", "tokio/rt-multi-thread", "tokio/signal",
-    "tokio-tungstenite/default",
+    "penguin-binary-common",
 ]
+# `penguin` binary -- client
+client = ["penguin-binary-common"]
+# `penguin` binary
+# Building both is the default and recommended in most cases.
+# Only building the client or server binary is supported on a best-effort basis.
+# The tests require both parts.
+penguin-binary = ["server", "client"]
 
 [profile.release]
 codegen-units = 1

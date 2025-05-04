@@ -46,15 +46,18 @@ impl PenguinCli {
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Penguin client
+    #[cfg(feature = "client")]
     #[clap(name = "client")]
     Client(ClientArgs),
     /// Penguin server
+    #[cfg(feature = "server")]
     #[clap(name = "server")]
     Server(ServerArgs),
 }
 
 // Descriptions are mainly directly stripped from myzhang1029/penguin
 /// Penguin client arguments.
+#[cfg(feature = "client")]
 #[derive(Args, Debug, Default)]
 pub struct ClientArgs {
     /// URL to the penguin server.
@@ -187,6 +190,7 @@ pub struct ClientArgs {
 }
 
 /// Penguin server arguments.
+#[cfg(feature = "server")]
 #[derive(Args, Debug, Default)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct ServerArgs {

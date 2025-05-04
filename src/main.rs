@@ -3,11 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 #![warn(missing_docs, missing_debug_implementations)]
 #![forbid(unsafe_code)]
+#![cfg_attr(not(all(feature = "client", feature = "server")), allow(dead_code))]
 
 mod arg;
+#[cfg(feature = "client")]
 mod client;
 mod config;
 mod parse_remote;
+#[cfg(feature = "server")]
 mod server;
 #[cfg(test)]
 mod tests;
@@ -20,8 +23,10 @@ use tracing_subscriber::{filter, fmt, prelude::*, reload};
 /// Errors
 #[derive(Error)]
 enum Error {
+    #[cfg(feature = "client")]
     #[error(transparent)]
     Client(#[from] client::Error),
+    #[cfg(feature = "server")]
     #[error(transparent)]
     Server(#[from] server::Error),
 }
@@ -106,9 +111,11 @@ async fn main() -> Result<(), Box<Error>> {
     #[cfg(feature = "deadlock-detection")]
     spawn_deadlock_detection();
     match &cli_args.subcommand {
+        #[cfg(feature = "client")]
         arg::Commands::Client(args) => client::client_main(args)
             .await
             .map_err(|e| Box::new(e.into()))?,
+        #[cfg(feature = "server")]
         arg::Commands::Server(args) => server::server_main(args)
             .await
             .map_err(|e| Box::new(e.into()))?,
