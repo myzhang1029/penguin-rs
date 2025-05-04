@@ -4,6 +4,7 @@
 #![warn(rust_2018_idioms, missing_docs, missing_debug_implementations)]
 #![warn(clippy::pedantic, clippy::cargo, clippy::unwrap_used)]
 #![forbid(unsafe_code)]
+#![cfg_attr(not(any(feature = "__rustls", feature = "nativetls")), allow(unused))]
 #![cfg_attr(not(all(feature = "client", feature = "server")), allow(dead_code))]
 
 mod arg;
@@ -15,7 +16,13 @@ mod parse_remote;
 mod server;
 #[cfg(test)]
 mod tests;
+#[cfg(any(feature = "__rustls", feature = "nativetls"))]
 mod tls;
+#[cfg(not(any(feature = "__rustls", feature = "nativetls")))]
+mod tls_none;
+
+#[cfg(not(any(feature = "__rustls", feature = "nativetls")))]
+use tls_none as tls;
 
 use thiserror::Error;
 use tracing::{error, trace};
