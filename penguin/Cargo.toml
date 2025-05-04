@@ -59,6 +59,9 @@ tempfile = "3"
 # Hack; https://stackoverflow.com/q/73015087
 rusty-penguin = { path = ".", default-features = false, features = ["dev-dependencies"] }
 
+[target.'cfg(dhat)'.dependencies]
+dhat = { version = "0.3" }
+
 [features]
 default = ["rustls-native-roots", "tests-real-internet4", "tests-udp", "penguin-binary", "acme", "ring", "tproxy"]
 # Note that it does not make sense to use more than one TLS implementations
@@ -107,7 +110,7 @@ client = ["tokio/io-std"]
 penguin-binary = ["server", "client"]
 
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)', 'cfg(loom)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(dhat)', 'cfg(fuzzing)', 'cfg(loom)'] }
 
 [package.metadata.deb]
 depends = "$auto"

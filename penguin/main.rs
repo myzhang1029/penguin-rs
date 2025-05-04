@@ -15,6 +15,10 @@ use thiserror::Error;
 use tracing::trace;
 use tracing_subscriber::{filter, fmt, prelude::*, reload};
 
+#[cfg(dhat)]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
+
 /// Errors
 #[derive(Error)]
 enum Error {
@@ -43,6 +47,8 @@ const VERBOSE_VERBOSE_LOG_LEVEL: filter::LevelFilter = filter::LevelFilter::TRAC
 #[tokio::main]
 /// Entry point
 async fn main() -> Result<(), Box<Error>> {
+    #[cfg(dhat)]
+    let _profiler = dhat::Profiler::new_heap();
     let (level_layer, reload_handle) = reload::Layer::new(DEFAULT_LOG_LEVEL);
     let fmt_layer = fmt::Layer::default()
         .compact()
