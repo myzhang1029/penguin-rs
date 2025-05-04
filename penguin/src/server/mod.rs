@@ -117,10 +117,15 @@ pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
             listening_tasks.spawn(run_listener(listener, None, state.dupe()));
         }
     }
-    while let Some(res) = listening_tasks.join_next().await {
-        if let Err(err) = res {
-            assert!(!err.is_panic(), "Panic in a listener: {err}");
-            error!("Listener finished with error: {err}");
+    tokio::select! {
+        Some(res) = listening_tasks.join_next() => {
+            if let Err(err) = res {
+                assert!(!err.is_panic(), "Panic in a listener: {err}");
+                error!("Listener finished with error: {err}");
+            }
+        }
+        _ = tokio::signal::ctrl_c() => {
+            info!("Received Ctrl-C, shutting down");
         }
     }
     Ok(())
