@@ -1,6 +1,7 @@
 //! A fast TCP/UDP tunnel, transported over HTTP WebSockets.
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
+#![cfg_attr(not(any(feature = "__rustls", feature = "nativetls")), allow(unused))]
 #![warn(missing_docs, missing_debug_implementations)]
 #![forbid(unsafe_code)]
 #![cfg_attr(not(all(feature = "client", feature = "server")), allow(dead_code))]
@@ -14,7 +15,13 @@ mod parse_remote;
 mod server;
 #[cfg(test)]
 mod tests;
+#[cfg(any(feature = "__rustls", feature = "nativetls"))]
 mod tls;
+#[cfg(not(any(feature = "__rustls", feature = "nativetls")))]
+mod tls_none;
+
+#[cfg(not(any(feature = "__rustls", feature = "nativetls")))]
+use tls_none as tls;
 
 use thiserror::Error;
 use tracing::{error, trace};

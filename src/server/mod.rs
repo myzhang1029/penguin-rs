@@ -12,7 +12,7 @@ use self::service::State;
 use crate::arg::ServerArgs;
 #[cfg(unix)]
 use crate::tls::reload_tls_identity;
-use crate::tls::{TlsIdentity, TlsIdentityInner, make_tls_identity};
+use crate::tls::{TlsIdentity, make_tls_identity};
 use hyper::upgrade::Upgraded;
 use hyper_util::rt::TokioIo;
 use hyper_util::rt::tokio::TokioExecutor;
@@ -178,22 +178,26 @@ async fn run_listener(
         };
         debug!("accepted connection from {peer}");
         if let Some(tls_config) = &tls_config {
+            #[cfg(any(feature = "__rustls", feature = "nativetls"))]
             tokio::spawn(serve_connection_tls(
                 stream,
                 new_state,
                 tls_config.load_full(),
             ));
+            #[cfg(not(any(feature = "__rustls", feature = "nativetls")))]
+            unimplemented!("TLS is not supported in this build");
         } else {
             tokio::spawn(serve_connection(stream, new_state));
         }
     }
 }
 
+#[cfg(any(feature = "__rustls", feature = "nativetls"))]
 /// Serves a single connection from a client with TLS, ignoring errors.
 async fn serve_connection_tls<S>(
     stream: S,
     state: State<'static, hyper::body::Incoming>,
-    tls_config: Arc<TlsIdentityInner>,
+    tls_config: Arc<crate::tls::TlsIdentityInner>,
 ) where
     S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {

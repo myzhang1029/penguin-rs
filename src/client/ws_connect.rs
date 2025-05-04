@@ -8,9 +8,7 @@ use http::header::HeaderValue;
 use penguin_mux::{Dupe, PROTOCOL_VERSION};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, handshake::client::Request};
-use tokio_tungstenite::{
-    Connector, MaybeTlsStream, WebSocketStream, connect_async_tls_with_config,
-};
+use tokio_tungstenite::{Connector, MaybeTlsStream, WebSocketStream};
 use tracing::{debug, warn};
 
 /// Perform a `WebSocket` handshake.
@@ -60,11 +58,16 @@ pub async fn handshake(
         warn!("Using insecure WebSocket connection");
         Connector::Plain
     };
-    let handshake = Box::pin(connect_async_tls_with_config(
+    #[cfg(any(feature = "__rustls", feature = "nativetls"))]
+    let handshake = Box::pin(tokio_tungstenite::connect_async_tls_with_config(
         req,
         None,
         false,
         Some(connector),
+    ));
+    #[cfg(not(any(feature = "__rustls", feature = "nativetls")))]
+    let handshake = Box::pin(tokio_tungstenite::connect_async_with_config(
+        req, None, false,
     ));
     tokio::select! {
         result = handshake => {
