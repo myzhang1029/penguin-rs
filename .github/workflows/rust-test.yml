@@ -54,9 +54,6 @@ jobs:
     - name: Install and run pebble
       run: .github/workflows/pebble.sh
 
-    - name: Check if program builds
-      run: cargo run --verbose --features ${{ matrix.tls }},penguin-binary --no-default-features -- --help
-
     - name: Run cargo tests with more features on
       run: cargo nextest run --all-targets --verbose --features ${{ matrix.tls }},tests-real-internet4,tests-acme-has-pebble,penguin-binary,acme,default-is-ipv6,tokio-console,deadlock-detection --no-default-features
       env:

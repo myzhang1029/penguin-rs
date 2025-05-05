@@ -1,0 +1,57 @@
+name: Build with Different Features
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ${{ matrix.config.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+        - name: Intel macOS
+          os: macos-latest
+        - name: Linux
+          os: ubuntu-latest
+        - name: Windows
+          os: windows-latest
+        tls:
+        - nativetls
+        - rustls-native-roots
+        - rustls-webpki-roots
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Rust toolchain
+      run:
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --component llvm-tools-preview
+
+    - name: Check lib only
+      run: cargo check --verbose --no-default-features
+
+    - name: Check lib with tungstenite support
+      run: cargo check --verbose --features tungstenite --no-default-features
+
+    - name: Check default features
+      run: |
+        cargo check --verbose --features ${{ matrix.tls }},tests-real-internet4,tests-udp,penguin-binary,acme,tungstenite --no-default-features
+        cargo run --verbose --features ${{ matrix.tls }},tests-real-internet4,tests-udp,penguin-binary,acme,tungstenite --no-default-features -- --help
+
+    - name: Check client only
+      run: |
+        cargo check --verbose --features ${{ matrix.tls }},tests-real-internet4,tests-udp,client --no-default-features
+        cargo run --verbose --features ${{ matrix.tls }},tests-real-internet4,tests-udp,client --no-default-features -- --help
+
+    - name: Check with most features on
+      run: |
+        cargo check --verbose --features ${{ matrix.tls }},tests-real-internet4,tests-real-internet6,tests-acme-has-pebble,penguin-binary,acme,default-is-ipv6,remove-logging,tokio-console,deadlock-detection --no-default-features
+        cargo run --verbose --features ${{ matrix.tls }},tests-real-internet4,tests-real-internet6,tests-acme-has-pebble,penguin-binary,acme,default-is-ipv6,remove-logging,tokio-console,deadlock-detection --no-default-features -- --help
