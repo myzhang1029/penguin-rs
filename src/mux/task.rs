@@ -111,23 +111,18 @@ impl<S: WebSocket> Task<S> {
         mut dropped_ports_rx: mpsc::UnboundedReceiver<u32>,
         mut tx_frame_rx: mpsc::UnboundedReceiver<FinalizedFrame>,
     ) -> Result<()> {
-        let mut should_drain_frame_rx = false;
-        let res = tokio::select! {
-                r = self.process_dropped_ports_task(&mut dropped_ports_rx) => {
-                    debug!("mux dropped ports task finished: {r:?}");
-                    should_drain_frame_rx = true;
-                    r
-                }
-                r = self.process_frame_recv_task(&mut tx_frame_rx) => {
-                    debug!("mux frame recv task finished: {r:?}");
-                    // should_drain_frame_rx = false;
-                    r
-                }
-                r = self.process_ws_next() => {
-                    debug!("mux ws next task finished: {r:?}");
-                    // should_drain_frame_rx = false;
-                    r
-
+        let (should_drain_frame_rx, res) = tokio::select! {
+            r = self.process_dropped_ports_task(&mut dropped_ports_rx) => {
+                debug!("mux dropped ports task finished: {r:?}");
+                (true, r)
+            }
+            r = self.process_frame_recv_task(&mut tx_frame_rx) => {
+                debug!("mux frame recv task finished: {r:?}");
+                (false, r)
+            }
+            r = self.process_ws_next() => {
+                debug!("mux ws next task finished: {r:?}");
+                (false, r)
             }
         };
         self.wind_down(should_drain_frame_rx, &mut tx_frame_rx)
@@ -263,7 +258,6 @@ impl<S: WebSocket> Task<S> {
         // Note that this is not a guarantee, so we may still have some streams that wake up
         // later but only to see a `BrokenPipe`.
         tokio::task::yield_now().await;
-        tokio::task::yield_now().await;
         // Further ensure no more frames can be sent. This should cause all further attempts at
         // `AsyncWrite::poll_write` to return `BrokenPipe`.
         // See `tokio::sync::mpsc`#clean-shutdown
@@ -310,22 +304,17 @@ impl<S: WebSocket> Task<S> {
     #[tracing::instrument(skip_all, level = "trace")]
     #[inline]
     async fn process_message(&self, msg: Message, ignore_bind: bool) -> Result<bool> {
+        trace!("received message {msg:?}");
         match msg {
             Message::Binary(data) => {
                 let frame = data.try_into()?;
-                trace!("received stream frame: {frame:?}");
                 self.process_frame(frame, ignore_bind).await?;
                 Ok(false)
             }
-            Message::Ping | Message::Pong => {
-                // `tokio-tungstenite` handles `Ping` messages automatically
-                trace!("received ping/pong");
-                Ok(false)
-            }
-            Message::Close => {
-                debug!("received close");
-                Ok(true)
-            }
+            // The underlying `WebSocket` implementation is expected to
+            // respond to `Ping` messages automatically.
+            Message::Ping | Message::Pong => Ok(false),
+            Message::Close => Ok(true),
         }
     }
 
@@ -347,6 +336,7 @@ impl<S: WebSocket> Task<S> {
     #[tracing::instrument(skip_all, fields(flow_id), level = "debug")]
     #[inline]
     async fn process_frame(&self, frame: Frame<'static>, ignore_bind: bool) -> Result<()> {
+        trace!("received frame {frame:?}");
         let Frame {
             id: flow_id,
             payload,
@@ -370,7 +360,6 @@ impl<S: WebSocket> Task<S> {
                     .await?;
             }
             Payload::Acknowledge(payload) => {
-                trace!("received `Acknowledge`");
                 // Three cases:
                 // 1. Peer acknowledged `Connect`
                 // 2. Peer acknowledged some `Push` frames
@@ -433,11 +422,8 @@ impl<S: WebSocket> Task<S> {
                     }
                 }
             }
-            Payload::Reset => {
-                debug!("received `Reset`");
-                // `true` because we don't want to reply `Reset` with `Reset`.
-                self.close_port(flow_id, true);
-            }
+            // `true` because we don't want to reply `Reset` with `Reset`.
+            Payload::Reset => self.close_port(flow_id, true),
             Payload::Push(data) => {
                 // In this case, `data` is always owned already
                 let result = self
@@ -459,10 +445,10 @@ impl<S: WebSocket> Task<S> {
                         // The job to remove the port from the map is done by `close_port_task`,
                         // so not being able to send is the same as not finding the port;
                         // just timing is different.
-                        trace!("dropped `MuxStream` not yet removed from the map");
+                        debug!("dropped `MuxStream` not yet removed from the map");
                     }
                     None => {
-                        warn!("Bogus `Push` frame");
+                        debug!("bogus `Push` frame");
                         send_rst();
                     }
                 }
@@ -483,7 +469,7 @@ impl<S: WebSocket> Task<S> {
                         tx_frame_tx: self.tx_frame_tx.dupe(),
                     };
                     if let Err(e) = sender.send(request).await {
-                        warn!("Failed to send `Bind` request: {e}");
+                        warn!("Failed to return `Bind` request: {e}");
                     }
                     // Let the user decide what to reply using `BindRequest::reply`
                 } else {
@@ -494,7 +480,6 @@ impl<S: WebSocket> Task<S> {
                 }
             }
             Payload::Datagram(payload) => {
-                trace!("received datagram frame: {payload:?}");
                 // Only fails if the receiver is dropped or the queue is full.
                 // The first case means the multiplexor itself is dropped;
                 // In the second case, we just drop the frame to avoid blocking.
@@ -507,12 +492,8 @@ impl<S: WebSocket> Task<S> {
                 };
                 if let Err(e) = self.datagram_tx.try_send(datagram) {
                     match e {
-                        TrySendError::Full(_) => {
-                            warn!("Dropped datagram: {e}");
-                        }
-                        TrySendError::Closed(_) => {
-                            return Err(Error::Closed);
-                        }
+                        TrySendError::Full(_) => warn!("Dropped datagram: {e}"),
+                        TrySendError::Closed(_) => return Err(Error::Closed),
                     }
                 }
             }
@@ -582,7 +563,7 @@ impl<S: WebSocket> Task<S> {
                 // On the other side, `process_frame` will pass the `Reset` frame to
                 // `close_port`, which takes the port out of the map and inform `Multiplexor::new_stream_channel`
                 // to retry.
-                // The existing connection at the same `flow_id` is not affected. For conforminh implementations,
+                // The existing connection at the same `flow_id` is not affected. For conforming implementations,
                 // This only happens when both ends are trying to establish a new connection at the same time
                 // and also happen to have chosen the same `flow_id`.
                 // In this case, the peer would also receive our `Connect` frame and, depending on the timing,
@@ -634,13 +615,15 @@ impl<S: WebSocket> Task<S> {
     }
 
     /// Close a port. That is, remove it from the map and call `close_port_local`.
+    #[tracing::instrument(skip_all, level = "trace")]
+    #[inline]
     fn close_port(&self, flow_id: u32, inhibit_rst: bool) {
         // Free the port for reuse
         let value = self.flows.write().remove(&flow_id);
         if let Some(removed) = value {
             self.close_port_local(removed, flow_id, inhibit_rst);
         } else {
-            debug!("connection not found, nothing to close");
+            debug!("flow_id {flow_id:08x} not found, nothing to close");
         }
     }
 
@@ -653,6 +636,7 @@ impl<S: WebSocket> Task<S> {
                 let finish_sent = stream_data.disallow_write();
                 if !finish_sent && !inhibit_rst {
                     // If the user did not call `poll_shutdown`, we send a `Reset` frame
+                    debug!("stream dropped without `poll_shutdown`");
                     self.tx_frame_tx
                         .send(Frame::new_reset(flow_id).finalize())
                         .ok();
