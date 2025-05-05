@@ -837,3 +837,62 @@ async fn test_flow_id_contention_can_succeed() {
     debug!("Waiting for server task to finish");
     server_task.await.unwrap();
 }
+
+#[tokio::test]
+async fn test_bind_request() {
+    setup_logging();
+    let (client, server) = get_pair(None).await;
+
+    let allow_bind_config = crate::config::Options {
+        bind_buffer_size: 16,
+        ..Default::default()
+    };
+
+    let client_mux = Multiplexor::new(client, Some(allow_bind_config), None);
+    let server_mux = Multiplexor::new(server, None, None);
+
+    let server_task = tokio::spawn(async move {
+        let request = server_mux
+            .request_bind(b"testbind", 0, BindType::Datagram)
+            .await
+            .unwrap();
+        assert!(request);
+        let request = server_mux
+            .request_bind(b"testbind2", 40, BindType::Stream)
+            .await
+            .unwrap();
+        assert!(!request);
+        // server is configured to refuse bind requests
+        let result = server_mux.next_bind_request().await.unwrap_err();
+        assert!(matches!(result, Error::UnsupportedOperation));
+        let request = server_mux
+            .request_bind(b"testbind3", 8011, BindType::Stream)
+            .await
+            .unwrap();
+        assert!(!request);
+    });
+    let request = client_mux.next_bind_request().await.unwrap();
+    assert_eq!(request.bind_type(), BindType::Datagram);
+    assert_ne!(request.flow_id(), 0);
+    assert_eq!(request.host(), b"testbind");
+    assert_eq!(request.port(), 0);
+    request.reply(true).unwrap();
+    let request = client_mux.next_bind_request().await.unwrap();
+    assert_eq!(request.bind_type(), BindType::Stream);
+    assert_ne!(request.flow_id(), 0);
+    assert_eq!(request.host(), b"testbind2");
+    assert_eq!(request.port(), 40);
+    drop(request);
+    let request = client_mux
+        .request_bind(b"testbindc", 80, BindType::Stream)
+        .await
+        .unwrap();
+    assert!(!request);
+    let request = client_mux.next_bind_request().await.unwrap();
+    assert_eq!(request.bind_type(), BindType::Stream);
+    assert_ne!(request.flow_id(), 0);
+    assert_eq!(request.host(), b"testbind3");
+    assert_eq!(request.port(), 8011);
+    request.reply(false).unwrap();
+    server_task.await.unwrap();
+}
