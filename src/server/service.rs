@@ -4,7 +4,7 @@
 
 use super::websocket::handle_websocket;
 use crate::arg::BackendUrl;
-use crate::tls::HttpsConnector;
+use crate::tls::HyperConnector;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64_STANDARD_ENGINE;
 use bytes::Bytes;
@@ -74,7 +74,7 @@ pub(super) struct State<'a, B> {
     /// Whether we accept reverse binding
     reverse: bool,
     /// Backend client
-    client: HyperClient<HttpsConnector, B>,
+    client: HyperClient<HyperConnector, B>,
     /// TLS handshake timeout
     pub tls_timeout: OptionalDuration,
     /// HTTP timeout

@@ -22,9 +22,9 @@ use tokio_tungstenite::Connector;
 
 #[allow(clippy::module_name_repetitions)]
 #[cfg(feature = "__rustls")]
-pub use self::rustls::{HttpsConnector, TlsIdentityInner, make_hyper_connector};
+pub use self::rustls::{HyperConnector, TlsIdentityInner, make_hyper_connector};
 #[cfg(feature = "nativetls")]
-pub use native::{HttpsConnector, TlsIdentityInner, make_hyper_connector};
+pub use native::{HyperConnector, TlsIdentityInner, make_hyper_connector};
 
 /// A hot-swappable container for a TLS key and certificate.
 #[allow(clippy::module_name_repetitions)]

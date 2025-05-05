@@ -70,7 +70,7 @@ default = ["rustls-native-roots", "tests-real-internet4", "tests-udp", "penguin-
 rustls-webpki-roots = ["dep:webpki-roots", "tokio-tungstenite/rustls-tls-webpki-roots", "hyper-rustls/webpki-tokio", "__rustls"]
 rustls-native-roots = ["dep:rustls-native-certs", "tokio-tungstenite/rustls-tls-native-roots", "hyper-rustls/native-tokio", "__rustls"]
 __rustls = ["dep:rustls", "dep:rustls-pemfile", "dep:tokio-rustls"]
-nativetls = ["dep:tokio-native-tls", "tokio-tungstenite/native-tls"]
+nativetls = ["dep:tokio-native-tls", "tokio-tungstenite/native-tls", "hyper-tls"]
 # Dependencies for testing
 dev-dependencies = ["dep:rcgen", "tracing-subscriber/env-filter", "tokio/net", "tokio/rt-multi-thread"]
 # Allow some tests that require real internet connection

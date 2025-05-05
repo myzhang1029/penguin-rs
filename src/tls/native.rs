@@ -8,6 +8,10 @@ use tokio_native_tls::native_tls::{Certificate, Identity, TlsAcceptor, TlsConnec
 /// Type alias for the inner TLS identity type.
 pub type TlsIdentityInner = tokio_native_tls::TlsAcceptor;
 
+/// Type alias for the Hyper HTTPS connector.
+pub type HyperConnector =
+    hyper_tls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>;
+
 pub async fn make_server_config(
     cert_path: &str,
     key_path: &str,
@@ -62,6 +66,10 @@ async fn read_key_cert(key_path: &str, cert_path: &str) -> Result<Identity, Erro
     let key = tokio::fs::read(key_path).await?;
     let cert = tokio::fs::read(cert_path).await?;
     Ok(Identity::from_pkcs8(&cert, &key)?)
+}
+
+pub fn make_hyper_connector() -> std::io::Result<HyperConnector> {
+    Ok(HyperConnector::new())
 }
 
 // `native_tls` on macOS and Windows doesn't support reading Ed25519 nor ECDSA-based certificates, but `rcgen` doesn't support generating RSA keys.
