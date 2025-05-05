@@ -219,7 +219,7 @@ mod tests {
             },
             TEST_PEBBLE_URL,
             None,
-            Box::new(IgnoreTlsHttpClient::new()),
+            Box::new(IgnoreTlsHttpClient::new().await),
         )
         .await
         .unwrap();
@@ -289,7 +289,7 @@ mod tests {
             },
             TEST_PEBBLE_URL,
             None,
-            Box::new(IgnoreTlsHttpClient::new()),
+            Box::new(IgnoreTlsHttpClient::new().await),
         )
         .await
         .unwrap();

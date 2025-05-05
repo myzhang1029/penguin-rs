@@ -221,8 +221,9 @@ mod tests {
 #[cfg(feature = "tests-acme-has-pebble")]
 mod tests_need_pebble {
     use super::*;
+    use crate::tls::{HyperConnector, make_client_config};
     use bytes::Bytes;
-    use http_body_util::BodyExt;
+    use hyper_util::{client::legacy::Client as HyperClient, rt::TokioExecutor};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
@@ -231,15 +232,33 @@ mod tests_need_pebble {
     pub const TEST_PEBBLE_URL: &str = "https://localhost:14000/dir";
 
     #[derive(Clone, Debug)]
-    pub struct IgnoreTlsHttpClient(reqwest::Client);
+    pub struct IgnoreTlsHttpClient(HyperClient<HyperConnector, http_body_util::Full<Bytes>>);
     impl IgnoreTlsHttpClient {
-        pub fn new() -> Self {
-            Self(
-                reqwest::ClientBuilder::new()
-                    .danger_accept_invalid_certs(true)
-                    .build()
-                    .unwrap(),
+        pub async fn new() -> Self {
+            let client_config = make_client_config(None, None, None, true)
+                .await
+                .expect("Failed to create client config");
+            // Not supposed to predefine ALPN protocols for ACME
+            #[cfg(feature = "__rustls")]
+            let client_config = {
+                let mut config = client_config;
+                config.alpn_protocols = vec![];
+                config
+            };
+            #[cfg(feature = "__rustls")]
+            let connector = hyper_rustls::HttpsConnectorBuilder::new()
+                .with_tls_config(client_config)
+                .https_or_http()
+                .enable_all_versions()
+                .build();
+            #[cfg(feature = "nativetls")]
+            let connector = (
+                hyper_util::client::legacy::connect::HttpConnector::new(),
+                client_config.into(),
             )
+                .into();
+
+            Self(HyperClient::builder(TokioExecutor::new()).build(connector))
         }
     }
     impl instant_acme::HttpClient for IgnoreTlsHttpClient {
@@ -252,30 +271,12 @@ mod tests_need_pebble {
                     + Send,
             >,
         > {
-            let (reqwest_req, body) = req.into_parts();
-            let new_self = self.clone();
+            let fut = self.0.request(req);
             Box::pin(async move {
-                let mut req = reqwest::Request::new(
-                    reqwest::Method::from_bytes(reqwest_req.method.as_str().as_bytes()).unwrap(),
-                    reqwest::Url::parse(reqwest_req.uri.to_string().as_str()).unwrap(),
-                );
-                let body_bytes = body
-                    .collect()
-                    .await
-                    .map_or_else(|_| Bytes::new(), http_body_util::Collected::to_bytes);
-                *req.headers_mut() = reqwest_req.headers;
-                *req.body_mut() = Some(reqwest::Body::from(body_bytes));
-                let resp = new_self.0.execute(req).await.unwrap();
-                let http_resp: http::Response<reqwest::Body> = resp.into();
-                let (parts, body) = http_resp.into_parts();
-                let collected_body = body
-                    .collect()
-                    .await
-                    .map_or_else(|_| Bytes::new(), http_body_util::Collected::to_bytes);
-                Ok(instant_acme::BytesResponse {
-                    parts,
-                    body: Box::new(collected_body),
-                })
+                match fut.await {
+                    Ok(rsp) => Ok(instant_acme::BytesResponse::from(rsp)),
+                    Err(e) => Err(e.into()),
+                }
             })
         }
     }
@@ -335,7 +336,7 @@ mod tests_need_pebble {
             },
             TEST_PEBBLE_URL,
             None,
-            Box::new(IgnoreTlsHttpClient::new()),
+            Box::new(IgnoreTlsHttpClient::new().await),
         )
         .await
         .unwrap();

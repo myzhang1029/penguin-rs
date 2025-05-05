@@ -9,12 +9,8 @@ mod rustls;
 
 #[cfg(all(feature = "nativetls", feature = "acme"))]
 use self::native::make_server_config_from_rcgen_pem;
-#[cfg(feature = "nativetls")]
-use self::native::{make_client_config, make_server_config};
 #[cfg(all(feature = "__rustls", feature = "acme"))]
 use self::rustls::make_server_config_from_rcgen_pem;
-#[cfg(feature = "__rustls")]
-use self::rustls::{make_client_config, make_server_config};
 use arc_swap::ArcSwap;
 use std::sync::Arc;
 use thiserror::Error;
@@ -22,9 +18,13 @@ use tokio_tungstenite::Connector;
 
 #[allow(clippy::module_name_repetitions)]
 #[cfg(feature = "__rustls")]
-pub use self::rustls::{HyperConnector, TlsIdentityInner, make_hyper_connector};
+pub use self::rustls::{
+    HyperConnector, TlsIdentityInner, make_client_config, make_hyper_connector, make_server_config,
+};
 #[cfg(feature = "nativetls")]
-pub use native::{HyperConnector, TlsIdentityInner, make_hyper_connector};
+pub use native::{
+    HyperConnector, TlsIdentityInner, make_client_config, make_hyper_connector, make_server_config,
+};
 
 /// A hot-swappable container for a TLS key and certificate.
 #[allow(clippy::module_name_repetitions)]
