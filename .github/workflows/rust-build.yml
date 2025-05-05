@@ -53,10 +53,12 @@ jobs:
 
     - name: Check with most features on
       run: |
+        cargo check --verbose --features ${{ matrix.tls }},tests-real-internet4,tests-real-internet6,default-is-ipv6,tests-acme-has-pebble,penguin-binary,acme,default-is-ipv6,remove-logging,deadlock-detection,nohash --no-default-features
+        cargo run --verbose --features ${{ matrix.tls }},tests-real-internet4,tests-real-internet6,default-is-ipv6,tests-acme-has-pebble,penguin-binary,acme,default-is-ipv6,remove-logging,deadlock-detection,nohash --no-default-features -- --help
+
+    - name: Check with tokio-console
+      run: |
         cargo check --verbose --features ${{ matrix.tls }},tests-real-internet4,tests-real-internet6,tests-acme-has-pebble,penguin-binary,acme,default-is-ipv6,tokio-console,deadlock-detection --no-default-features
         cargo run --verbose --features ${{ matrix.tls }},tests-real-internet4,tests-real-internet6,tests-acme-has-pebble,penguin-binary,acme,default-is-ipv6,tokio-console,deadlock-detection --no-default-features -- --help
-
-    - name: Check with most features on
-      run: |
-        cargo check --verbose --features ${{ matrix.tls }},tests-real-internet4,tests-real-internet6,default-is-ipv6,tests-acme-has-pebble,penguin-binary,acme,default-is-ipv6,remove-logging,deadlock-detection --no-default-features
-        cargo run --verbose --features ${{ matrix.tls }},tests-real-internet4,tests-real-internet6,default-is-ipv6,tests-acme-has-pebble,penguin-binary,acme,default-is-ipv6,remove-logging,deadlock-detection --no-default-features -- --help
+      env:
+        RUSTFLAGS: "--cfg tokio_unstable"
