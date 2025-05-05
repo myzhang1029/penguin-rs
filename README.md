@@ -1,7 +1,7 @@
 # Rusty Penguin
 ![Logo](https://raw.githubusercontent.com/myzhang1029/penguin-rs/main/logo.png)
 
-[![Rust Build and Test](https://github.com/myzhang1029/penguin-rs/actions/workflows/rust.yml/badge.svg)](https://github.com/myzhang1029/penguin-rs/actions/workflows/rust.yml)
+[![Cargo Tests](https://github.com/myzhang1029/penguin-rs/actions/workflows/rust-test.yml/badge.svg)](https://github.com/myzhang1029/penguin-rs/actions/workflows/rust-test.yml)
 [![Crates.io](https://img.shields.io/crates/v/rusty-penguin.svg)](https://crates.io/crates/rusty-penguin)
 [![Dependency Status](https://deps.rs/repo/github/myzhang1029/penguin-rs/status.svg)](https://deps.rs/repo/github/myzhang1029/penguin-rs)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/10422/badge)](https://www.bestpractices.dev/projects/10422)
