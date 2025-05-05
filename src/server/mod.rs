@@ -87,7 +87,7 @@ pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
         args.reverse,
         args.timeout,
         args.timeout,
-    );
+    )?;
     let sockaddrs = arg_to_sockaddrs(args)?;
     let mut listening_tasks = JoinSet::new();
     if let Some(tls_config) = check_start_tls(args).await? {

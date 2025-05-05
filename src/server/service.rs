@@ -111,10 +111,10 @@ where
         reverse: bool,
         tls_timeout: OptionalDuration,
         http_timeout: OptionalDuration,
-    ) -> Self {
-        let client = HyperClient::builder(TokioExecutor::new())
-            .build(crate::tls::make_hyper_connector().expect("TODO"));
-        Self {
+    ) -> std::io::Result<Self> {
+        let client =
+            HyperClient::builder(TokioExecutor::new()).build(crate::tls::make_hyper_connector()?);
+        Ok(Self {
             backend,
             ws_psk,
             not_found_resp,
@@ -123,7 +123,7 @@ where
             client,
             tls_timeout,
             http_timeout,
-        }
+        })
     }
 }
 
@@ -134,16 +134,12 @@ where
     <B as Body>::Error: std::error::Error + Send + Sync,
 {
     /// Helper for sending a request to the backend
-    /// XXX: Should we use `reqwest`, or should we construct something new with `tower`?
     async fn exec_request(&self, req: Request<B>) -> Result<Response<FullBody<Bytes>>, Error> {
         let resp = self.client.request(req).await?;
-        let status = resp.status();
-        let headers = resp.headers().clone();
-        let body = resp.into_body().collect().await?.to_bytes();
-        let mut http_resp = Response::new(FullBody::new(body));
-        *http_resp.status_mut() = status;
-        *http_resp.headers_mut() = headers;
-        Ok(http_resp)
+        let (parts, body) = resp.into_parts();
+        let body = body.collect().await?.to_bytes();
+        let collected = Response::from_parts(parts, FullBody::new(body));
+        Ok(collected)
     }
 
     /// Reverse proxy and 404
@@ -338,7 +334,8 @@ mod tests {
             false,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
-        );
+        )
+        .unwrap();
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/health")
@@ -357,7 +354,8 @@ mod tests {
             false,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
-        );
+        )
+        .unwrap();
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/health")
@@ -376,7 +374,8 @@ mod tests {
             false,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
-        );
+        )
+        .unwrap();
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/version")
@@ -395,7 +394,8 @@ mod tests {
             false,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
-        );
+        )
+        .unwrap();
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/version")
@@ -422,7 +422,8 @@ mod tests {
             false,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
-        );
+        )
+        .unwrap();
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/status/200")
@@ -438,7 +439,8 @@ mod tests {
             false,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
-        );
+        )
+        .unwrap();
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/status/418")
@@ -464,7 +466,8 @@ mod tests {
             false,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
-        );
+        )
+        .unwrap();
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com")
@@ -480,7 +483,8 @@ mod tests {
             false,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
-        );
+        )
+        .unwrap();
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/teapot")
@@ -502,7 +506,8 @@ mod tests {
             false,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
-        );
+        )
+        .unwrap();
         let req = Request::builder()
             .method(Method::POST)
             .header("connection", "UpGrAdE")
@@ -530,7 +535,8 @@ mod tests {
             false,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
-        );
+        )
+        .unwrap();
         let req = Request::builder()
             .method(Method::GET)
             .header("connection", "UpGrAdE")
@@ -558,7 +564,8 @@ mod tests {
             false,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
-        );
+        )
+        .unwrap();
         let req = Request::builder()
             .method(Method::GET)
             .header("connection", "UpGrAdE")
@@ -588,7 +595,8 @@ mod tests {
             false,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
-        );
+        )
+        .unwrap();
         let on_upgrade = hyper::upgrade::on(http::Request::new(EmptyBody::new()));
         let req = Request::builder()
             .uri("wss://example.com/ws")
