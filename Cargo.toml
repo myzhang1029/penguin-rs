@@ -37,6 +37,7 @@ hyper = { version = "1", features = ["server", "http1", "http2"], optional = tru
 hyper-util = { version = "0.1", features = ["server", "server-auto", "tokio"], optional = true }
 instant-acme = { version = "0.7", features = ["ring", "hyper-rustls"], default-features = false, optional = true }
 log = { version = "0.4", optional = true }
+nohash-hasher = { version = "0.2", optional = true }
 parking_lot = "0.12"
 rand = "0.9"
 rcgen = { version = "0.13", optional = true }
@@ -93,6 +94,12 @@ deadlock-detection = ["parking_lot/deadlock_detection"]
 acme = ["server", "dep:instant-acme", "dep:rcgen", "tokio/process"]
 # use tungstenite as the WebSocket implementation
 tungstenite = ["dep:tokio-tungstenite"]
+# Use nohash-hasher for flow_id hashmaps
+# This option may be an optimization for resource-constrained devices, but
+# will also open up a DoS attack vector if the peer cannot be trusted.
+# If both peers use this penguin implementation or any other implementation
+# that generates flow_ids with a random number generator, this is safe.
+nohash = ["dep:nohash-hasher"]
 # `penguin` binary -- common
 penguin-binary-common = [
     "dep:arc-swap",

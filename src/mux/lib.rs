@@ -25,9 +25,8 @@ use bytes::Bytes;
 use futures_util::task::AtomicWaker;
 use parking_lot::{Mutex, RwLock};
 use rand::distr::uniform::SampleUniform;
-use std::collections::HashMap;
 use std::future::poll_fn;
-use std::hash::Hash;
+use std::hash::{BuildHasher, Hash};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use thiserror::Error;
@@ -35,6 +34,11 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
 use tracing::{error, trace, warn};
+
+#[cfg(feature = "nohash")]
+use nohash_hasher::IntMap;
+#[cfg(not(feature = "nohash"))]
+use std::collections::HashMap as IntMap;
 
 pub use crate::dupe::Dupe;
 pub use crate::proto_version::{PROTOCOL_VERSION, PROTOCOL_VERSION_NUMBER};
@@ -91,7 +95,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug)]
 pub struct Multiplexor {
     /// Open stream channels: `flow_id` -> `FlowSlot`
-    flows: Arc<RwLock<HashMap<u32, FlowSlot>>>,
+    flows: Arc<RwLock<IntMap<u32, FlowSlot>>>,
     /// Where tasks queue frames to be sent
     tx_frame_tx: mpsc::UnboundedSender<FinalizedFrame>,
     /// We only use this to inform the task that the multiplexor is closed
@@ -147,7 +151,7 @@ impl Multiplexor {
         } else {
             (None, None)
         };
-        let flows = Arc::new(RwLock::new(HashMap::new()));
+        let flows = Arc::new(RwLock::new(IntMap::default()));
 
         let mux = Self {
             tx_frame_tx: tx_frame_tx.dupe(),
@@ -530,7 +534,7 @@ pub trait IntKey: Eq + Hash + Copy + SampleUniform + PartialOrd {
     /// Generate a new key that is not in the map
     #[inline]
     #[must_use]
-    fn next_available_key<V>(map: &HashMap<Self, V>) -> Self {
+    fn next_available_key<V, S: BuildHasher>(map: &std::collections::HashMap<Self, V, S>) -> Self {
         loop {
             let i = rand::random_range(Self::MIN..Self::MAX);
             if !map.contains_key(&i) {

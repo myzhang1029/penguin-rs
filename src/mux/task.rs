@@ -11,7 +11,6 @@ use crate::{
 use bytes::Bytes;
 use futures_util::task::AtomicWaker;
 use parking_lot::{Mutex, RwLock};
-use std::collections::HashMap;
 use std::future::poll_fn;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32};
@@ -21,6 +20,11 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::task::JoinSet;
 use tokio::time::MissedTickBehavior;
 use tracing::{debug, error, info, trace, warn};
+
+#[cfg(feature = "nohash")]
+use nohash_hasher::IntMap;
+#[cfg(not(feature = "nohash"))]
+use std::collections::HashMap as IntMap;
 
 /// Internal type used for spawning the multiplexor task
 #[derive(Debug)]
@@ -70,7 +74,7 @@ pub struct Task<S: WebSocket> {
     /// Underlying WebSocket
     pub ws: Mutex<S>,
     /// Open stream channels: `flow_id` -> `FlowSlot`
-    pub flows: Arc<RwLock<HashMap<u32, FlowSlot>>>,
+    pub flows: Arc<RwLock<IntMap<u32, FlowSlot>>>,
     /// Where tasks queue frames to be sent
     pub tx_frame_tx: mpsc::UnboundedSender<FinalizedFrame>,
     /// Channel for notifying the task of a dropped `MuxStream` (to send the flow ID)

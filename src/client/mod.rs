@@ -28,6 +28,11 @@ use tokio::time;
 use tokio_tungstenite::MaybeTlsStream;
 use tracing::{error, info, trace, warn};
 
+#[cfg(feature = "nohash")]
+use nohash_hasher::IntMap;
+#[cfg(not(feature = "nohash"))]
+use std::collections::HashMap as IntMap;
+
 /// Errors
 #[derive(Debug, Error)]
 pub enum Error {
@@ -159,7 +164,7 @@ impl HandlerResources {
 #[allow(clippy::module_name_repetitions)]
 pub struct ClientIdMaps {
     /// Client ID -> Client ID map entry
-    client_id_map: HashMap<u32, ClientIdMapEntry>,
+    client_id_map: IntMap<u32, ClientIdMapEntry>,
     /// (client address, our address) -> client ID
     /// We need our address to make sure we send replies with the correct source address
     /// because different remotes and socks5 associations use different listeners
@@ -170,7 +175,7 @@ impl ClientIdMaps {
     #[must_use]
     fn new() -> Self {
         Self {
-            client_id_map: HashMap::new(),
+            client_id_map: IntMap::default(),
             client_addr_map: HashMap::new(),
         }
     }

@@ -7,9 +7,13 @@ use super::forwarder::tcp_forwarder_on_channel;
 use super::forwarder::udp_forward_on;
 use crate::config;
 use penguin_mux::{Datagram, Dupe, Multiplexor};
-use std::collections::HashMap;
 use tokio::{sync::mpsc, task::JoinSet};
 use tracing::{debug, error, trace, warn};
+
+#[cfg(feature = "nohash")]
+use nohash_hasher::IntMap;
+#[cfg(not(feature = "nohash"))]
+use std::collections::HashMap as IntMap;
 
 /// Multiplex the `WebSocket` connection and handle the forwarding requests.
 #[tracing::instrument(skip(ws_stream), level = "debug")]
@@ -20,7 +24,7 @@ pub async fn handle_websocket(ws_stream: WebSocket, reverse: bool) {
         0
     });
     let mux = Multiplexor::new(ws_stream, Some(options), None);
-    let mut udp_clients: HashMap<u32, mpsc::Sender<Datagram>> = HashMap::new();
+    let mut udp_clients: IntMap<u32, mpsc::Sender<Datagram>> = IntMap::default();
     debug!("WebSocket connection established");
     let mut jobs = JoinSet::new();
     // Channel for listeners to send UDP datagrams to the main loop
