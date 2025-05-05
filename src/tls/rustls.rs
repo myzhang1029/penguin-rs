@@ -15,6 +15,10 @@ use std::sync::Arc;
 /// Type alias for the inner TLS identity type.
 pub type TlsIdentityInner = ServerConfig;
 
+/// Type alias for the Hyper HTTPS connector.
+pub type HttpsConnector =
+    hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>;
+
 pub async fn make_server_config(
     cert_path: &str,
     key_path: &str,
@@ -218,6 +222,28 @@ impl ServerCertVerifier for EmptyVerifier {
             .signature_verification_algorithms
             .supported_schemes()
     }
+}
+
+/// For backend requests
+#[cfg(feature = "rustls-native-roots")]
+pub fn make_hyper_connector() -> std::io::Result<HttpsConnector> {
+    Ok(hyper_rustls::HttpsConnectorBuilder::new()
+        .with_native_roots()?
+        .https_or_http()
+        .enable_http1()
+        .enable_http2()
+        .build())
+}
+
+/// For backend requests
+#[cfg(feature = "rustls-webpki-roots")]
+pub fn make_hyper_connector() -> std::io::Result<HttpsConnector> {
+    Ok(hyper_rustls::HttpsConnectorBuilder::new()
+        .with_webpki_roots()
+        .https_or_http()
+        .enable_http1()
+        .enable_http2()
+        .build())
 }
 
 #[cfg(test)]

@@ -1,4 +1,3 @@
-#![allow(clippy::match_on_vec_items)]
 use super::*;
 use crate::{arg::ServerUrl, parse_remote::Remote};
 use penguin_mux::timing::OptionalDuration;

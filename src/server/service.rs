@@ -4,14 +4,17 @@
 
 use super::websocket::handle_websocket;
 use crate::arg::BackendUrl;
+use crate::tls::HttpsConnector;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64_STANDARD_ENGINE;
 use bytes::Bytes;
 use http::{HeaderValue, Method, Request, Response, StatusCode, Uri, header};
 use http_body_util::{BodyExt, Full as FullBody};
+use hyper::body::Body;
 use hyper::service::Service;
 use hyper::upgrade::OnUpgrade;
-use hyper_util::rt::TokioIo;
+use hyper_util::client::legacy::{Client as HyperClient, Error as HyperClientError};
+use hyper_util::rt::{TokioExecutor, TokioIo};
 use penguin_mux::{Dupe, PROTOCOL_VERSION, timing::OptionalDuration};
 use sha1::{Digest, Sha1};
 use std::pin::Pin;
@@ -52,12 +55,14 @@ pub(super) enum Error {
     #[error(transparent)]
     Http(#[from] http::Error),
     #[error(transparent)]
-    Reqwest(#[from] reqwest::Error),
+    Client(#[from] HyperClientError),
+    #[error(transparent)]
+    Body(#[from] hyper::Error),
 }
 
 /// Required state for each request.
 #[derive(Clone, Debug)]
-pub(super) struct State<'a> {
+pub(super) struct State<'a, B> {
     /// Backend URL
     backend: Option<&'a BackendUrl>,
     /// Websocket PSK
@@ -68,15 +73,15 @@ pub(super) struct State<'a> {
     obfs: bool,
     /// Whether we accept reverse binding
     reverse: bool,
-    /// Reqwest client
-    client: reqwest::Client,
+    /// Backend client
+    client: HyperClient<HttpsConnector, B>,
     /// TLS handshake timeout
     pub tls_timeout: OptionalDuration,
     /// HTTP timeout
     pub http_timeout: OptionalDuration,
 }
 
-impl Dupe for State<'_> {
+impl<B> Dupe for State<'_, B> {
     fn dupe(&self) -> Self {
         Self {
             backend: self.backend,
@@ -84,14 +89,19 @@ impl Dupe for State<'_> {
             not_found_resp: self.not_found_resp,
             obfs: self.obfs,
             reverse: self.reverse,
-            client: self.client.dupe(),
+            // `hyper` client is designed to be cheaply cloned.
+            client: self.client.clone(),
             tls_timeout: self.tls_timeout,
             http_timeout: self.http_timeout,
         }
     }
 }
 
-impl<'a> State<'a> {
+impl<'a, B> State<'a, B>
+where
+    B: Body + Send,
+    <B as Body>::Data: Send,
+{
     /// Create a new `State`
     pub fn new(
         backend: Option<&'a BackendUrl>,
@@ -102,41 +112,34 @@ impl<'a> State<'a> {
         tls_timeout: OptionalDuration,
         http_timeout: OptionalDuration,
     ) -> Self {
+        let client = HyperClient::builder(TokioExecutor::new())
+            .build(crate::tls::make_hyper_connector().expect("TODO"));
         Self {
             backend,
             ws_psk,
             not_found_resp,
             obfs,
             reverse,
-            client: reqwest::Client::new(),
+            client,
             tls_timeout,
             http_timeout,
         }
     }
 }
 
-impl State<'static> {
+impl<B> State<'static, B>
+where
+    B: Body + Send + Unpin + 'static,
+    <B as Body>::Data: Send,
+    <B as Body>::Error: std::error::Error + Send + Sync,
+{
     /// Helper for sending a request to the backend
     /// XXX: Should we use `reqwest`, or should we construct something new with `tower`?
-    async fn exec_request<B>(&self, req: Request<B>) -> Result<Response<FullBody<Bytes>>, Error>
-    where
-        B: hyper::body::Body,
-        <B as hyper::body::Body>::Error: std::fmt::Debug,
-    {
-        let (parts, body) = req.into_parts();
-        let method = parts.method;
-        let headers = parts.headers;
-        let body = body.collect().await.unwrap().to_bytes();
-        let req = self
-            .client
-            .request(method, parts.uri.to_string())
-            .body(body)
-            .headers(headers)
-            .build()?;
-        let resp = self.client.execute(req).await?;
+    async fn exec_request(&self, req: Request<B>) -> Result<Response<FullBody<Bytes>>, Error> {
+        let resp = self.client.request(req).await?;
         let status = resp.status();
         let headers = resp.headers().clone();
-        let body = resp.bytes().await?;
+        let body = resp.into_body().collect().await?.to_bytes();
         let mut http_resp = Response::new(FullBody::new(body));
         *http_resp.status_mut() = status;
         *http_resp.headers_mut() = headers;
@@ -144,14 +147,10 @@ impl State<'static> {
     }
 
     /// Reverse proxy and 404
-    async fn backend_or_404_handler<B>(
+    async fn backend_or_404_handler(
         self,
         mut req: Request<B>,
-    ) -> Result<Response<FullBody<Bytes>>, Error>
-    where
-        B: hyper::body::Body,
-        <B as hyper::body::Body>::Error: std::fmt::Debug,
-    {
+    ) -> Result<Response<FullBody<Bytes>>, Error> {
         if let Some(BackendUrl {
             scheme,
             authority,
@@ -204,15 +203,11 @@ impl State<'static> {
     }
 
     /// Check the PSK and protocol version and upgrade to a WebSocket if the PSK matches (if required).
-    async fn ws_handler<B>(
+    async fn ws_handler(
         self,
         mut req: Request<B>,
         reverse: bool,
-    ) -> Result<Response<FullBody<Bytes>>, Error>
-    where
-        B: hyper::body::Body,
-        <B as hyper::body::Body>::Error: std::fmt::Debug,
-    {
+    ) -> Result<Response<FullBody<Bytes>>, Error> {
         let on_upgrade = req.extensions_mut().remove::<OnUpgrade>();
         let headers = req.headers();
         let connection = headers.get(header::CONNECTION);
@@ -278,11 +273,11 @@ impl State<'static> {
     }
 }
 
-impl<B> Service<Request<B>> for State<'static>
+impl<B> Service<Request<B>> for State<'static, B>
 where
-    B: hyper::body::Body + Send + 'static,
-    <B as hyper::body::Body>::Error: std::fmt::Debug,
-    <B as hyper::body::Body>::Data: Send,
+    B: Body + Send + Unpin + 'static,
+    <B as Body>::Data: Send,
+    <B as Body>::Error: std::error::Error + Send + Sync,
 {
     type Response = Response<FullBody<Bytes>>;
     type Error = Error;

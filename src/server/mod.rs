@@ -165,7 +165,7 @@ fn arg_to_sockaddrs(arg: &ServerArgs) -> Result<Vec<SocketAddr>, Error> {
 async fn run_listener(
     listener: TcpListener,
     tls_config: Option<crate::tls::TlsIdentity>,
-    state: State<'static>,
+    state: State<'static, hyper::body::Incoming>,
 ) {
     loop {
         let new_state = state.dupe();
@@ -192,7 +192,7 @@ async fn run_listener(
 /// Serves a single connection from a client with TLS, ignoring errors.
 async fn serve_connection_tls<S>(
     stream: S,
-    state: State<'static>,
+    state: State<'static, hyper::body::Incoming>,
     tls_config: Arc<TlsIdentityInner>,
 ) where
     S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
@@ -220,7 +220,7 @@ async fn serve_connection_tls<S>(
 
 /// Serves a single connection from a client, ignoring errors.
 #[tracing::instrument(skip_all, level = "debug")]
-async fn serve_connection<S>(stream: S, state: State<'static>)
+async fn serve_connection<S>(stream: S, state: State<'static, hyper::body::Incoming>)
 where
     S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {

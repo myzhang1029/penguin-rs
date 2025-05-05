@@ -34,14 +34,15 @@ futures-util = { version = "0.3", default-features = false }
 http = "1"
 http-body-util = { version = "0.1", optional = true }
 hyper = { version = "1", features = ["server", "http1", "http2"], optional = true }
-hyper-util = { version = "0.1", features = ["server", "server-auto", "tokio"], optional = true }
+hyper-rustls = { version = "0.27", features = ["http1", "http2", "logging", "ring", "tls12"], default-features = false, optional = true }
+hyper-tls = { version = "0.6", optional = true }
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "server", "server-auto", "tokio"], optional = true }
 instant-acme = { version = "0.7", features = ["ring", "hyper-rustls"], default-features = false, optional = true }
 log = { version = "0.4", optional = true }
 nohash-hasher = { version = "0.2", optional = true }
 parking_lot = "0.12"
 rand = "0.9"
 rcgen = { version = "0.13", optional = true }
-reqwest = { version = "0.12", optional = true, default-features = false }
 rustls = { version = "^0.23, >=0.23.18", features = ["logging", "ring", "tls12"], default-features = false, optional = true }
 rustls-native-certs = { version = "0.8", optional = true }
 rustls-pemfile = { version = "2", optional = true }
@@ -66,10 +67,10 @@ default = ["rustls-native-roots", "tests-real-internet4", "tests-udp", "penguin-
 # Note that it does not make sense to use more than one TLS implementations
 # at the same time, but there must be at least one if `penguin-binary` is
 # enabled.
-rustls-webpki-roots = ["dep:webpki-roots", "tokio-tungstenite/rustls-tls-webpki-roots", "reqwest/rustls-tls-webpki-roots", "__rustls"]
-rustls-native-roots = ["dep:rustls-native-certs", "tokio-tungstenite/rustls-tls-native-roots", "reqwest/rustls-tls-native-roots", "__rustls"]
+rustls-webpki-roots = ["dep:webpki-roots", "tokio-tungstenite/rustls-tls-webpki-roots", "hyper-rustls/webpki-tokio", "__rustls"]
+rustls-native-roots = ["dep:rustls-native-certs", "tokio-tungstenite/rustls-tls-native-roots", "hyper-rustls/native-tokio", "__rustls"]
 __rustls = ["dep:rustls", "dep:rustls-pemfile", "dep:tokio-rustls"]
-nativetls = ["dep:tokio-native-tls", "tokio-tungstenite/native-tls", "reqwest/native-tls"]
+nativetls = ["dep:tokio-native-tls", "tokio-tungstenite/native-tls"]
 # Dependencies for testing
 dev-dependencies = ["dep:rcgen", "tracing-subscriber/env-filter", "tokio/net", "tokio/rt-multi-thread"]
 # Allow some tests that require real internet connection
@@ -116,7 +117,6 @@ server = [
     "dep:http-body-util",
     "dep:hyper",
     "dep:hyper-util",
-    "dep:reqwest",
     "penguin-binary-common",
 ]
 # `penguin` binary -- client

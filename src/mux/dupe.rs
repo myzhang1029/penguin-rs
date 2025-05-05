@@ -47,12 +47,3 @@ impl_dupe_as_clone! {
     // `broadcast::Sender` is designed to be cheaply cloned.
     tokio::sync::broadcast::Sender<T> => (T),
 }
-
-// `Client` uses `Arc` internally.
-#[cfg(feature = "server")]
-impl Dupe for reqwest::Client {
-    #[inline]
-    fn dupe(&self) -> Self {
-        self.clone()
-    }
-}
