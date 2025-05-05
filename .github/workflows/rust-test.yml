@@ -64,6 +64,11 @@ jobs:
       env:
         RUSTFLAGS: -Cinstrument-coverage
 
+    - name: Run cargo tests with the nohash hashmap
+      run: cargo nextest run --all-targets --verbose --features ${{ matrix.tls }},tests-real-internet4,acme,penguin-binary,nohash --no-default-features
+      env:
+        RUSTFLAGS: -Cinstrument-coverage
+
     - name: Run cargo lib tests with minimal features
       run: cargo nextest run --all-targets --verbose --no-default-features
       env:
