@@ -46,7 +46,7 @@ rustls-native-certs = { version = "0.8", optional = true }
 rustls-pemfile = { version = "2", optional = true }
 sha1 = { version = "0.10", optional = true }
 thiserror = "2"
-tokio = { version = "^1, >=1.23.1", features = ["macros", "parking_lot", "rt", "sync", "time"] }
+tokio = { version = "^1, >=1.23.1", features = ["io-util", "macros", "parking_lot", "rt", "sync", "time"] }
 tokio-native-tls = { version = "0.3", optional = true }
 tokio-rustls = { version = "0.26", features = ["logging", "ring", "tls12"], default-features = false, optional = true }
 tokio-tungstenite = { version = "0.26", default-features = false, optional = true }
@@ -70,7 +70,7 @@ rustls-native-roots = ["dep:rustls-native-certs", "tokio-tungstenite/rustls-tls-
 __rustls = ["dep:rustls", "dep:rustls-pemfile", "dep:tokio-rustls"]
 nativetls = ["dep:tokio-native-tls", "tokio-tungstenite/native-tls", "reqwest/native-tls"]
 # Dependencies for testing
-dev-dependencies = ["dep:rcgen", "tracing-subscriber/env-filter", "tokio/io-util", "tokio/net", "tokio/rt-multi-thread"]
+dev-dependencies = ["dep:rcgen", "tracing-subscriber/env-filter", "tokio/net", "tokio/rt-multi-thread"]
 # Allow some tests that require real internet connection
 tests-real-internet4 = []
 tests-real-internet6 = []
@@ -99,7 +99,7 @@ penguin-binary-common = [
     "dep:clap",
     "dep:tracing-subscriber",
     "tungstenite",
-    "tokio/fs", "tokio/io-std", "tokio/io-util", "tokio/net", "tokio/rt-multi-thread", "tokio/signal",
+    "tokio/fs", "tokio/net", "tokio/rt-multi-thread", "tokio/signal",
     "tokio-tungstenite/default",
 ]
 # `penguin` binary -- server
@@ -113,7 +113,7 @@ server = [
     "penguin-binary-common",
 ]
 # `penguin` binary -- client
-client = ["penguin-binary-common"]
+client = ["penguin-binary-common", "tokio/io-std"]
 # `penguin` binary
 # Building both is the default and recommended in most cases.
 # Only building the client or server binary is supported on a best-effort basis.
