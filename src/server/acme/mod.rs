@@ -253,9 +253,9 @@ mod tests_need_pebble {
             let client_config = make_client_config(None, None, None, true)
                 .await
                 .expect("Failed to create client config");
-            let mut http_connecor = hyper_util::client::legacy::connect::HttpConnector::new();
-            http_connecor.enforce_http(false);
-            let connector = (http_connecor, client_config.into()).into();
+            let mut http_connector = hyper_util::client::legacy::connect::HttpConnector::new();
+            http_connector.enforce_http(false);
+            let connector = (http_connector, client_config.into()).into();
 
             Self(HyperClient::builder(TokioExecutor::new()).build(connector))
         }
