@@ -9,6 +9,7 @@ use tokio_native_tls::native_tls::{Certificate, Identity, TlsAcceptor, TlsConnec
 pub type TlsIdentityInner = tokio_native_tls::TlsAcceptor;
 
 /// Type alias for the Hyper HTTPS connector.
+#[cfg(feature = "server")]
 pub type HyperConnector =
     hyper_tls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>;
 
@@ -68,6 +69,7 @@ async fn read_key_cert(key_path: &str, cert_path: &str) -> Result<Identity, Erro
     Ok(Identity::from_pkcs8(&cert, &key)?)
 }
 
+#[cfg(feature = "server")]
 pub fn make_hyper_connector() -> std::io::Result<HyperConnector> {
     Ok(HyperConnector::new())
 }

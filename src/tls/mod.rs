@@ -16,15 +16,15 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio_tungstenite::Connector;
 
+#[cfg(all(feature = "__rustls", feature = "server"))]
+pub use self::rustls::{HyperConnector, make_hyper_connector};
 #[allow(clippy::module_name_repetitions)]
 #[cfg(feature = "__rustls")]
-pub use self::rustls::{
-    HyperConnector, TlsIdentityInner, make_client_config, make_hyper_connector, make_server_config,
-};
+pub use self::rustls::{TlsIdentityInner, make_client_config, make_server_config};
+#[cfg(all(feature = "nativetls", feature = "server"))]
+pub use native::{HyperConnector, make_hyper_connector};
 #[cfg(feature = "nativetls")]
-pub use native::{
-    HyperConnector, TlsIdentityInner, make_client_config, make_hyper_connector, make_server_config,
-};
+pub use native::{TlsIdentityInner, make_client_config, make_server_config};
 
 /// A hot-swappable container for a TLS key and certificate.
 #[allow(clippy::module_name_repetitions)]
