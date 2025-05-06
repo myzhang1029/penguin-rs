@@ -55,17 +55,17 @@ jobs:
       run: .github/workflows/pebble.sh
 
     - name: Run cargo tests with more features on
-      run: cargo nextest run --all-targets --verbose --features ${{ matrix.tls }},tests-real-internet4,tests-acme-has-pebble,penguin-binary,acme,default-is-ipv6,tokio-console,deadlock-detection --no-default-features
+      run: cargo nextest run --all-targets --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-acme-has-pebble,penguin-binary,acme,default-is-ipv6,tokio-console,deadlock-detection --no-default-features
       env:
         RUSTFLAGS: -Cinstrument-coverage
 
     - name: Run cargo tests with default features
-      run: cargo nextest run --all-targets --verbose --features ${{ matrix.tls }},tests-real-internet4,acme,penguin-binary --no-default-features
+      run: cargo nextest run --all-targets --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,acme,penguin-binary --no-default-features
       env:
         RUSTFLAGS: -Cinstrument-coverage
 
     - name: Run cargo tests with the nohash hashmap
-      run: cargo nextest run --all-targets --verbose --features ${{ matrix.tls }},tests-real-internet4,acme,penguin-binary,nohash --no-default-features
+      run: cargo nextest run --all-targets --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,acme,penguin-binary,nohash --no-default-features
       env:
         RUSTFLAGS: -Cinstrument-coverage
 
