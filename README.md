@@ -101,6 +101,8 @@ Executable features:
 - `rustls-native-roots`: use `rustls` with system CA (default)
 - `rustls-webpki-roots`: use `rustls` with bundled webpki CA
 - `nativetls`: use `native-tls`
+- `ring`: use `ring` as the crypto provider for `rustls`
+- `aws-lc-rs`: use `aws-lc-rs` as the crypto provider for `rustls`
 
 - `default-is-ipv6`: use `::`/`::1` instead of `0.0.0.0`/`127.0.0.1` when an IP address is omitted in the client command line
 
