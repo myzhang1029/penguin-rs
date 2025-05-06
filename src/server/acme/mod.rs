@@ -234,29 +234,28 @@ mod tests_need_pebble {
     #[derive(Clone, Debug)]
     pub struct IgnoreTlsHttpClient(HyperClient<HyperConnector, http_body_util::Full<Bytes>>);
     impl IgnoreTlsHttpClient {
+        #[cfg(feature = "__rustls")]
         pub async fn new() -> Self {
-            let client_config = make_client_config(None, None, None, true)
+            let mut client_config = make_client_config(None, None, None, true)
                 .await
                 .expect("Failed to create client config");
             // Not supposed to predefine ALPN protocols for ACME
-            #[cfg(feature = "__rustls")]
-            let client_config = {
-                let mut config = client_config;
-                config.alpn_protocols = vec![];
-                config
-            };
-            #[cfg(feature = "__rustls")]
+            client_config.alpn_protocols = vec![];
             let connector = hyper_rustls::HttpsConnectorBuilder::new()
                 .with_tls_config(client_config)
                 .https_or_http()
                 .enable_all_versions()
                 .build();
-            #[cfg(feature = "nativetls")]
-            let connector = (
-                hyper_util::client::legacy::connect::HttpConnector::new(),
-                client_config.into(),
-            )
-                .into();
+            Self(HyperClient::builder(TokioExecutor::new()).build(connector))
+        }
+        #[cfg(feature = "nativetls")]
+        pub async fn new() -> Self {
+            let client_config = make_client_config(None, None, None, true)
+                .await
+                .expect("Failed to create client config");
+            let mut http_connecor = hyper_util::client::legacy::connect::HttpConnector::new();
+            http_connecor.enforce_http(false);
+            let connector = (http_connecor, client_config.into()).into();
 
             Self(HyperClient::builder(TokioExecutor::new()).build(connector))
         }
