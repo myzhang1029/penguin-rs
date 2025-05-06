@@ -76,8 +76,7 @@ dev-dependencies = ["dep:rcgen", "tracing-subscriber/env-filter", "tokio/net", "
 # Allow some tests that require real internet connection
 tests-real-internet4 = []
 tests-real-internet6 = []
-# Allow some tests that uses UDP sockets. They may be flaky depending on the
-# network environment.
+# Allow some tests that uses UDP sockets.
 tests-udp = []
 # Test the ACME client with a local ACME server at https://localhost:14000/dir
 tests-acme-has-pebble = ["acme"]
@@ -96,10 +95,6 @@ acme = ["server", "dep:instant-acme", "dep:rcgen", "tokio/process"]
 # use tungstenite as the WebSocket implementation
 tungstenite = ["dep:tokio-tungstenite"]
 # Use nohash-hasher for flow_id hashmaps
-# This option may be an optimization for resource-constrained devices, but
-# will also open up a DoS attack vector if the peer cannot be trusted.
-# If both peers use this penguin implementation or any other implementation
-# that generates flow_ids with a random number generator, this is safe.
 nohash = ["dep:nohash-hasher"]
 # `penguin` binary -- common
 penguin-binary-common = [

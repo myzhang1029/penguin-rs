@@ -86,6 +86,37 @@ Servers and clients with the same protocol version are compatible with each othe
 
 The current protocol version is `penguin-v7`. See [PROTOCOL.md](PROTOCOL.md) for details.
 
+## Cargo Features
+Library features:
+- `tungstenite`: implement our traits on `tokio_tungstenite::WebSocketStream` (default)
+- `nohash`: (caution) use `nohash_hasher` as the internal `flow_id` hashmap.
+This option may be an optimization for resource-constrained devices, but will also open up a DoS attack vector if the peer cannot be trusted.
+If both peers use this penguin implementation or any other implementation
+that generates flow_ids with a random number generator, this is safe.
+
+Executable features:
+- `client`: build the client (default)
+- `server`: build the server (default)
+- `penguin-binary`: shorthand for both `server` and `client` (default)
+- `rustls-native-roots`: use `rustls` with system CA (default)
+- `rustls-webpki-roots`: use `rustls` with bundled webpki CA
+- `nativetls`: use `native-tls`
+
+- `default-is-ipv6`: use `::`/`::1` instead of `0.0.0.0`/`127.0.0.1` when an IP address is omitted in the client command line
+
+- `tokio-console`: enable `console-subscriber` support
+- `remove-logging`: statically remove `trace` level logging and tracing code
+- `deadlock-detection`: spawn a background thread running `parking_lot`'s deadlock detection
+- `acme`: (requires `server`) enable the built-in ACME client (default)
+Will also make the binary use `rustls` even if `nativetls` is enabled due to internal dependencies.
+- `rustls_keylog`: (caution) export TLS session data to the file specified in the environmental variable `SSLKEYLOGFILE`
+
+Testing features:
+- `tests-real-internet4`: run tests that require IPv4 access to the internet
+- `tests-real-internet6`: run tests that require IPv4 access to the internet
+- `tests-udp`: run tests that expect UDP traffic to work reliably. They may be flaky depending on the network environment.
+- `tests-acme-has-pebble`: test the ACME client with a local ACME server at `https://localhost:14000/dir`
+
 ## Contribution
 All contributions are welcome. Please make sure you
 1. Write test cases for the bugfix/feature
