@@ -236,9 +236,10 @@ mod tests_need_pebble {
     impl IgnoreTlsHttpClient {
         #[cfg(feature = "__rustls")]
         pub async fn new() -> Self {
-            let mut client_config = make_client_config(None, None, None, true)
-                .await
-                .expect("Failed to create client config");
+            let mut client_config =
+                make_client_config(None, None, None, true, Some(crate::tls::TLS_ALPN))
+                    .await
+                    .expect("Failed to create client config");
             // Not supposed to predefine ALPN protocols for ACME
             client_config.alpn_protocols = vec![];
             let connector = hyper_rustls::HttpsConnectorBuilder::new()
@@ -250,9 +251,10 @@ mod tests_need_pebble {
         }
         #[cfg(feature = "nativetls")]
         pub async fn new() -> Self {
-            let client_config = make_client_config(None, None, None, true)
-                .await
-                .expect("Failed to create client config");
+            let client_config =
+                make_client_config(None, None, None, true, Some(crate::tls::TLS_ALPN))
+                    .await
+                    .expect("Failed to create client config");
             let mut http_connector = hyper_util::client::legacy::connect::HttpConnector::new();
             http_connector.enforce_http(false);
             let connector = (http_connector, client_config.into()).into();

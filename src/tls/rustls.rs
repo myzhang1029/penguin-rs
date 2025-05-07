@@ -77,6 +77,7 @@ pub async fn make_client_config(
     key_path: Option<&str>,
     ca_path: Option<&str>,
     tls_skip_verify: bool,
+    tls_alpn: Option<&[&str]>,
 ) -> Result<ClientConfig, Error> {
     let config = ClientConfig::builder();
     // Whether there is a custom CA store
@@ -103,7 +104,9 @@ pub async fn make_client_config(
             .with_client_auth_cert(cert_chain, key_der)?,
         (false, None) => config.with_root_certificates(roots).with_no_client_auth(),
     };
-    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    if let Some(tls_alpn) = tls_alpn {
+        config.alpn_protocols = tls_alpn.iter().map(|&x| x.as_bytes().to_vec()).collect();
+    }
     // else leave it empty
     #[cfg(feature = "rustls-keylog")]
     {
@@ -352,9 +355,15 @@ mod tests {
         tokio::fs::write(&ca_path, custom_ca.cert.pem())
             .await
             .unwrap();
-        let config = make_client_config(None, None, Some(ca_path.to_str().unwrap()), true)
-            .await
-            .unwrap();
+        let config = make_client_config(
+            None,
+            None,
+            Some(ca_path.to_str().unwrap()),
+            true,
+            Some(&crate::tls::TLS_ALPN),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             config.alpn_protocols,
             vec![b"h2".to_vec(), b"http/1.1".to_vec()]

@@ -47,11 +47,15 @@ pub async fn make_client_config(
     key_path: Option<&str>,
     ca_path: Option<&str>,
     tls_skip_verify: bool,
+    tls_alpn: Option<&[&str]>,
 ) -> Result<TlsConnector, Error> {
     let mut tls_config_builder = TlsConnector::builder();
     tls_config_builder
         .danger_accept_invalid_certs(tls_skip_verify)
         .danger_accept_invalid_hostnames(tls_skip_verify);
+    if let Some(tls_alpn) = tls_alpn {
+        tls_config_builder.request_alpns(tls_alpn);
+    }
     if let Some(ca_path) = ca_path {
         let ca = tokio::fs::read(ca_path).await?;
         tls_config_builder.add_root_certificate(Certificate::from_pem(&ca)?);

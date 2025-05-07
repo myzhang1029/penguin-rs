@@ -30,6 +30,8 @@ pub use native::{TlsIdentityInner, make_client_config, make_server_config};
 #[allow(clippy::module_name_repetitions)]
 pub type TlsIdentity = Arc<ArcSwap<TlsIdentityInner>>;
 
+pub const TLS_ALPN: [&str; 2] = ["h2", "http/1.1"];
+
 /// Error type for TLS configuration
 #[derive(Error, Debug)]
 pub enum Error {
@@ -59,7 +61,8 @@ pub async fn make_tls_connector(
     tls_ca: Option<&str>,
     tls_insecure: bool,
 ) -> Result<Connector, Error> {
-    let tls_config = make_client_config(tls_cert, tls_key, tls_ca, tls_insecure).await?;
+    let tls_config =
+        make_client_config(tls_cert, tls_key, tls_ca, tls_insecure, Some(&TLS_ALPN)).await?;
     #[cfg(feature = "__rustls")]
     let result = Ok(Connector::Rustls(tls_config.into()));
     #[cfg(feature = "nativetls")]
