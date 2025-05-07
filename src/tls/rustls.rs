@@ -11,6 +11,7 @@ use rustls::{
     server::WebPkiClientVerifier,
 };
 use std::sync::Arc;
+use tracing::debug;
 
 /// Type alias for the inner TLS identity type.
 pub type TlsIdentityInner = ServerConfig;
@@ -85,11 +86,17 @@ pub async fn make_client_config(
     let mut config = match (tls_skip_verify, client_certificate) {
         (true, Some((cert_chain, key_der))) => config
             .dangerous()
-            .with_custom_certificate_verifier(Arc::new(EmptyVerifier {}))
+            .with_custom_certificate_verifier(Arc::new(EmptyVerifier(
+                CryptoProvider::get_default()
+                    .expect("no process-level CryptoProvider available (this is a bug)"),
+            )))
             .with_client_auth_cert(cert_chain, key_der)?,
         (true, None) => config
             .dangerous()
-            .with_custom_certificate_verifier(Arc::new(EmptyVerifier {}))
+            .with_custom_certificate_verifier(Arc::new(EmptyVerifier(
+                CryptoProvider::get_default()
+                    .expect("no process-level CryptoProvider available (this is a bug)"),
+            )))
             .with_no_client_auth(),
         (false, Some((cert_chain, key_der))) => config
             .with_root_certificates(roots)
@@ -97,6 +104,7 @@ pub async fn make_client_config(
         (false, None) => config.with_root_certificates(roots).with_no_client_auth(),
     };
     config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    // else leave it empty
     #[cfg(feature = "rustls-keylog")]
     {
         config.key_log = Arc::new(rustls::KeyLogFile::new());
@@ -128,7 +136,8 @@ async fn load_ca_store(ca_path: &str) -> Result<RootCertStore, Error> {
     let client_ca = tokio::fs::read(ca_path).await?;
     let client_ca: std::io::Result<Vec<CertificateDer<'_>>> =
         rustls_pemfile::certs(&mut client_ca.as_ref()).collect();
-    let (new, _) = store.add_parsable_certificates(client_ca?.into_iter());
+    let (new, ignored) = store.add_parsable_certificates(client_ca?.into_iter());
+    debug!("ignored {ignored} certificates from {ca_path}");
     if new == 0 {
         Err(Error::EmptyClientCertStore)
     } else {
@@ -171,7 +180,7 @@ async fn try_load_certificate(
 
 /// Skip TLS verification
 #[derive(Debug)]
-pub struct EmptyVerifier;
+pub struct EmptyVerifier(&'static Arc<CryptoProvider>);
 
 impl ServerCertVerifier for EmptyVerifier {
     fn verify_server_cert(
@@ -195,9 +204,7 @@ impl ServerCertVerifier for EmptyVerifier {
             message,
             cert,
             dss,
-            &CryptoProvider::get_default()
-                .expect("no process-level CryptoProvider available (this is a bug)")
-                .signature_verification_algorithms,
+            &self.0.signature_verification_algorithms,
         )
     }
 
@@ -211,17 +218,12 @@ impl ServerCertVerifier for EmptyVerifier {
             message,
             cert,
             dss,
-            &CryptoProvider::get_default()
-                .expect("no process-level CryptoProvider available (this is a bug)")
-                .signature_verification_algorithms,
+            &self.0.signature_verification_algorithms,
         )
     }
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        CryptoProvider::get_default()
-            .expect("no process-level CryptoProvider available (this is a bug)")
-            .signature_verification_algorithms
-            .supported_schemes()
+        self.0.signature_verification_algorithms.supported_schemes()
     }
 }
 
