@@ -237,7 +237,7 @@ mod tests_need_pebble {
         #[cfg(feature = "__rustls")]
         pub async fn new() -> Self {
             let mut client_config =
-                make_client_config(None, None, None, true, Some(crate::tls::TLS_ALPN))
+                make_client_config(None, None, None, true, Some(&crate::tls::TLS_ALPN))
                     .await
                     .expect("Failed to create client config");
             // Not supposed to predefine ALPN protocols for ACME
@@ -252,7 +252,7 @@ mod tests_need_pebble {
         #[cfg(feature = "nativetls")]
         pub async fn new() -> Self {
             let client_config =
-                make_client_config(None, None, None, true, Some(crate::tls::TLS_ALPN))
+                make_client_config(None, None, None, true, Some(&crate::tls::TLS_ALPN))
                     .await
                     .expect("Failed to create client config");
             let mut http_connector = hyper_util::client::legacy::connect::HttpConnector::new();
