@@ -129,7 +129,7 @@ fn get_system_certs() -> Result<RootCertStore, Error> {
 #[cfg(feature = "rustls-webpki-roots")]
 fn get_system_certs() -> Result<RootCertStore, Error> {
     let mut roots = RootCertStore::empty();
-    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.to_vec());
     Ok(roots)
 }
 
