@@ -10,6 +10,7 @@
 pub mod config;
 mod dupe;
 pub mod frame;
+mod loom;
 mod proto_version;
 mod stream;
 mod task;
@@ -19,16 +20,13 @@ pub mod timing;
 pub mod ws;
 
 use crate::frame::{BindPayload, BindType, FinalizedFrame, Frame};
+use crate::loom::{Arc, AtomicBool, AtomicU32, AtomicWaker, Mutex, Ordering, RwLock};
 use crate::task::{Task, TaskData};
 use crate::ws::WebSocket;
 use bytes::Bytes;
-use futures_util::task::AtomicWaker;
-use parking_lot::{Mutex, RwLock};
 use rand::distr::uniform::SampleUniform;
 use std::future::poll_fn;
 use std::hash::{BuildHasher, Hash};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use thiserror::Error;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot};

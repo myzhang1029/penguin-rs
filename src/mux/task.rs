@@ -3,17 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use crate::frame::{ConnectPayload, FinalizedFrame, Frame, Payload};
+use crate::loom::{Arc, AtomicBool, AtomicU32, AtomicWaker, Mutex, RwLock};
 use crate::timing::{OptionalDuration, OptionalInterval};
 use crate::ws::{Message, WebSocket};
 use crate::{
     BindRequest, Datagram, Dupe, Error, EstablishedStreamData, FlowSlot, MuxStream, Result,
 };
 use bytes::Bytes;
-use futures_util::task::AtomicWaker;
-use parking_lot::{Mutex, RwLock};
 use std::future::poll_fn;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::task::{Context, Poll, ready};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;

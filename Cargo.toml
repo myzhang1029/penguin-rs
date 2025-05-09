@@ -63,6 +63,9 @@ tempfile = "3"
 # Hack; https://stackoverflow.com/q/73015087
 rusty-penguin = { path = ".", default-features = false, features = ["dev-dependencies"] }
 
+[target.'cfg(loom)'.dependencies]
+loom = { version = "0.7", features = ["checkpoint", "futures"] }
+
 [features]
 default = ["rustls-native-roots", "tests-real-internet4", "tests-udp", "penguin-binary", "acme", "tungstenite", "ring"]
 # Note that it does not make sense to use more than one TLS implementations
@@ -146,4 +149,4 @@ lto = true
 panic = "abort"
 
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)', 'cfg(loom)'] }

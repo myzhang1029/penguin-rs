@@ -47,3 +47,8 @@ impl_dupe_as_clone! {
     // `broadcast::Sender` is designed to be cheaply cloned.
     tokio::sync::broadcast::Sender<T> => (T),
 }
+
+#[cfg(loom)]
+impl_dupe_as_clone! {
+    loom::sync::Arc<T> => (T),
+}

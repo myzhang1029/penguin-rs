@@ -3,13 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use crate::frame::{FinalizedFrame, Frame};
+use crate::loom::{Arc, AtomicBool, AtomicU32, AtomicWaker, Ordering};
 use bytes::{Buf, Bytes};
-use futures_util::task::AtomicWaker;
 use std::io;
 use std::io::ErrorKind::BrokenPipe;
 use std::pin::Pin;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::task::{Context, Poll, ready};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, BufReader};
 use tokio::sync::mpsc;
@@ -428,8 +426,21 @@ mod tests {
     const DEFAULT_RWND_THRESHOLD: u32 = 4;
 
     #[tokio::test]
+    #[cfg(not(loom))]
     async fn test_mux_stream_read() {
         setup_logging();
+        test_mux_stream_read_inner().await;
+    }
+
+    #[test]
+    #[cfg(loom)]
+    fn test_mux_stream_read_loom() {
+        loom::model(|| {
+            loom::future::block_on(test_mux_stream_read_inner());
+        })
+    }
+
+    async fn test_mux_stream_read_inner() {
         let (rx_frame_tx, rx_frame_rx) = mpsc::channel(10);
         let (tx_frame_tx, mut tx_frame_rx) = mpsc::unbounded_channel();
         let (dropped_ports_tx, _) = mpsc::unbounded_channel();
@@ -451,26 +462,38 @@ mod tests {
         let mut buf = vec![0u8; 5];
         let mut read_buf = tokio::io::ReadBuf::new(&mut buf);
         let waker = futures_util::task::noop_waker();
-        let mut cx = Context::from_waker(&waker);
-        let rs = stream.as_mut().poll_read(&mut cx, &mut read_buf);
-        assert!(matches!(rs, Poll::Pending));
+        {
+            let mut cx = Context::from_waker(&waker);
+            let rs = stream.as_mut().poll_read(&mut cx, &mut read_buf);
+            assert!(matches!(rs, Poll::Pending));
+        }
 
         rx_frame_tx.send(Bytes::from("hello")).await.unwrap();
-        let rs = stream.as_mut().poll_read(&mut cx, &mut read_buf);
-        assert!(matches!(rs, Poll::Ready(Ok(()))));
-        assert_eq!(read_buf.filled().len(), 5);
-        assert_eq!(read_buf.filled(), b"hello");
-        read_buf.clear();
+        {
+            let mut cx = Context::from_waker(&waker);
+            let rs = stream.as_mut().poll_read(&mut cx, &mut read_buf);
+            assert!(matches!(rs, Poll::Ready(Ok(()))));
+            assert_eq!(read_buf.filled().len(), 5);
+            assert_eq!(read_buf.filled(), b"hello");
+            read_buf.clear();
+        }
 
-        let rs = stream.as_mut().poll_read(&mut cx, &mut read_buf);
-        assert!(matches!(rs, Poll::Pending));
+        {
+            let mut cx = Context::from_waker(&waker);
+            let rs = stream.as_mut().poll_read(&mut cx, &mut read_buf);
+            assert!(matches!(rs, Poll::Pending));
+        }
 
         rx_frame_tx.send(Bytes::from("world")).await.unwrap();
-        let rs = stream.as_mut().poll_read(&mut cx, &mut read_buf);
-        assert!(matches!(rs, Poll::Ready(Ok(()))));
-        assert_eq!(read_buf.filled().len(), 5);
-        assert_eq!(read_buf.filled(), b"world");
-        read_buf.clear();
+
+        {
+            let mut cx = Context::from_waker(&waker);
+            let rs = stream.as_mut().poll_read(&mut cx, &mut read_buf);
+            assert!(matches!(rs, Poll::Ready(Ok(()))));
+            assert_eq!(read_buf.filled().len(), 5);
+            assert_eq!(read_buf.filled(), b"world");
+            read_buf.clear();
+        }
 
         // There should be an `Acknowledge` frame waiting for us now
         let frame = tx_frame_rx.recv().await.unwrap();
@@ -485,14 +508,30 @@ mod tests {
 
         // Try EOF
         drop(rx_frame_tx);
-        let rs = stream.as_mut().poll_read(&mut cx, &mut read_buf);
-        assert!(matches!(rs, Poll::Ready(Ok(()))));
-        assert_eq!(read_buf.filled().len(), 0);
+        {
+            let mut cx = Context::from_waker(&waker);
+            let rs = stream.as_mut().poll_read(&mut cx, &mut read_buf);
+            assert!(matches!(rs, Poll::Ready(Ok(()))));
+            assert_eq!(read_buf.filled().len(), 0);
+        }
     }
 
     #[tokio::test]
+    #[cfg(not(loom))]
     async fn test_mux_stream_write() {
         setup_logging();
+        test_mux_stream_write_inner().await;
+    }
+
+    #[test]
+    #[cfg(loom)]
+    fn test_mux_stream_write_loom() {
+        loom::model(|| {
+            loom::future::block_on(test_mux_stream_write_inner());
+        })
+    }
+
+    async fn test_mux_stream_write_inner() {
         let (_, rx_frame_rx) = mpsc::channel(DEFAULT_RWND_THRESHOLD as usize);
         let (tx_frame_tx, mut tx_frame_rx) = mpsc::unbounded_channel();
         let (dropped_ports_tx, _) = mpsc::unbounded_channel();
@@ -512,12 +551,13 @@ mod tests {
         };
         let mut stream = pin!(stream);
         let waker = futures_util::task::noop_waker();
-        let mut cx = Context::from_waker(&waker);
-
-        let rs = stream.as_mut().poll_write(&mut cx, b"hello");
-        assert!(matches!(rs, Poll::Ready(Ok(5))));
-        let rs = stream.as_mut().poll_write(&mut cx, b"world");
-        assert!(matches!(rs, Poll::Ready(Ok(5))));
+        {
+            let mut cx = Context::from_waker(&waker);
+            let rs = stream.as_mut().poll_write(&mut cx, b"hello");
+            assert!(matches!(rs, Poll::Ready(Ok(5))));
+            let rs = stream.as_mut().poll_write(&mut cx, b"world");
+            assert!(matches!(rs, Poll::Ready(Ok(5))));
+        }
 
         // Check the frame sent
         let frame1 = tx_frame_rx.recv().await.unwrap();
@@ -540,14 +580,20 @@ mod tests {
         }
 
         // Try to write again
-        let rs = stream.as_mut().poll_write(&mut cx, b"maybe");
-        assert!(matches!(rs, Poll::Pending));
+        {
+            let mut cx = Context::from_waker(&waker);
+            let rs = stream.as_mut().poll_write(&mut cx, b"maybe");
+            assert!(matches!(rs, Poll::Pending));
+        }
 
         // Simulate `Acknowledge`
         stream.psh_send_remaining.fetch_add(1, Ordering::Release);
 
-        let rs = stream.as_mut().poll_write(&mut cx, b"maybe");
-        assert!(matches!(rs, Poll::Ready(Ok(5))));
+        {
+            let mut cx = Context::from_waker(&waker);
+            let rs = stream.as_mut().poll_write(&mut cx, b"maybe");
+            assert!(matches!(rs, Poll::Ready(Ok(5))));
+        }
 
         let frame4 = tx_frame_rx.recv().await.unwrap();
         assert_eq!(frame4.opcode().unwrap(), crate::frame::OpCode::Push);
@@ -561,6 +607,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(loom))]
     async fn test_copy_bidirectional_normal() {
         const TX1: Bytes = Bytes::from_static(b"hello from mux");
         const RX1: Bytes = Bytes::from_static(b"hello from other");
@@ -663,6 +710,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(loom))]
     async fn test_flow_control() {
         const TEST_ACK_THRESHOLD: usize = 5;
         const TEST_ACK_THRESHOLD_U32: u32 = 5;
@@ -774,7 +822,20 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(loom))]
     async fn test_mux_stream_shutdown() {
+        test_mux_stream_shutdown_inner().await;
+    }
+
+    #[test]
+    #[cfg(loom)]
+    fn test_mux_stream_shutdown_loom() {
+        loom::model(|| {
+            loom::future::block_on(test_mux_stream_shutdown_inner());
+        })
+    }
+
+    async fn test_mux_stream_shutdown_inner() {
         setup_logging();
         let (_, rx_frame_rx) = mpsc::channel(10);
         let (tx_frame_tx, mut tx_frame_rx) = mpsc::unbounded_channel();

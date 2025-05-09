@@ -210,6 +210,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(loom))]
     async fn test_optional_interval() {
         crate::tests::setup_logging();
         let dur = OptionalDuration::from_secs(2);
