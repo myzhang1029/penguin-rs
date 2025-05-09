@@ -73,6 +73,12 @@ jobs:
       env:
         RUSTFLAGS: -Cinstrument-coverage
 
+    - name: Run cargo lib tests with loom
+      run: cargo test --lib --release --no-default-features
+      env:
+        RUSTFLAGS: --cfg loom -Cinstrument-coverage
+        LOOM_LOG: debug
+
     - name: Process coverage data
       run: grcov . --binary-path ./target/debug/ -s . -t lcov --branch --ignore-not-existing --ignore "/*" -o lcov.info
 
