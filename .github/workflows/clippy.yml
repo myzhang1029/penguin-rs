@@ -47,7 +47,7 @@ jobs:
         run:
           cargo clippy
           --no-default-features
-          --features ${{ matrix.tls }},tests-real-internet4,tests-real-internet6,tokio-console,deadlock-detection,penguin-binary
+          --features ${{ matrix.tls }},ring,tests-real-internet4,tests-real-internet6,tokio-console,deadlock-detection,penguin-binary,acme,tungstenite
           --message-format=json
           --
           -D warnings --verbose | clippy-sarif | tee rust-clippy-results.sarif | sarif-fmt
