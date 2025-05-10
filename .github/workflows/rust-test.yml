@@ -74,7 +74,7 @@ jobs:
         RUSTFLAGS: -Cinstrument-coverage
 
     - name: Run cargo lib tests with loom
-      run: cargo test --lib --release --no-default-features
+      run: cargo nextest run --lib --release --no-default-features
       env:
         RUSTFLAGS: --cfg loom -Cinstrument-coverage
         LOOM_LOG: debug
