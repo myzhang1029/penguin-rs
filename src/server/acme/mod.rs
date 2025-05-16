@@ -140,7 +140,7 @@ impl Client {
 }
 
 /// Issues a new certificate using the ACME protocol.
-/// Returns (KeyPair, String) where KeyPair is the private key and String is the certificate chain in PEM format.
+/// Returns the private key and the certificate chain in PEM format.
 async fn issue(
     account: &Account,
     challenge_helper: &ChallengeHelper,

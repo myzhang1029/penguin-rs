@@ -57,6 +57,7 @@ pub enum Commands {
 
 // Descriptions are mainly directly stripped from myzhang1029/penguin
 /// Penguin client arguments.
+#[allow(clippy::doc_markdown)]
 #[cfg(feature = "client")]
 #[derive(Args, Debug, Default)]
 pub struct ClientArgs {
