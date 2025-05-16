@@ -5,7 +5,8 @@
 //! It is tailored to the needs of `penguin`.
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
-#![deny(missing_docs, missing_debug_implementations)]
+#![deny(rust_2018_idioms, missing_docs, missing_debug_implementations)]
+#![deny(clippy::pedantic, clippy::cargo, clippy::nursery, clippy::unwrap_used)]
 
 pub mod config;
 mod dupe;

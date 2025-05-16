@@ -92,7 +92,7 @@ impl Options {
         self
     }
 
-    /// Number of retries for establishing a connection if the other end rejects our flow_id selection.
+    /// Number of retries for establishing a connection if the other end rejects our `flow_id` selection.
     ///
     /// # Panics
     /// Panics if the number of retries is not positive.

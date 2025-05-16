@@ -50,7 +50,7 @@ pub enum Error {
 }
 
 /// Check if TLS is enabled.
-/// If so, create a TlsIdentity and start relevant tasks
+/// If so, create a `TlsIdentity` and start relevant tasks
 async fn check_start_tls(args: &'static ServerArgs) -> Result<Option<TlsIdentity>, Error> {
     if let Some(tls_key) = &args.tls_key {
         // `expect`: `clap` ensures that both `--tls-cert` and `--tls-key` are
