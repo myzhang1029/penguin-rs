@@ -130,6 +130,12 @@ impl From<Duration> for OptionalDuration {
     }
 }
 
+impl From<OptionalDuration> for Option<Duration> {
+    fn from(opt_dur: OptionalDuration) -> Self {
+        opt_dur.0
+    }
+}
+
 /// An optional interval
 #[derive(Debug, Default)]
 pub struct OptionalInterval(Option<tokio::time::Interval>);

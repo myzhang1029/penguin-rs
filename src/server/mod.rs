@@ -5,6 +5,7 @@
 #[cfg(feature = "acme")]
 pub mod acme;
 mod forwarder;
+mod io_with_timeout;
 mod service;
 mod websocket;
 
@@ -224,13 +225,14 @@ async fn serve_connection<S>(stream: S, state: State<'static, hyper::body::Incom
 where
     S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
-    let hyper_io = TokioIo::new(stream);
+    let stream_with_timeout =
+        io_with_timeout::IoWithTimeout::new(stream, state.http_timeout.into());
+    let hyper_io = TokioIo::new(stream_with_timeout);
     let exec = auto::Builder::new(TokioExecutor::new());
     let conn = exec.serve_connection_with_upgrades(hyper_io, state);
     let conn = assert_send(conn);
-    match conn.await {
-        Err(err) => error!("HTTP connection error: {err}"),
-        Ok(()) => {}
+    if let Err(err) = conn.await {
+        error!("HTTP connection error: {err}");
     }
 }
 
