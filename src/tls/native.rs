@@ -74,6 +74,7 @@ async fn read_key_cert(key_path: &str, cert_path: &str) -> Result<Identity, Erro
 }
 
 #[cfg(feature = "server")]
+#[allow(clippy::unnecessary_wraps)]
 pub fn make_hyper_connector() -> std::io::Result<HyperConnector> {
     Ok(HyperConnector::new())
 }

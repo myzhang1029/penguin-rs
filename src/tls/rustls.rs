@@ -57,7 +57,7 @@ async fn make_server_config_from_mem(
     // Build config
     let config = ServerConfig::builder();
     let mut config = if let Some(client_ca_path) = client_ca_path {
-        let store = load_ca_store(client_ca_path).await?;
+        let store = generate_rustls_rootcertstore(Some(client_ca_path)).await?;
         let verifier = WebPkiClientVerifier::builder(Arc::new(store)).build()?;
         config.with_client_cert_verifier(verifier)
     } else {
@@ -115,49 +115,35 @@ pub async fn make_client_config(
     Ok(config)
 }
 
-/// Load system certificates
-#[cfg(feature = "rustls-native-roots")]
-fn get_system_certs() -> Result<RootCertStore, Error> {
-    let mut roots = RootCertStore::empty();
-    for cert in rustls_native_certs::load_native_certs()
-        .expect("Could not load native certificates (this is a bug)")
-    {
-        roots.add(cert)?;
-    }
-    Ok(roots)
-}
-#[cfg(feature = "rustls-webpki-roots")]
-fn get_system_certs() -> Result<RootCertStore, Error> {
-    let mut roots = RootCertStore::empty();
-    roots.extend(webpki_roots::TLS_SERVER_ROOTS.to_vec());
-    Ok(roots)
-}
-
-/// Load a CA store from a file.
-async fn load_ca_store(ca_path: &str) -> Result<RootCertStore, Error> {
-    let mut store = RootCertStore::empty();
-    let client_ca = tokio::fs::read(ca_path).await?;
-    let client_ca: std::io::Result<Vec<CertificateDer<'_>>> =
-        rustls_pemfile::certs(&mut client_ca.as_ref()).collect();
-    let (new, ignored) = store.add_parsable_certificates(client_ca?.into_iter());
-    debug!("ignored {ignored} certificates from {ca_path}");
-    if new == 0 {
-        Err(Error::EmptyClientCertStore)
-    } else {
-        Ok(store)
-    }
-}
-
 /// Load system certificates or a custom CA store.
 async fn generate_rustls_rootcertstore(
     custom_ca_path: Option<&str>,
 ) -> Result<RootCertStore, Error> {
+    let mut roots = RootCertStore::empty();
     // Whether to use a custom CA store.
-    if let Some(custom_ca_path) = custom_ca_path {
-        load_ca_store(custom_ca_path).await
+    if let Some(ca_path) = custom_ca_path {
+        let client_ca = tokio::fs::read(ca_path).await?;
+        let client_ca: std::io::Result<Vec<CertificateDer<'_>>> =
+            rustls_pemfile::certs(&mut client_ca.as_ref()).collect();
+        let (_, ignored) = roots.add_parsable_certificates(client_ca?.into_iter());
+        debug!("ignored {ignored} certificates from {ca_path}");
     } else {
-        get_system_certs()
+        #[cfg(feature = "rustls-native-roots")]
+        {
+            let certerr = rustls_native_certs::load_native_certs();
+            if !certerr.errors.is_empty() {
+                tracing::warn!(
+                    "Could not access some system certificates: {:?}",
+                    certerr.errors
+                );
+            }
+            let (_, ignored) = roots.add_parsable_certificates(certerr.certs);
+            debug!("ignored {ignored} certificates from the system root");
+        }
+        #[cfg(feature = "rustls-webpki-roots")]
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.to_vec());
     }
+    Ok(roots)
 }
 
 /// Load certificate and key if provided.
@@ -231,25 +217,19 @@ impl ServerCertVerifier for EmptyVerifier {
 }
 
 /// For backend requests
-#[cfg(all(feature = "rustls-native-roots", feature = "server"))]
+#[cfg(feature = "server")]
+#[allow(clippy::unnecessary_wraps)]
 pub fn make_hyper_connector() -> std::io::Result<HyperConnector> {
-    Ok(hyper_rustls::HttpsConnectorBuilder::new()
-        .with_native_roots()?
+    #[cfg(feature = "rustls-native-roots")]
+    let builder1 = hyper_rustls::HttpsConnectorBuilder::new().with_native_roots()?;
+    #[cfg(feature = "rustls-webpki-roots")]
+    let builder1 = hyper_rustls::HttpsConnectorBuilder::new().with_webpki_roots();
+    let conn = builder1
         .https_or_http()
         .enable_http1()
         .enable_http2()
-        .build())
-}
-
-/// For backend requests
-#[cfg(all(feature = "rustls-webpki-roots", feature = "server"))]
-pub fn make_hyper_connector() -> std::io::Result<HyperConnector> {
-    Ok(hyper_rustls::HttpsConnectorBuilder::new()
-        .with_webpki_roots()
-        .https_or_http()
-        .enable_http1()
-        .enable_http2()
-        .build())
+        .build();
+    Ok(conn)
 }
 
 #[cfg(test)]

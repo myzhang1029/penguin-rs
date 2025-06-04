@@ -37,9 +37,6 @@ pub const TLS_ALPN: [&str; 2] = ["h2", "http/1.1"];
 pub enum Error {
     #[error("Error reading certificate, key, or CA: {0}")]
     ReadCert(#[from] std::io::Error),
-    #[error("Empty client certificate store")]
-    #[cfg(feature = "__rustls")]
-    EmptyClientCertStore,
     #[error("Rustls error: {0}")]
     #[cfg(feature = "__rustls")]
     Rustls(#[from] ::rustls::Error),
