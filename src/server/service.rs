@@ -5,7 +5,7 @@
 use super::websocket::handle_websocket;
 use crate::arg::BackendUrl;
 use crate::server::io_with_timeout;
-use crate::tls::HyperConnector;
+use crate::tls::{HyperConnector, MaybeTlsStream, TlsStream};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64_STANDARD_ENGINE;
 use bytes::Bytes;
@@ -13,13 +13,14 @@ use http::{HeaderValue, Method, Request, Response, StatusCode, Uri, header};
 use http_body_util::{BodyExt, Full as FullBody};
 use hyper::body::Body;
 use hyper::service::Service;
-use hyper::upgrade::{OnUpgrade, Parts};
+use hyper::upgrade::{OnUpgrade, Parts, Upgraded};
 use hyper_util::client::legacy::{Client as HyperClient, Error as HyperClientError};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use penguin_mux::{Dupe, PROTOCOL_VERSION, timing::OptionalDuration};
 use sha1::{Digest, Sha1};
 use std::pin::Pin;
 use thiserror::Error;
+use tokio::net::TcpStream;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::protocol::Role;
 use tracing::{debug, error, warn};
@@ -94,6 +95,28 @@ impl<B> Dupe for State<'_, B> {
             client: self.client.clone(),
             tls_timeout: self.tls_timeout,
             http_timeout: self.http_timeout,
+        }
+    }
+}
+
+/// Downcast an `Upgraded` connection to a `MaybeTlsStream<TcpStream>` and a read buffer
+fn downcast_upgraded(upgraded: Upgraded) -> (MaybeTlsStream<TcpStream>, Bytes) {
+    match upgraded.downcast::<TokioIo<io_with_timeout::IoWithTimeout<TlsStream<TcpStream>>>>() {
+        Ok(parts_with_tls) => {
+            let Parts { io, read_buf, .. } = parts_with_tls;
+            let inner_conn = io.into_inner().into_inner();
+            let stream = MaybeTlsStream::Tls(inner_conn);
+            (stream, read_buf)
+        }
+        Err(upgraded) => {
+            // It is not a TLS connection, so we try to downcast to a plain `TcpStream`
+            let parts = upgraded
+                .downcast::<TokioIo<io_with_timeout::IoWithTimeout<TcpStream>>>()
+                .expect("`Upgrade` is not the expected type (this is a bug)");
+            let Parts { io, read_buf, .. } = parts;
+            let inner_conn = io.into_inner().into_inner();
+            let stream = MaybeTlsStream::Plain(inner_conn);
+            (stream, read_buf)
         }
     }
 }
@@ -246,16 +269,9 @@ where
         tokio::spawn(async move {
             match on_upgrade.await {
                 Ok(upgraded) => {
-                    let orig_parts = upgraded
-                        .downcast::<TokioIo<io_with_timeout::IoWithTimeout<_>>>()
-                        .expect("`Upgrade` is not the expected type (this is a bug)");
-                    let Parts {
-                        io: orig,
-                        read_buf: buf,
-                        ..
-                    } = orig_parts;
+                    let (inner_conn, buf) = downcast_upgraded(upgraded);
                     let ws = WebSocketStream::from_partially_read(
-                        orig.into_inner().into_inner(),
+                        inner_conn,
                         buf.to_vec(),
                         Role::Server,
                         None,

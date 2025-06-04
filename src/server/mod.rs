@@ -13,8 +13,7 @@ use self::service::State;
 use crate::arg::ServerArgs;
 #[cfg(unix)]
 use crate::tls::reload_tls_identity;
-use crate::tls::{TlsIdentity, TlsIdentityInner, make_tls_identity};
-use hyper::upgrade::Upgraded;
+use crate::tls::{MaybeTlsStream, TlsIdentity, TlsIdentityInner, make_tls_identity};
 use hyper_util::rt::TokioIo;
 use hyper_util::rt::tokio::TokioExecutor;
 use hyper_util::server::conn::auto;
@@ -23,12 +22,12 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinSet;
 use tokio_tungstenite::WebSocketStream;
 use tracing::{debug, error, info, trace};
 
-type WebSocket = WebSocketStream<TokioIo<Upgraded>>;
+type WebSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 /// Server Errors
 #[derive(Debug, Error)]
@@ -191,13 +190,11 @@ async fn run_listener(
 }
 
 /// Serves a single connection from a client with TLS, ignoring errors.
-async fn serve_connection_tls<S>(
-    stream: S,
+async fn serve_connection_tls(
+    stream: TcpStream,
     state: State<'static, hyper::body::Incoming>,
     tls_config: Arc<TlsIdentityInner>,
-) where
-    S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
-{
+) {
     let tls_timeout = state.tls_timeout;
     #[cfg(feature = "__rustls")]
     let stream_future = tokio_rustls::TlsAcceptor::from(tls_config).accept(stream);
@@ -225,8 +222,7 @@ async fn serve_connection<S>(stream: S, state: State<'static, hyper::body::Incom
 where
     S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
-    let stream_with_timeout =
-        io_with_timeout::IoWithTimeout::new(stream, state.http_timeout);
+    let stream_with_timeout = io_with_timeout::IoWithTimeout::new(stream, state.http_timeout);
     let hyper_io = TokioIo::new(stream_with_timeout);
     let exec = auto::Builder::new(TokioExecutor::new());
     let conn = exec.serve_connection_with_upgrades(hyper_io, state);
