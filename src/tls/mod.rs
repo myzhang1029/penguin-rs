@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
+mod maybe_tls;
 #[cfg(feature = "nativetls")]
 mod native;
 #[cfg(feature = "__rustls")]
@@ -12,13 +13,8 @@ use self::native::make_server_config_from_rcgen_pem;
 #[cfg(all(feature = "__rustls", feature = "acme"))]
 use self::rustls::make_server_config_from_rcgen_pem;
 use arc_swap::ArcSwap;
-use std::{
-    pin::Pin,
-    sync::Arc,
-    task::{Context, Poll},
-};
+use std::sync::Arc;
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_tungstenite::Connector;
 
 #[cfg(all(feature = "__rustls", feature = "server"))]
@@ -35,6 +31,8 @@ pub use native::{TlsIdentityInner, make_client_config, make_server_config};
 pub use tokio_native_tls::TlsStream;
 #[cfg(feature = "__rustls")]
 pub use tokio_rustls::TlsStream;
+
+pub use maybe_tls::MaybeTlsStream;
 
 /// A hot-swappable container for a TLS key and certificate.
 #[allow(clippy::module_name_repetitions)]
@@ -59,52 +57,6 @@ pub enum Error {
     #[error("Unsupported private key type")]
     #[cfg(feature = "__rustls")]
     PrivateKeyNotSupported,
-}
-
-/// A stream that may be encrypted with TLS
-pub enum MaybeTlsStream<T> {
-    Tls(TlsStream<T>),
-    Plain(T),
-}
-
-impl<T: AsyncRead + AsyncWrite + Unpin> AsyncRead for MaybeTlsStream<T> {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        match self.get_mut() {
-            MaybeTlsStream::Tls(stream) => Pin::new(stream).poll_read(cx, buf),
-            MaybeTlsStream::Plain(stream) => Pin::new(stream).poll_read(cx, buf),
-        }
-    }
-}
-
-impl<T: AsyncRead + AsyncWrite + Unpin> AsyncWrite for MaybeTlsStream<T> {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<std::io::Result<usize>> {
-        match self.get_mut() {
-            MaybeTlsStream::Tls(stream) => Pin::new(stream).poll_write(cx, buf),
-            MaybeTlsStream::Plain(stream) => Pin::new(stream).poll_write(cx, buf),
-        }
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        match self.get_mut() {
-            MaybeTlsStream::Tls(stream) => Pin::new(stream).poll_flush(cx),
-            MaybeTlsStream::Plain(stream) => Pin::new(stream).poll_flush(cx),
-        }
-    }
-
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        match self.get_mut() {
-            MaybeTlsStream::Tls(stream) => Pin::new(stream).poll_shutdown(cx),
-            MaybeTlsStream::Plain(stream) => Pin::new(stream).poll_shutdown(cx),
-        }
-    }
 }
 
 /// Make a `Connector`.

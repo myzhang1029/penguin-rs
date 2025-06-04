@@ -21,7 +21,6 @@ use penguin_mux::Dupe;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinSet;
 use tokio_tungstenite::WebSocketStream;
@@ -184,7 +183,7 @@ async fn run_listener(
                 tls_config.load_full(),
             ));
         } else {
-            tokio::spawn(serve_connection(stream, new_state));
+            tokio::spawn(serve_connection(MaybeTlsStream::Plain(stream), new_state));
         }
     }
 }
@@ -205,7 +204,7 @@ async fn serve_connection_tls(
 
     match stream {
         Ok(Ok(stream)) => {
-            serve_connection(stream, state).await;
+            serve_connection(stream.into(), state).await;
         }
         Ok(Err(err)) => {
             error!("TLS handshake error: {err}");
@@ -218,10 +217,10 @@ async fn serve_connection_tls(
 
 /// Serves a single connection from a client, ignoring errors.
 #[tracing::instrument(skip_all, level = "debug")]
-async fn serve_connection<S>(stream: S, state: State<'static, hyper::body::Incoming>)
-where
-    S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
-{
+async fn serve_connection(
+    stream: MaybeTlsStream<TcpStream>,
+    state: State<'static, hyper::body::Incoming>,
+) {
     let stream_with_timeout = io_with_timeout::IoWithTimeout::new(stream, state.http_timeout);
     let hyper_io = TokioIo::new(stream_with_timeout);
     let exec = auto::Builder::new(TokioExecutor::new());
