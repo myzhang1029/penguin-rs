@@ -80,7 +80,7 @@ impl OptionalDuration {
     /// # Errors
     /// Returns an `Err` variant if the future does not finish in the specified duration.
     pub async fn timeout<T: Future>(
-        &self,
+        self,
         future: T,
     ) -> Result<T::Output, tokio::time::error::Elapsed> {
         match self.0 {
@@ -90,7 +90,7 @@ impl OptionalDuration {
     }
 
     /// Use the optional duration to sleep
-    pub async fn sleep(&self) {
+    pub async fn sleep(self) {
         match self.0 {
             Some(duration) => tokio::time::sleep(duration).await,
             None => std::future::pending().await,
