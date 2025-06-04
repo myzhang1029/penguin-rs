@@ -13,9 +13,10 @@ use http::{HeaderValue, Method, Request, Response, StatusCode, Uri, header};
 use http_body_util::{BodyExt, Full as FullBody};
 use hyper::body::Body;
 use hyper::service::Service;
-use hyper::upgrade::{OnUpgrade, Parts};
+use hyper::upgrade::OnUpgrade;
 use hyper_util::client::legacy::{Client as HyperClient, Error as HyperClientError};
 use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::server::conn::auto::upgrade::{Parts, downcast};
 use penguin_mux::{Dupe, PROTOCOL_VERSION, timing::OptionalDuration};
 use sha1::{Digest, Sha1};
 use std::pin::Pin;
@@ -248,9 +249,10 @@ where
             match on_upgrade.await {
                 Ok(upgraded) => {
                     // It is not a TLS connection, so we try to downcast to a plain `TcpStream`
-                    let parts = upgraded
-                        .downcast::<TokioIo<io_with_timeout::IoWithTimeout<MaybeTlsStream<TcpStream>>>>()
-                        .expect("`Upgrade` is not the expected type (this is a bug)");
+                    let parts = downcast::<
+                        TokioIo<io_with_timeout::IoWithTimeout<MaybeTlsStream<TcpStream>>>,
+                    >(upgraded)
+                    .expect("`Upgrade` is not the expected type (this is a bug)");
                     let Parts { io, read_buf, .. } = parts;
                     let inner_conn = io.into_inner().into_inner();
                     let ws = WebSocketStream::from_partially_read(
