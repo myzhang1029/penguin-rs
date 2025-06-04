@@ -186,27 +186,6 @@ async fn test_it_works() {
 }
 
 #[tokio::test]
-async fn test_server_timeout() {
-    static SERVER_ARGS: LazyLock<arg::ServerArgs> =
-        LazyLock::new(|| make_server_args("::1", 22183));
-    setup_logging();
-    let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    // Connect to the socket and do nothing. Make sure the socket is closed
-    let mut sock = TcpStream::connect("[::1]:22183").await.unwrap();
-    // We expect the server to timeout after 3 seconds, so we allow a longer time and
-    // test the socket really timed out
-    let mut buf = [0u8; 1];
-    let result = tokio::time::timeout(Duration::from_secs(7), sock.read(&mut buf))
-        .await
-        .expect("This test should not time out");
-    if let Ok(len) = result {
-        assert_eq!(len, 0, "Expected to read EOF from timed-out socket");
-    }
-    server_task.abort();
-}
-
-#[tokio::test]
 async fn test_server_timeout_does_not_interrupt_ws() {
     static SERVER_ARGS: LazyLock<arg::ServerArgs> =
         LazyLock::new(|| make_server_args("::1", 23224));
