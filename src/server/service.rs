@@ -4,6 +4,7 @@
 
 use super::websocket::handle_websocket;
 use crate::arg::BackendUrl;
+use crate::server::io_with_timeout;
 use crate::tls::HyperConnector;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64_STANDARD_ENGINE;
@@ -12,7 +13,7 @@ use http::{HeaderValue, Method, Request, Response, StatusCode, Uri, header};
 use http_body_util::{BodyExt, Full as FullBody};
 use hyper::body::Body;
 use hyper::service::Service;
-use hyper::upgrade::OnUpgrade;
+use hyper::upgrade::{OnUpgrade, Parts};
 use hyper_util::client::legacy::{Client as HyperClient, Error as HyperClientError};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use penguin_mux::{Dupe, PROTOCOL_VERSION, timing::OptionalDuration};
@@ -245,8 +246,17 @@ where
         tokio::spawn(async move {
             match on_upgrade.await {
                 Ok(upgraded) => {
-                    let ws = WebSocketStream::from_raw_socket(
-                        TokioIo::new(upgraded),
+                    let orig_parts = upgraded
+                        .downcast::<TokioIo<io_with_timeout::IoWithTimeout<_>>>()
+                        .expect("`Upgrade` is not the expected type (this is a bug)");
+                    let Parts {
+                        io: orig,
+                        read_buf: buf,
+                        ..
+                    } = orig_parts;
+                    let ws = WebSocketStream::from_partially_read(
+                        orig.into_inner().into_inner(),
+                        buf.to_vec(),
                         Role::Server,
                         None,
                     )

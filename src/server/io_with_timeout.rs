@@ -22,6 +22,10 @@ impl<S> IoWithTimeout<S> {
         }
     }
 
+    pub fn into_inner(self) -> S {
+        self.stream
+    }
+
     fn reset(&mut self) {
         self.deadline = Box::pin(self.timeout.sleep());
     }
