@@ -226,7 +226,7 @@ where
     S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
     let stream_with_timeout =
-        io_with_timeout::IoWithTimeout::new(stream, state.http_timeout.into());
+        io_with_timeout::IoWithTimeout::new(stream, state.http_timeout);
     let hyper_io = TokioIo::new(stream_with_timeout);
     let exec = auto::Builder::new(TokioExecutor::new());
     let conn = exec.serve_connection_with_upgrades(hyper_io, state);

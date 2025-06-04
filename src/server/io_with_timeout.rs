@@ -1,20 +1,20 @@
+use penguin_mux::timing::OptionalDuration;
 use std::{
     pin::Pin,
     task::{Poll, ready},
-    time::{Duration, Instant},
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 /// A wrapper around an `AsyncRead` with a read timeout.
 pub struct IoWithTimeout<S> {
     stream: S,
-    timeout: Option<Duration>,
-    deadline: Option<Instant>,
+    timeout: OptionalDuration,
+    deadline: Pin<Box<dyn Future<Output = ()> + Send + 'static>>,
 }
 
 impl<S> IoWithTimeout<S> {
-    pub fn new(stream: S, timeout: Option<Duration>) -> Self {
-        let deadline = timeout.map(|dur| Instant::now() + dur);
+    pub fn new(stream: S, timeout: OptionalDuration) -> Self {
+        let deadline = Box::pin(timeout.sleep());
         IoWithTimeout {
             stream,
             timeout,
@@ -23,27 +23,21 @@ impl<S> IoWithTimeout<S> {
     }
 
     fn reset(&mut self) {
-        if let Some(dur) = self.timeout {
-            self.deadline = Some(Instant::now() + dur);
-        }
+        self.deadline = Box::pin(self.timeout.sleep());
     }
 
-    fn elapsed(&self) -> bool {
-        if let Some(deadline) = self.deadline {
-            Instant::now() > deadline
-        } else {
-            false
-        }
+    fn poll_elapsed(&mut self, cx: &mut std::task::Context<'_>) -> Poll<()> {
+        self.deadline.as_mut().poll(cx)
     }
 }
 
 impl<S: AsyncRead + Send + Unpin> AsyncRead for IoWithTimeout<S> {
     fn poll_read(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
-        if self.elapsed() {
+        if self.poll_elapsed(cx).is_ready() {
             return Poll::Ready(Err(std::io::ErrorKind::TimedOut.into()));
         }
         let this = self.get_mut();
@@ -97,12 +91,13 @@ impl<S: AsyncWrite + Send + Unpin> AsyncWrite for IoWithTimeout<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[tokio::test]
     async fn test_read_will_timeout() {
         let (reader, mut writer) = tokio::io::simplex(1024);
-        let mut io = IoWithTimeout::new(reader, Some(Duration::from_millis(100)));
+        let mut io = IoWithTimeout::new(reader, Duration::from_millis(100).into());
 
         tokio::spawn(async move {
             // Delay the write more than the timeout
@@ -116,9 +111,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_read_will_timeout_long() {
+        let (reader, mut writer) = tokio::io::simplex(1024);
+        let mut io = IoWithTimeout::new(reader, Duration::from_secs(2).into());
+
+        tokio::spawn(async move {
+            // Delay the write more than the timeout
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            let _ = writer.write_all(b"hello").await;
+        });
+
+        let mut buf = vec![0; 5];
+        let result = io.read_exact(&mut buf).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
     async fn test_read_can_succeed() {
         let (reader, mut writer) = tokio::io::simplex(1024);
-        let mut io = IoWithTimeout::new(reader, Some(Duration::from_secs(1)));
+        let mut io = IoWithTimeout::new(reader, Duration::from_secs(1).into());
 
         tokio::spawn(async move {
             // Write before the timeout
@@ -134,7 +145,7 @@ mod tests {
     #[tokio::test]
     async fn test_write_also_reset_deadline() {
         let (us, mut task) = tokio::io::duplex(1024);
-        let mut io = IoWithTimeout::new(us, Some(Duration::from_secs(1)));
+        let mut io = IoWithTimeout::new(us, Duration::from_secs(1).into());
 
         tokio::spawn(async move {
             let mut buf = vec![0; 5];
