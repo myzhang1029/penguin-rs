@@ -25,11 +25,15 @@ pub async fn handshake(
         == "wss";
 
     // Get the host and port from the URL
-    let host = args
+    let mut host = args
         .server
         .0
         .host()
         .expect("URL host should be present (this is a bug)");
+    // `Tcp*` functions expect IPv6 addresses to not be wrapped in square brackets
+    if host.starts_with('[') && host.ends_with(']') {
+        host = &host[1..host.len() - 1];
+    }
     let port = args.server.0.port().map_or_else(
         || {
             if is_tls { 443 } else { 80 }
