@@ -71,10 +71,10 @@ default = ["rustls-native-roots", "tests-real-internet4", "tests-udp", "penguin-
 # Note that it does not make sense to use more than one TLS implementations
 # at the same time, but there must be at least one if `penguin-binary` is
 # enabled.
-rustls-webpki-roots = ["dep:webpki-roots", "tokio-tungstenite/rustls-tls-webpki-roots", "hyper-rustls/webpki-tokio", "__rustls"]
-rustls-native-roots = ["dep:rustls-native-certs", "tokio-tungstenite/rustls-tls-native-roots", "hyper-rustls/native-tokio", "__rustls"]
+rustls-webpki-roots = ["dep:webpki-roots", "hyper-rustls/webpki-tokio", "__rustls"]
+rustls-native-roots = ["dep:rustls-native-certs", "hyper-rustls/native-tokio", "__rustls"]
 __rustls = ["dep:rustls", "dep:rustls-pemfile", "dep:tokio-rustls"]
-nativetls = ["dep:tokio-native-tls", "tokio-tungstenite/native-tls", "hyper-tls/alpn"]
+nativetls = ["dep:tokio-native-tls", "hyper-tls/alpn"]
 # Use ring or aws-lc-rs (supported on fewer platforms)
 ring = ["instant-acme/ring", "rcgen/ring", "rustls/ring", "tokio-rustls/ring", "hyper-rustls/ring"]
 aws-lc-rs = ["dep:aws-lc-rs", "instant-acme/aws-lc-rs", "rcgen/aws_lc_rs", "rustls/aws-lc-rs", "tokio-rustls/aws-lc-rs", "hyper-rustls/aws-lc-rs"]
@@ -110,7 +110,7 @@ penguin-binary-common = [
     "dep:tracing-subscriber",
     "tungstenite",
     "tokio/fs", "tokio/net", "tokio/rt-multi-thread", "tokio/signal",
-    "tokio-tungstenite/default",
+    "tokio-tungstenite/handshake",
 ]
 # `penguin` binary -- server
 server = [
