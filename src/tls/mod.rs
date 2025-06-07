@@ -81,7 +81,10 @@ pub async fn tls_connect(
         .await
         .map_err(Error::TcpConnect)?;
     #[cfg(feature = "nativetls")]
-    let tls_stream = connector.connect(domain, tcp_stream).await?;
+    let tls_stream = {
+        let connector = tokio_native_tls::TlsConnector::from(config);
+        connector.connect(domain, tcp_stream).await?
+    };
     #[cfg(feature = "__rustls")]
     let tls_stream = {
         let connector: tokio_rustls::TlsConnector = Arc::new(config).into();

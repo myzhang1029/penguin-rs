@@ -57,7 +57,7 @@ pub async fn make_client_config(
         tls_config_builder.request_alpns(tls_alpn);
     }
     if let Some(ca_path) = ca_path {
-        let ca = tokio::fs::read(ca_path).await?;
+        let ca = tokio::fs::read(ca_path).await.map_err(Error::ReadCert)?;
         tls_config_builder.add_root_certificate(Certificate::from_pem(&ca)?);
     }
     if let Some(cert_path) = cert_path {
@@ -68,8 +68,8 @@ pub async fn make_client_config(
 }
 
 async fn read_key_cert(key_path: &str, cert_path: &str) -> Result<Identity, Error> {
-    let key = tokio::fs::read(key_path).await?;
-    let cert = tokio::fs::read(cert_path).await?;
+    let key = tokio::fs::read(key_path).await.map_err(Error::ReadCert)?;
+    let cert = tokio::fs::read(cert_path).await.map_err(Error::ReadCert)?;
     Ok(Identity::from_pkcs8(&cert, &key)?)
 }
 
