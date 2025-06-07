@@ -29,9 +29,9 @@ pub use native::{HyperConnector, make_hyper_connector};
 pub use native::{TlsIdentityInner, make_client_config, make_server_config};
 
 #[cfg(feature = "nativetls")]
-pub use tokio_native_tls::TlsStream;
+use tokio_native_tls::TlsStream;
 #[cfg(feature = "__rustls")]
-pub use tokio_rustls::TlsStream;
+use tokio_rustls::TlsStream;
 
 pub use maybe_tls::MaybeTlsStream;
 

@@ -1,5 +1,6 @@
 use super::TlsStream;
 use std::{
+    io::{self},
     pin::Pin,
     task::{Context, Poll},
 };
@@ -18,7 +19,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> AsyncRead for MaybeTlsStream<T> {
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
+    ) -> Poll<io::Result<()>> {
         match self.get_mut() {
             MaybeTlsStream::Tls(stream) => Pin::new(stream).poll_read(cx, buf),
             MaybeTlsStream::Plain(stream) => Pin::new(stream).poll_read(cx, buf),
@@ -31,21 +32,21 @@ impl<T: AsyncRead + AsyncWrite + Unpin> AsyncWrite for MaybeTlsStream<T> {
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
-    ) -> Poll<std::io::Result<usize>> {
+    ) -> Poll<io::Result<usize>> {
         match self.get_mut() {
             MaybeTlsStream::Tls(stream) => Pin::new(stream).poll_write(cx, buf),
             MaybeTlsStream::Plain(stream) => Pin::new(stream).poll_write(cx, buf),
         }
     }
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match self.get_mut() {
             MaybeTlsStream::Tls(stream) => Pin::new(stream).poll_flush(cx),
             MaybeTlsStream::Plain(stream) => Pin::new(stream).poll_flush(cx),
         }
     }
 
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match self.get_mut() {
             MaybeTlsStream::Tls(stream) => Pin::new(stream).poll_shutdown(cx),
             MaybeTlsStream::Plain(stream) => Pin::new(stream).poll_shutdown(cx),
