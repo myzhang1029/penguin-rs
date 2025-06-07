@@ -10,6 +10,7 @@ use self::handle_remote::handle_remote;
 use self::maybe_retryable::MaybeRetryableError;
 use crate::arg::ClientArgs;
 use crate::config;
+use crate::tls::MaybeTlsStream;
 use bytes::Bytes;
 use futures_util::TryFutureExt;
 use parking_lot::RwLock;
@@ -25,7 +26,6 @@ use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
 use tokio::time;
-use tokio_tungstenite::MaybeTlsStream;
 use tracing::{error, info, trace, warn};
 
 #[cfg(feature = "nohash")]
@@ -42,9 +42,13 @@ pub enum Error {
     ParseRemote(#[from] crate::parse_remote::Error),
     #[error("Remote handler exited: {0}")]
     RemoteHandlerExited(#[from] handle_remote::FatalError),
+    #[error("Given domain name is not encodable in UTF-8")]
+    InvalidDomainName(#[from] http::header::ToStrError),
     /// Invalid URL or cannot connect
     #[error(transparent)]
     Tungstenite(#[from] tokio_tungstenite::tungstenite::Error),
+    #[error("Error making a TCP connection: {0}")]
+    TcpConnect(std::io::Error),
     /// TLS error
     #[error(transparent)]
     Tls(#[from] crate::tls::Error),

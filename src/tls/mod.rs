@@ -12,10 +12,11 @@ mod rustls;
 use self::native::make_server_config_from_rcgen_pem;
 #[cfg(all(feature = "__rustls", feature = "acme"))]
 use self::rustls::make_server_config_from_rcgen_pem;
+#[cfg(feature = "__rustls")]
+use ::rustls::pki_types::InvalidDnsNameError;
 use arc_swap::ArcSwap;
 use std::sync::Arc;
 use thiserror::Error;
-use tokio_tungstenite::Connector;
 
 #[cfg(all(feature = "__rustls", feature = "server"))]
 pub use self::rustls::{HyperConnector, make_hyper_connector};
@@ -44,10 +45,15 @@ pub const TLS_ALPN: [&str; 2] = ["h2", "http/1.1"];
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("Error reading certificate, key, or CA: {0}")]
-    ReadCert(#[from] std::io::Error),
+    ReadCert(std::io::Error),
+    #[error("Error making a TCP connection: {0}")]
+    TcpConnect(std::io::Error),
     #[error("Rustls error: {0}")]
     #[cfg(feature = "__rustls")]
     Rustls(#[from] ::rustls::Error),
+    #[cfg(feature = "__rustls")]
+    #[error("Unable to determine server name for SNI")]
+    DnsName(#[from] InvalidDnsNameError),
     #[error("Verifier error: {0}")]
     #[cfg(feature = "__rustls")]
     Verifier(#[from] ::rustls::client::VerifierBuilderError),
@@ -59,20 +65,34 @@ pub enum Error {
     PrivateKeyNotSupported,
 }
 
-/// Make a `Connector`.
-pub async fn make_tls_connector(
+#[cfg(feature = "client")]
+pub async fn tls_connect(
+    host: &str,
+    port: u16,
+    domain: &str,
     tls_cert: Option<&str>,
     tls_key: Option<&str>,
     tls_ca: Option<&str>,
     tls_insecure: bool,
-) -> Result<Connector, Error> {
-    let tls_config =
+) -> Result<TlsStream<tokio::net::TcpStream>, Error> {
+    let config =
         make_client_config(tls_cert, tls_key, tls_ca, tls_insecure, Some(&TLS_ALPN)).await?;
-    #[cfg(feature = "__rustls")]
-    let result = Ok(Connector::Rustls(tls_config.into()));
+    let tcp_stream = tokio::net::TcpStream::connect((host, port))
+        .await
+        .map_err(Error::TcpConnect)?;
     #[cfg(feature = "nativetls")]
-    let result = Ok(Connector::NativeTls(tls_config));
-    result
+    let tls_stream = connector.connect(domain, tcp_stream).await?;
+    #[cfg(feature = "__rustls")]
+    let tls_stream = {
+        let connector: tokio_rustls::TlsConnector = Arc::new(config).into();
+        let server_name = ::rustls::pki_types::ServerName::try_from(domain.to_string())?;
+        let client_st = connector
+            .connect(server_name, tcp_stream)
+            .await
+            .map_err(Error::TcpConnect)?;
+        TlsStream::Client(client_st)
+    };
+    Ok(tls_stream)
 }
 
 pub async fn make_tls_identity(

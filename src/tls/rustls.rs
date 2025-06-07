@@ -44,9 +44,10 @@ pub async fn make_server_config_from_rcgen_pem(
     let certs: std::io::Result<Vec<CertificateDer<'_>>> =
         rustls_pemfile::certs(&mut certs.as_bytes()).collect();
     let crt_key = keypair.serialize_pem();
-    let key = rustls_pemfile::private_key(&mut crt_key.as_bytes())?
+    let key = rustls_pemfile::private_key(&mut crt_key.as_bytes())
+        .map_err(Error::ReadCert)?
         .ok_or(Error::PrivateKeyNotSupported)?;
-    make_server_config_from_mem(certs?, key, client_ca_path).await
+    make_server_config_from_mem(certs.map_err(Error::ReadCert)?, key, client_ca_path).await
 }
 
 async fn make_server_config_from_mem(
@@ -122,10 +123,11 @@ async fn generate_rustls_rootcertstore(
     let mut roots = RootCertStore::empty();
     // Whether to use a custom CA store.
     if let Some(ca_path) = custom_ca_path {
-        let client_ca = tokio::fs::read(ca_path).await?;
+        let client_ca = tokio::fs::read(ca_path).await.map_err(Error::ReadCert)?;
         let client_ca: std::io::Result<Vec<CertificateDer<'_>>> =
             rustls_pemfile::certs(&mut client_ca.as_ref()).collect();
-        let (_, ignored) = roots.add_parsable_certificates(client_ca?.into_iter());
+        let (_, ignored) =
+            roots.add_parsable_certificates(client_ca.map_err(Error::ReadCert)?.into_iter());
         debug!("ignored {ignored} certificates from {ca_path}");
     } else {
         #[cfg(feature = "rustls-native-roots")]
@@ -153,15 +155,16 @@ async fn try_load_certificate(
 ) -> Result<Option<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)>, Error> {
     if let (Some(key), Some(cert)) = (tls_key, tls_cert) {
         // Load certificate chain
-        let certs = tokio::fs::read(cert).await?;
+        let certs = tokio::fs::read(cert).await.map_err(Error::ReadCert)?;
         let certs: std::io::Result<Vec<CertificateDer<'_>>> =
             rustls_pemfile::certs(&mut certs.as_ref()).collect();
         // Load private key
-        let key = tokio::fs::read(key).await?;
-        let Some(key) = rustls_pemfile::private_key(&mut key.as_ref())? else {
+        let key = tokio::fs::read(key).await.map_err(Error::ReadCert)?;
+        let Some(key) = rustls_pemfile::private_key(&mut key.as_ref()).map_err(Error::ReadCert)?
+        else {
             return Err(Error::PrivateKeyNotSupported);
         };
-        Ok(Some((certs?, key)))
+        Ok(Some((certs.map_err(Error::ReadCert)?, key)))
     } else {
         Ok(None)
     }
