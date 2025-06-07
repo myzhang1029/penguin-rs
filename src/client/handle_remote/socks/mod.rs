@@ -74,7 +74,6 @@ pub(super) async fn handle_socks(
     }
 }
 
-#[inline]
 pub(super) async fn handle_socks_stdio(
     handler_resources: &'static HandlerResources,
 ) -> Result<(), super::FatalError> {
@@ -111,7 +110,6 @@ where
     }
 }
 
-#[inline]
 #[tracing::instrument(skip_all, fields(host, port, cmd))]
 async fn socks4<RW>(stream: &mut RW, handler_resources: &HandlerResources) -> Result<(), Error>
 where
@@ -137,7 +135,6 @@ where
     }
 }
 
-#[inline]
 #[tracing::instrument(skip_all, fields(host, port, cmd, local = %local_addr))]
 async fn socks5<RW>(
     stream: &mut RW,

@@ -39,7 +39,6 @@ pub(crate) enum CowBytes<'data> {
 }
 
 impl PartialEq for CowBytes<'_> {
-    #[inline]
     fn eq(&self, other: &Self) -> bool {
         self.as_ref() == other.as_ref()
     }

@@ -302,7 +302,6 @@ impl Multiplexor {
     /// for the peer to reply, the user will not be able to receive whether the
     /// peer accepted the bind request.
     #[tracing::instrument(skip(self), level = "debug")]
-    #[inline]
     pub async fn request_bind(&self, host: &[u8], port: u16, bind_type: BindType) -> Result<bool> {
         let (result_tx, result_rx) = oneshot::channel();
         let flow_id = {

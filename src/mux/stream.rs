@@ -327,6 +327,7 @@ where
     RW: AsyncBufRead + AsyncWrite + Unpin,
 {
     #[tracing::instrument(skip_all, level = "trace")]
+    #[inline]
     fn poll_read_us(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<u64>> {
         match self.read_state {
             ReadState::Transferring(mut read_amt) => {
@@ -366,6 +367,7 @@ where
         }
     }
 
+    #[inline]
     fn poll_write_us(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<u64>> {
         match self.write_state {
             WriteState::Transferring(mut written_amt) => {
@@ -409,6 +411,7 @@ where
     type Output = io::Result<(u64, u64)>;
 
     #[tracing::instrument(skip_all, level = "trace", fields(flow_id = self.us.flow_id))]
+    #[inline]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let r = self.poll_read_us(cx);
         let w = self.poll_write_us(cx);

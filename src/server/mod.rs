@@ -119,7 +119,6 @@ pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
 
 /// Run a signal handler task to reload the TLS certificate.
 #[cfg(unix)]
-#[inline]
 fn register_signal_handler(
     tls_config: crate::tls::TlsIdentity,
     tls_cert: &'static str,

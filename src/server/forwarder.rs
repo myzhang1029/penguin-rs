@@ -26,7 +26,6 @@ pub(super) enum Error {
 /// Bind a UDP socket with the same address family as the given target,
 /// and return the bound socket and the matched target address.
 /// Note that we don't connect or send the socket here.
-#[inline]
 async fn bind_for_target(target: (&str, u16)) -> Result<(UdpSocket, SocketAddr), Error> {
     let targets = lookup_host(target).await?;
     let mut last_err = None;
@@ -138,6 +137,7 @@ pub(super) async fn udp_forward_on(
 /// # Errors
 /// It carries the errors from the underlying TCP or channel IO functions.
 #[tracing::instrument(skip_all, level = "debug")]
+#[inline]
 pub(super) async fn tcp_forwarder_on_channel(channel: MuxStream) -> Result<(), Error> {
     let rhost = std::str::from_utf8(&channel.dest_host)?;
     let rport = channel.dest_port;

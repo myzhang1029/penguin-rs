@@ -13,7 +13,6 @@ use tokio::net::UdpSocket;
 use tracing::{info, trace};
 
 /// Handle a UDP Inet->Inet remote.
-#[inline]
 #[tracing::instrument(skip(handler_resources), level = "debug")]
 pub(super) async fn handle_udp(
     lhost: &'static str,
@@ -58,7 +57,6 @@ pub(super) async fn handle_udp(
 }
 
 /// Handle a UDP Stdio->Inet remote.
-#[inline]
 #[tracing::instrument(skip(handler_resources), level = "debug")]
 pub(super) async fn handle_udp_stdio(
     rhost: &'static str,

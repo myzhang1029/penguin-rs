@@ -26,16 +26,19 @@ impl<S> IoWithTimeout<S> {
         self.stream
     }
 
+    #[inline]
     fn reset(&mut self) {
         self.deadline = Box::pin(self.timeout.sleep());
     }
 
+    #[inline]
     fn poll_elapsed(&mut self, cx: &mut std::task::Context<'_>) -> Poll<()> {
         self.deadline.as_mut().poll(cx)
     }
 }
 
 impl<S: AsyncRead + Send + Unpin> AsyncRead for IoWithTimeout<S> {
+    #[inline]
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -54,6 +57,7 @@ impl<S: AsyncRead + Send + Unpin> AsyncRead for IoWithTimeout<S> {
 }
 
 impl<S: AsyncWrite + Send + Unpin> AsyncWrite for IoWithTimeout<S> {
+    #[inline]
     fn poll_write(
         self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -67,6 +71,7 @@ impl<S: AsyncWrite + Send + Unpin> AsyncWrite for IoWithTimeout<S> {
         Poll::Ready(result)
     }
 
+    #[inline]
     fn poll_flush(
         self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -79,6 +84,7 @@ impl<S: AsyncWrite + Send + Unpin> AsyncWrite for IoWithTimeout<S> {
         Poll::Ready(result)
     }
 
+    #[inline]
     fn poll_shutdown(
         self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,

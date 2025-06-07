@@ -35,7 +35,6 @@ enum Error {
 impl std::fmt::Debug for Error {
     // Simply delegate to `Display` so when `main` exits, there
     // is a nice error message.
-    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(self, f)
     }

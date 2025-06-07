@@ -423,7 +423,6 @@ impl FromStr for BackendUrl {
 }
 
 impl std::fmt::Display for BackendUrl {
-    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}://{}{}", self.scheme, self.authority, self.path)
     }

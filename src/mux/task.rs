@@ -36,7 +36,6 @@ pub struct TaskData<S: WebSocket> {
 impl<S: WebSocket> TaskData<S> {
     /// Spawn the multiplexor task.
     /// This function and [`new_no_task`] are implementation details and not exposed in the public API.
-    #[inline]
     pub fn spawn(self, task_joinset: Option<&mut JoinSet<Result<()>>>) {
         let Self {
             task,
@@ -102,7 +101,6 @@ impl<S: WebSocket> Task<S> {
     // the error to the user from a spawned task.
     // Instead, the user will notice when `rx` channels return `None`.
     #[tracing::instrument(skip_all, level = "debug", fields(task_id = %tokio::task::id()))]
-    #[inline]
     async fn start(
         mut self,
         mut dropped_ports_rx: mpsc::UnboundedReceiver<u32>,
@@ -499,7 +497,6 @@ impl<S: WebSocket> Task<S> {
     }
 
     /// Shared code for new stream stuff
-    #[inline]
     fn new_stream_shared(
         &self,
         flow_id: u32,
@@ -540,7 +537,6 @@ impl<S: WebSocket> Task<S> {
     /// Create a new `MuxStream`, add it to the map, and send an `Acknowledge` frame.
     /// If `our_port` is 0, a new port will be allocated.
     #[tracing::instrument(skip_all, level = "debug")]
-    #[inline]
     async fn con_recv_new_stream(
         &self,
         flow_id: u32,
@@ -594,7 +590,7 @@ impl<S: WebSocket> Task<S> {
     /// Create a new `MuxStream` by finalizing a Con/Ack handshsake and
     /// change the state of the port to `Established`.
     #[tracing::instrument(skip_all, level = "debug")]
-    #[inline]
+
     fn ack_recv_new_stream(&self, flow_id: u32, peer_rwnd: u32) -> Result<()> {
         // Change the state of the port to `Established` and send the stream to the user
         // At the client side, we use the associated oneshot channel to send the new stream
@@ -626,7 +622,6 @@ impl<S: WebSocket> Task<S> {
 
     /// EOF the local end, and wake up the writer.
     #[tracing::instrument(skip_all, level = "debug", fields(flow_id = %format_args!("{flow_id:08x}")))]
-    #[inline]
     fn close_port_local(&self, removed: FlowSlot, flow_id: u32, inhibit_rst: bool) {
         match removed {
             FlowSlot::Established(mut stream_data) => {

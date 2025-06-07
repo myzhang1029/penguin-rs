@@ -15,6 +15,7 @@ pub enum MaybeTlsStream<T> {
 }
 
 impl<T: AsyncRead + AsyncWrite + Unpin> AsyncRead for MaybeTlsStream<T> {
+    #[inline]
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -28,6 +29,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> AsyncRead for MaybeTlsStream<T> {
 }
 
 impl<T: AsyncRead + AsyncWrite + Unpin> AsyncWrite for MaybeTlsStream<T> {
+    #[inline]
     fn poll_write(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -39,6 +41,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> AsyncWrite for MaybeTlsStream<T> {
         }
     }
 
+    #[inline]
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match self.get_mut() {
             MaybeTlsStream::Tls(stream) => Pin::new(stream).poll_flush(cx),
@@ -46,6 +49,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> AsyncWrite for MaybeTlsStream<T> {
         }
     }
 
+    #[inline]
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match self.get_mut() {
             MaybeTlsStream::Tls(stream) => Pin::new(stream).poll_shutdown(cx),
