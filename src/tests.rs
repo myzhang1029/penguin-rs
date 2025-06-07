@@ -393,11 +393,19 @@ async fn test_tls_reload() {
     let stream = tls_connect("127.0.0.1", 20353, "localhost", None, None, None, true)
         .await
         .unwrap();
-    let (_, common_state) = stream.get_ref();
-    let peer_cert = common_state.peer_certificates().unwrap();
-    // Check that the certificate is what we expect
-    assert_eq!(peer_cert.len(), 1);
-    assert_eq!(peer_cert[0], *cert.der());
+    #[cfg(feature = "nativetls")]
+    {
+        let peer_cert = stream.get_ref().peer_certificate().unwrap().unwrap().to_der().unwrap();
+        assert_eq!(peer_cert, **cert.der());
+    }
+    #[cfg(feature = "__rustls")]
+    {
+        let (_, common_state) = stream.get_ref();
+        let peer_cert = common_state.peer_certificates().unwrap();
+        // Check that the certificate is what we expect
+        assert_eq!(peer_cert.len(), 1);
+        assert_eq!(peer_cert[0], *cert.der());
+    }
     let (_, new_cert) = make_server_cert_ecdsa(Some(&cert_dir_path)).await;
     assert_ne!(new_cert.der(), cert.der());
     // Reload the server configuration by sending SIGUSR1
@@ -416,11 +424,19 @@ async fn test_tls_reload() {
     let stream = tls_connect("127.0.0.1", 20353, "localhost", None, None, None, true)
         .await
         .unwrap();
-    let (_, common_state) = stream.get_ref();
-    let peer_cert = common_state.peer_certificates().unwrap();
-    // Check that the certificate is what we expect
-    assert_eq!(peer_cert.len(), 1);
-    assert_eq!(peer_cert[0], *new_cert.der());
+    #[cfg(feature = "nativetls")]
+    {
+        let peer_cert = stream.get_ref().peer_certificate().unwrap().unwrap().to_der().unwrap();
+        assert_eq!(peer_cert, **new_cert.der());
+    }
+    #[cfg(feature = "__rustls")]
+    {
+        let (_, common_state) = stream.get_ref();
+        let peer_cert = common_state.peer_certificates().unwrap();
+        // Check that the certificate is what we expect
+        assert_eq!(peer_cert.len(), 1);
+        assert_eq!(peer_cert[0], *new_cert.der());
+    }
     server_task.abort();
 }
 

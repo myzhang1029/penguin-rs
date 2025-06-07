@@ -79,7 +79,7 @@ nativetls = ["dep:tokio-native-tls", "hyper-tls/alpn"]
 ring = ["instant-acme/ring", "rcgen/ring", "rustls/ring", "tokio-rustls/ring", "hyper-rustls/ring"]
 aws-lc-rs = ["dep:aws-lc-rs", "instant-acme/aws-lc-rs", "rcgen/aws_lc_rs", "rustls/aws-lc-rs", "tokio-rustls/aws-lc-rs", "hyper-rustls/aws-lc-rs"]
 # Dependencies for testing
-dev-dependencies = ["dep:rcgen", "tracing-subscriber/env-filter", "tokio/net", "tokio/rt-multi-thread"]
+dev-dependencies = ["dep:rcgen", "tracing-subscriber/env-filter", "tokio/net", "tokio/process", "tokio/rt-multi-thread"]
 # Allow some tests that require real internet connection
 tests-real-internet4 = []
 tests-real-internet6 = []
