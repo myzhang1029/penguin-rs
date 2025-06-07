@@ -341,15 +341,25 @@ impl FromStr for ServerUrl {
             }
         };
         let old_scheme = url_parts.scheme.unwrap_or(http::uri::Scheme::HTTP);
-        let new_scheme = match old_scheme.as_ref() {
-            "http" | "ws" => Ok("ws"),
-            "https" | "wss" => Ok("wss"),
+        let (new_scheme, default_port) = match old_scheme.as_ref() {
+            "http" | "ws" => Ok(("ws", 80)),
+            "https" | "wss" => Ok(("wss", 443)),
             _ => Err(ServerUrlError::IncorrectScheme(old_scheme)),
         }?;
+        // If the URL has no port, we set it here to simplify the logic later
+        let authority = url_parts.authority.ok_or(ServerUrlError::MissingHost)?;
+        let authority = if authority.port_u16().is_none() {
+            // If no port is specified, we set the default port for the scheme
+            // A bare IPv6 address without brackets will not be accepted by `Uri::from_str`
+            // anyway, so we can safely concatenate the port to the original authority
+            Authority::from_str(&format!("{authority}:{default_port}"))?
+        } else {
+            authority
+        };
         // Convert to a `Uri`.
         let url = Uri::builder()
             .scheme(new_scheme)
-            .authority(url_parts.authority.ok_or(Self::Err::MissingHost)?)
+            .authority(authority)
             .path_and_query(
                 url_parts
                     .path_and_query
@@ -460,29 +470,35 @@ mod tests {
         crate::tests::setup_logging();
         assert_eq!(
             ServerUrl::from_str("example.com").unwrap().to_string(),
-            "ws://example.com/"
+            "ws://example.com:80/"
         );
         assert_eq!(
             ServerUrl::from_str("wss://example.com")
                 .unwrap()
                 .to_string(),
-            "wss://example.com/"
+            "wss://example.com:443/"
         );
         assert_eq!(
             ServerUrl::from_str("ws://example.com").unwrap().to_string(),
-            "ws://example.com/"
+            "ws://example.com:80/"
         );
         assert_eq!(
             ServerUrl::from_str("https://example.com")
                 .unwrap()
                 .to_string(),
-            "wss://example.com/"
+            "wss://example.com:443/"
         );
         assert_eq!(
             ServerUrl::from_str("http://example.com")
                 .unwrap()
                 .to_string(),
-            "ws://example.com/"
+            "ws://example.com:80/"
+        );
+        assert_eq!(
+            ServerUrl::from_str("https://example.com:8080/foo")
+                .unwrap()
+                .to_string(),
+            "wss://example.com:8080/foo"
         );
         ServerUrl::from_str("ftp://example.com").unwrap_err();
     }

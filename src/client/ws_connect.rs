@@ -25,6 +25,7 @@ pub async fn handshake(
         == "wss";
 
     // Get the host and port from the URL
+    // Both are guaranteed to exist by the `ClientArgs` parser
     let mut host = args
         .server
         .0
@@ -34,13 +35,11 @@ pub async fn handshake(
     if host.starts_with('[') && host.ends_with(']') {
         host = &host[1..host.len() - 1];
     }
-    let port = args.server.0.port().map_or_else(
-        || {
-            if is_tls { 443 } else { 80 }
-        },
-        |p| p.as_u16(),
-    );
-
+    let port = args
+        .server
+        .0
+        .port_u16()
+        .expect("URL port should be present (this is a bug)");
     // Server name for SNI
     // To be overridden later if a custom hostname is provided
     let mut domain = host;
