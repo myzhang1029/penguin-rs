@@ -52,19 +52,27 @@ fn make_client_args(servhost: &str, servport: u16, remotes: Vec<Remote>) -> arg:
 /// Generate a self-signed server cert into a temporary directory.
 /// Returns the path to the directory. The cert is named `cert.pem` and the key is named `privkey.pem`.
 #[cfg(not(all(feature = "nativetls", any(target_os = "macos", target_os = "windows"))))]
-async fn make_server_cert_ecdsa() -> TempDir {
+async fn make_server_cert_ecdsa(dest: Option<&str>) -> (Option<TempDir>, rcgen::Certificate) {
     let cert_params = rcgen::CertificateParams::new(vec!["localhost".to_string()]).unwrap();
     let keypair = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P384_SHA384).unwrap();
-    let dir = tempfile::tempdir().unwrap();
-    let dir_path = dir.path().to_str().unwrap();
+    let mut dir = None;
+    let dir_path = if let Some(dest) = dest {
+        dest
+    } else {
+        dir = Some(TempDir::new().unwrap());
+        dir.as_ref().unwrap().path().to_str().unwrap()
+    };
     let cert_path = format!("{dir_path}/cert.pem");
     let key_path = format!("{dir_path}/privkey.pem");
     let cert = cert_params.self_signed(&keypair).unwrap();
-    let key = keypair.serialize_pem();
-    let cert = cert.pem();
-    tokio::fs::write(&cert_path, cert).await.unwrap();
-    tokio::fs::write(&key_path, key).await.unwrap();
-    dir
+    let key_pem = keypair.serialize_pem();
+    let cert_pem = cert.pem();
+    tokio::fs::write(&cert_path, cert_pem).await.unwrap();
+    tokio::fs::write(&key_path, key_pem).await.unwrap();
+    // Make sure the files actually exist
+    assert!(tokio::fs::metadata(&cert_path).await.is_ok());
+    assert!(tokio::fs::metadata(&key_path).await.is_ok());
+    (dir, cert)
 }
 
 #[tokio::test]
@@ -325,7 +333,8 @@ async fn test_it_works_tls_simple() {
     setup_logging();
 
     let mut serv_cfg = make_server_args("127.0.0.1", 20353);
-    let cert_dir = make_server_cert_ecdsa().await;
+    let (cert_dir, _) = make_server_cert_ecdsa(None).await;
+    let cert_dir = cert_dir.unwrap();
     serv_cfg.tls_cert = Some(format!("{}/cert.pem", cert_dir.path().display()));
     serv_cfg.tls_key = Some(format!("{}/privkey.pem", cert_dir.path().display()));
     SERVER_ARGS.set(serv_cfg).unwrap();
@@ -358,6 +367,61 @@ async fn test_it_works_tls_simple() {
     assert_eq!(input_bytes, output_bytes);
     server_task.abort();
     client_task.abort();
+}
+
+// `native_tls` on macOS and Windows doesn't support reading Ed25519 nor ECDSA-based certificates.
+#[tokio::test]
+#[cfg(unix)]
+#[cfg(not(all(feature = "nativetls", any(target_os = "macos", target_os = "windows"))))]
+async fn test_tls_reload() {
+    use crate::tls::tls_connect;
+
+    static SERVER_ARGS: OnceLock<arg::ServerArgs> = OnceLock::new();
+    setup_logging();
+
+    let mut serv_cfg = make_server_args("127.0.0.1", 20353);
+    let (cert_dir, cert) = make_server_cert_ecdsa(None).await;
+    let cert_dir = cert_dir.unwrap();
+    let cert_dir_path = cert_dir.path().display().to_string();
+    serv_cfg.tls_cert = Some(format!("{}/cert.pem", cert_dir_path));
+    serv_cfg.tls_key = Some(format!("{}/privkey.pem", cert_dir_path));
+    SERVER_ARGS.set(serv_cfg).unwrap();
+
+    let server_task = tokio::spawn(crate::server::server_main(SERVER_ARGS.get().unwrap()));
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    // Connect to the server and read the certificate
+    let stream = tls_connect("127.0.0.1", 20353, "localhost", None, None, None, true)
+        .await
+        .unwrap();
+    let (_, common_state) = stream.get_ref();
+    let peer_cert = common_state.peer_certificates().unwrap();
+    // Check that the certificate is what we expect
+    assert_eq!(peer_cert.len(), 1);
+    assert_eq!(peer_cert[0], *cert.der());
+    let (_, new_cert) = make_server_cert_ecdsa(Some(&cert_dir_path)).await;
+    assert_ne!(new_cert.der(), cert.der());
+    // Reload the server configuration by sending SIGUSR1
+    let pid = std::process::id();
+    let cmd = tokio::process::Command::new("kill")
+        .arg("-USR1")
+        .arg(pid.to_string())
+        .spawn()
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    assert!(cmd.success(), "Failed to send SIGUSR1 to self");
+    // Check that the server has reloaded the certificate
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let stream = tls_connect("127.0.0.1", 20353, "localhost", None, None, None, true)
+        .await
+        .unwrap();
+    let (_, common_state) = stream.get_ref();
+    let peer_cert = common_state.peer_certificates().unwrap();
+    // Check that the certificate is what we expect
+    assert_eq!(peer_cert.len(), 1);
+    assert_eq!(peer_cert[0], *new_cert.der());
+    server_task.abort();
 }
 
 #[tokio::test]
