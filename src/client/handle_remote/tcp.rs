@@ -4,13 +4,10 @@
 
 use super::super::MaybeRetryableError;
 use super::FatalError;
-use crate::client::HandlerResources;
-use crate::client::{MuxStream, StreamCommand};
+use crate::client::{HandlerResources, MuxStream, StreamCommand};
 use bytes::Bytes;
-use tokio::{
-    net::TcpListener,
-    sync::{mpsc, oneshot},
-};
+use tokio::net::TcpListener;
+use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info, warn};
 
 /// Request a channel from the mux

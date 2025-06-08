@@ -1,8 +1,6 @@
 use penguin_mux::timing::OptionalDuration;
-use std::{
-    pin::Pin,
-    task::{Poll, ready},
-};
+use std::pin::Pin;
+use std::task::{Poll, ready};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 /// A wrapper around an `AsyncRead` with a read timeout.

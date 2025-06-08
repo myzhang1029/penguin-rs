@@ -1,14 +1,15 @@
 mod challenge_helper;
 
-use crate::{
-    arg::ServerArgs,
-    tls::{TlsIdentity, make_tls_identity_from_rcgen_pem, reload_tls_identity_from_rcgen_pem},
+use self::challenge_helper::Action;
+use crate::arg::ServerArgs;
+use crate::tls::{
+    TlsIdentity, make_tls_identity_from_rcgen_pem, reload_tls_identity_from_rcgen_pem,
 };
-use challenge_helper::Action;
 use instant_acme::{Account, AuthorizationStatus, Identifier, NewAccount, NewOrder, OrderStatus};
 use penguin_mux::{Dupe, timing::Backoff};
 use rcgen::{CertificateParams, DistinguishedName, KeyPair};
 use std::sync::OnceLock;
+use std::time::Duration;
 use tracing::{debug, error, info};
 
 pub use challenge_helper::ChallengeHelper;
@@ -66,7 +67,7 @@ impl Client {
         let contact = server_args
             .tls_acme_email
             .as_ref()
-            .map_or_else(std::vec::Vec::new, |email| vec![format!("mailto:{email}")]);
+            .map_or_else(Vec::new, |email| vec![format!("mailto:{email}")]);
 
         let (account, _cred) = Account::create(
             &NewAccount {
@@ -107,7 +108,7 @@ impl Client {
     pub fn get_tls_config_spawn_renewal(&'static self) -> TlsIdentity {
         tokio::spawn(async move {
             // Hard-coding a renewal interval of 30 days
-            let interval = std::time::Duration::from_secs(30 * 24 * 60 * 60); // 30 days
+            let interval = Duration::from_secs(30 * 24 * 60 * 60); // 30 days
             let mut interval = tokio::time::interval(interval);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             // Skip the first tick so that we don't immediately renew
@@ -160,8 +161,8 @@ async fn issue(
         .await?;
     // Back off until the order becomes ready or invalid
     let mut backoff = Backoff::new(
-        std::time::Duration::from_secs(5),
-        std::time::Duration::from_secs(60),
+        Duration::from_secs(5),
+        Duration::from_secs(60),
         2,
         MAX_ORDER_RETRIES,
     );
@@ -203,7 +204,7 @@ async fn issue(
     let cert_chain_pem = loop {
         match order.certificate().await? {
             Some(cert_chain_pem) => break cert_chain_pem,
-            None => tokio::time::sleep(std::time::Duration::from_secs(1)).await,
+            None => tokio::time::sleep(Duration::from_secs(1)).await,
         }
     };
     order_cleanup();

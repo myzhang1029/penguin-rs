@@ -14,8 +14,7 @@ use crate::arg::ServerArgs;
 #[cfg(unix)]
 use crate::tls::reload_tls_identity;
 use crate::tls::{MaybeTlsStream, TlsIdentity, TlsIdentityInner, make_tls_identity};
-use hyper_util::rt::TokioIo;
-use hyper_util::rt::tokio::TokioExecutor;
+use hyper_util::rt::{TokioIo, tokio::TokioExecutor};
 use hyper_util::server::conn::auto;
 use penguin_mux::Dupe;
 use std::net::SocketAddr;

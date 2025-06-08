@@ -2,10 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use std::net::SocketAddr;
-
 use super::Error;
 use bytes::Bytes;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tracing::trace;
 
@@ -106,7 +105,7 @@ where
                 .read_exact(&mut addr)
                 .await
                 .map_err(|e| Error::ProcessSocksRequest("read address", e))?;
-            Ok(std::net::Ipv4Addr::from(addr).to_string().into())
+            Ok(Ipv4Addr::from(addr).to_string().into())
         }
         0x03 => {
             // Domain name
@@ -128,7 +127,7 @@ where
                 .read_exact(&mut addr)
                 .await
                 .map_err(|e| Error::ProcessSocksRequest("read address", e))?;
-            Ok(std::net::Ipv6Addr::from(addr).to_string().into())
+            Ok(Ipv6Addr::from(addr).to_string().into())
         }
         _ => {
             // Unsupported address type

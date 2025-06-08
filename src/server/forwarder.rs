@@ -7,11 +7,8 @@ use crate::config;
 use penguin_mux::{Datagram, Dupe, MuxStream};
 use std::net::SocketAddr;
 use thiserror::Error;
-use tokio::net::TcpStream;
-use tokio::{
-    net::{UdpSocket, lookup_host},
-    sync::mpsc,
-};
+use tokio::net::{TcpStream, UdpSocket, lookup_host};
+use tokio::sync::mpsc;
 use tracing::{debug, trace};
 
 /// Error type for the forwarder.

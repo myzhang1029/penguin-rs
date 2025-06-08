@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use tokio::time;
+use std::time;
 
 /// Both: how long to wait for responses to UDP outgoing datagrams
 pub const UDP_PRUNE_TIMEOUT: time::Duration = time::Duration::from_secs(10);

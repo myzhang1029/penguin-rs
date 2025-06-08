@@ -18,8 +18,11 @@ use self::udp::{handle_udp, handle_udp_stdio};
 use crate::client::HandlerResources;
 use crate::parse_remote::{LocalSpec, RemoteSpec};
 use crate::parse_remote::{Protocol, Remote};
+use std::io;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tracing::{debug, error};
 
 /// Handler errors
@@ -30,7 +33,7 @@ pub enum FatalError {
     /// to be recoverable.
     // Not marked as #[from] so that we don't casually cast all IO errors
     #[error(transparent)]
-    ClientIo(std::io::Error),
+    ClientIo(io::Error),
     /// Happens when the main loop exits and is thus unable to receive
     /// datagrams on the channel.
     #[error("Cannot request stream from the main loop")]
@@ -98,34 +101,28 @@ impl Stdio {
 
 impl AsyncRead for Stdio {
     fn poll_read(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        std::pin::Pin::new(&mut self.stdin).poll_read(cx, buf)
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stdin).poll_read(cx, buf)
     }
 }
 
 impl AsyncWrite for Stdio {
     fn poll_write(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
         buf: &[u8],
-    ) -> std::task::Poll<std::io::Result<usize>> {
-        std::pin::Pin::new(&mut self.stdout).poll_write(cx, buf)
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.stdout).poll_write(cx, buf)
     }
 
-    fn poll_flush(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        std::pin::Pin::new(&mut self.stdout).poll_flush(cx)
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stdout).poll_flush(cx)
     }
 
-    fn poll_shutdown(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        std::pin::Pin::new(&mut self.stdout).poll_shutdown(cx)
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stdout).poll_shutdown(cx)
     }
 }

@@ -1,6 +1,6 @@
 use super::TlsStream;
 use std::{
-    io::{self},
+    io,
     pin::Pin,
     task::{Context, Poll},
 };

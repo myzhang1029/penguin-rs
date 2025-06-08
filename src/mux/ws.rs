@@ -67,17 +67,15 @@ pub trait WebSocket: Send + 'static {
 
 #[cfg(feature = "tungstenite")]
 mod tokio_tungstenite {
-    use std::{
-        pin::Pin,
-        task::{Context, Poll},
-    };
-
+    use super::{Message, WebSocket};
     use bytes::Bytes;
     use futures_util::{Sink, Stream};
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+    use tokio::io::{AsyncRead, AsyncWrite};
     use tokio_tungstenite::tungstenite;
     use tracing::error;
 
-    use super::{Message, WebSocket};
     impl From<tungstenite::Message> for Message {
         #[inline]
         fn from(msg: tungstenite::Message) -> Self {
@@ -118,7 +116,7 @@ mod tokio_tungstenite {
 
     impl<RW> WebSocket for tokio_tungstenite::WebSocketStream<RW>
     where
-        RW: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+        RW: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
         #[inline]
         fn poll_ready_unpin(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), crate::Error>> {

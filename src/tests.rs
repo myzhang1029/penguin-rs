@@ -1,19 +1,14 @@
 use super::*;
 use crate::{arg::ServerUrl, parse_remote::Remote};
 use penguin_mux::timing::OptionalDuration;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 #[allow(unused_imports)]
 use std::sync::{LazyLock, OnceLock};
-use std::{
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
-    str::FromStr,
-    time::Duration,
-};
+use std::{str::FromStr, time::Duration};
 #[cfg(not(all(feature = "nativetls", any(target_os = "macos", target_os = "windows"))))]
 use tempfile::TempDir;
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream, UdpSocket},
-};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 pub fn setup_logging() {
@@ -395,7 +390,13 @@ async fn test_tls_reload() {
         .unwrap();
     #[cfg(feature = "nativetls")]
     {
-        let peer_cert = stream.get_ref().peer_certificate().unwrap().unwrap().to_der().unwrap();
+        let peer_cert = stream
+            .get_ref()
+            .peer_certificate()
+            .unwrap()
+            .unwrap()
+            .to_der()
+            .unwrap();
         assert_eq!(peer_cert, **cert.der());
     }
     #[cfg(feature = "__rustls")]
@@ -426,7 +427,13 @@ async fn test_tls_reload() {
         .unwrap();
     #[cfg(feature = "nativetls")]
     {
-        let peer_cert = stream.get_ref().peer_certificate().unwrap().unwrap().to_der().unwrap();
+        let peer_cert = stream
+            .get_ref()
+            .peer_certificate()
+            .unwrap()
+            .unwrap()
+            .to_der()
+            .unwrap();
         assert_eq!(peer_cert, **new_cert.der());
     }
     #[cfg(feature = "__rustls")]

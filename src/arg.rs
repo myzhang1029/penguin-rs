@@ -6,11 +6,8 @@ use crate::parse_remote::Remote;
 #[cfg(feature = "acme")]
 use crate::server::acme::ChallengeHelper;
 use clap::{ArgAction, Args, Parser, Subcommand, arg, command};
-use http::{
-    HeaderValue, Uri,
-    header::HeaderName,
-    uri::{Authority, PathAndQuery, Scheme},
-};
+use http::uri::{Authority, PathAndQuery, Scheme};
+use http::{HeaderValue, Uri, header::HeaderName};
 #[cfg(feature = "acme")]
 use instant_acme::LetsEncrypt;
 use penguin_mux::timing::OptionalDuration;
