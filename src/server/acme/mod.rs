@@ -107,8 +107,11 @@ impl Client {
 
     pub fn get_tls_config_spawn_renewal(&'static self) -> TlsIdentity {
         tokio::spawn(async move {
-            // Hard-coding a renewal interval of 30 days
+            // Hard-coding a renewal interval
+            #[cfg(not(test))]
             let interval = Duration::from_secs(30 * 24 * 60 * 60); // 30 days
+            #[cfg(test)]
+            let interval = Duration::from_secs(10); // 10 seconds for tests
             let mut interval = tokio::time::interval(interval);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             // Skip the first tick so that we don't immediately renew
