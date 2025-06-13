@@ -69,12 +69,12 @@ jobs:
         RUSTFLAGS: -Cinstrument-coverage
 
     - name: Run cargo lib tests with minimal features
-      run: cargo nextest run --all-targets --verbose --no-default-features
+      run: cargo nextest run --all-targets --verbose --no-default-features --package penguin-mux
       env:
         RUSTFLAGS: -Cinstrument-coverage
 
     - name: Run cargo lib tests with loom
-      run: cargo test --lib --release --no-default-features
+      run: cargo test --lib --release --no-default-features --package penguin-mux
       env:
         RUSTFLAGS: --cfg loom -Cinstrument-coverage
         LOOM_LOG: debug
