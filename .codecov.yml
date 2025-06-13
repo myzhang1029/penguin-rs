@@ -1,19 +1,19 @@
 component_management:
   default_rules:
     paths:
-      - src/**
+      - penguin/src/**
   individual_components:
     - component_id: rlib_penguin_mux
       name: multiplexer
       paths:
-        - src/mux/**
-    - component_id: bin_penguin_server
+        - penguin-mux/**
+    - component_id: rlib_penguin_server
       name: server
       paths:
-        - src/server/**
-    - component_id: bin_penguin_client
+        - penguin/src/server/**
+    - component_id: rlib_penguin_client
       name: client
       paths:
-        - src/client/**
+        - penguin/src/client/**
 
 
