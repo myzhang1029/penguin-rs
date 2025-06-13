@@ -69,53 +69,56 @@ pub struct ClientArgs {
     pub server: ServerUrl,
     /// Remote connections tunneled through the server, each of
     /// which come in the form:
-    ///
+    /// ```text
     /// <local-host>:<local-port>:<remote-host>:<remote-port>/<protocol>
-    ///
-    /// - local-host defaults to 0.0.0.0 (all interfaces).
+    /// ```
+    /// - local-host defaults to `0.0.0.0` (all interfaces).
     ///
     /// - local-port defaults to remote-port.
     ///
     /// - remote-port is required*.
     ///
-    /// - remote-host defaults to 127.0.0.1 (server localhost).
+    /// - remote-host defaults to `127.0.0.1` (server localhost).
     ///
-    /// - protocol defaults to tcp.
+    /// - protocol defaults to `tcp`.
     ///
     /// which shares <remote-host>:<remote-port> from the server to the client
     /// as <local-host>:<local-port>.
     ///
-    ///   example remotes
+    /// example remotes:
+    /// ```text
+    /// 3000
     ///
-    ///     3000
+    /// example.com:3000
     ///
-    ///     example.com:3000
+    /// 3000:google.com:80
     ///
-    ///     3000:google.com:80
+    /// 192.168.0.5:3000:google.com:80
     ///
-    ///     192.168.0.5:3000:google.com:80
+    /// socks
     ///
-    ///     socks
+    /// 5000:socks
     ///
-    ///     5000:socks
+    /// stdio:example.com:22
     ///
-    ///     stdio:example.com:22
+    /// 1.1.1.1:53/udp
+    /// ```
     ///
-    ///     1.1.1.1:53/udp
+    /// The word `socks` may be in the place of `remote-host` and `remote-port`
+    /// to create a SOCKS4/SOCKS5 proxy server. The default local host and
+    /// port for a `socks` remote is `127.0.0.1:1080`. `socks` remotes cannot
+    /// be UDP.
     ///
-    ///   The word "socks" may be in the place of remote-host and remote-port
-    ///   to create a SOCKS4/SOCKS5 proxy server. The default local host and
-    ///   port for a "socks" remote is 127.0.0.1:1080. "socks" remotes cannot
-    ///   be UDP.
-    ///
-    ///   When stdio is used as local-host, the tunnel will connect standard
-    ///   input/output of this program with the remote. This is useful when
-    ///   combined with ssh ProxyCommand. You can use
-    ///     ssh -o ProxyCommand='penguin client <server> stdio:%h:%p'
-    ///         user@example.com
-    ///   to connect to an SSH server through the tunnel.
-    // The underlying port is a u16, which gives 0..=65535; 0 is not allowed,
-    // so the range of available ports is 1..=65535,
+    /// When `stdio` is used as `local-host`, the tunnel will connect standard
+    /// input/output of this program with the remote. This is useful when
+    /// combined with ssh ProxyCommand. You can use
+    /// ```sh
+    /// ssh -o ProxyCommand='penguin client <server> stdio:%h:%p'
+    ///     user@example.com
+    /// ```
+    /// to connect to an SSH server through the tunnel.
+    // The underlying port is a `u16`, which gives `0..=65535`; 0 is not allowed,
+    // so the range of available ports is `1..=65535`,
     // giving 65535 available remotes.
     #[arg(num_args=1..=65535, required = true)]
     pub remote: Vec<Remote>,
