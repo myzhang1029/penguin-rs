@@ -292,7 +292,7 @@ mod tests_need_pebble {
     async fn test_issue() {
         crate::tests::setup_logging();
         let script_path = format!(
-            "{}/.github/workflows/http01_helper_for_test.sh",
+            "{}/../.github/workflows/http01_helper_for_test.sh",
             env!("CARGO_MANIFEST_DIR")
         );
         let tmpdir = tempfile::tempdir().unwrap();

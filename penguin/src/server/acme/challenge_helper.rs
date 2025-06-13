@@ -157,7 +157,7 @@ mod tests {
     async fn test_call_challenge_helper_example() {
         crate::tests::setup_logging();
         let script_path = format!(
-            "{}/.github/workflows/http01_helper_for_test.sh",
+            "{}/../.github/workflows/http01_helper_for_test.sh",
             env!("CARGO_MANIFEST_DIR")
         );
         let tmpdir = tempdir().unwrap();
@@ -201,7 +201,7 @@ mod tests {
     async fn test_process_one_challenge() {
         crate::tests::setup_logging();
         let script_path = format!(
-            "{}/.github/workflows/http01_helper_for_test.sh",
+            "{}/../.github/workflows/http01_helper_for_test.sh",
             env!("CARGO_MANIFEST_DIR")
         );
         let tmpdir = tempdir().unwrap();
@@ -271,7 +271,7 @@ mod tests {
     async fn test_process_challenges() {
         crate::tests::setup_logging();
         let script_path = format!(
-            "{}/.github/workflows/http01_helper_for_test.sh",
+            "{}/../.github/workflows/http01_helper_for_test.sh",
             env!("CARGO_MANIFEST_DIR")
         );
         let tmpdir = tempdir().unwrap();
