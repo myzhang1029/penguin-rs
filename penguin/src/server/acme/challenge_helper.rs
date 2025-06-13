@@ -50,6 +50,7 @@ impl AsRef<OsStr> for ChallengeHelper {
 }
 
 impl ChallengeHelper {
+    /// Create or remove a challenge file using the helper command
     pub fn call(
         &self,
         action: Action,

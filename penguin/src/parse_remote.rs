@@ -29,46 +29,61 @@ macro_rules! default_host {
 // Export this macro for use in `arg.rs`.
 pub(crate) use default_host;
 
+/// Configuration for one item to forward
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct Remote {
+    /// Local-side forwarding info
     pub local_addr: LocalSpec,
+    /// Peer-side forwarding info
     #[allow(clippy::struct_field_names)]
     pub remote_addr: RemoteSpec,
+    /// Layer-4 protocol this instance forwards
     pub protocol: Protocol,
 }
 
-/// The local side can be either IP+port or "stdio".
+/// The local side can be either IP+port or "stdio"
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub enum LocalSpec {
+    /// An IP socket
     Inet((String, u16)),
+    /// Standard input/output
     Stdio,
 }
 
-/// The remote side can be either IP+port or "socks".
+/// The remote side can be either IP+port or "socks"
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub enum RemoteSpec {
+    /// An IP socket
     Inet((String, u16)),
+    /// Function as a SOCKS proxy
     Socks,
 }
 
 /// Protocol can be either "tcp" or "udp".
 #[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
 pub enum Protocol {
+    /// Transmission Control Protocol
     Tcp,
+    /// User Datagram Protocol
     Udp,
 }
 
 /// Errors that can occur when parsing a remote.
 #[derive(Clone, Error, Debug, PartialEq, Eq)]
 pub enum Error {
+    /// Invalid remote specification
     #[error("Invalid format")]
     Format,
+    /// Invalid protocol
     #[error("Invalid protocol")]
     Protocol,
+    /// Invalid host or address
     #[error("Invalid host")]
     Host,
+    /// Invalid port
     #[error("Invalid port")]
     Port(#[from] std::num::ParseIntError),
+    /// UDP cannot be used with SOCKS
     #[error("socks remote must be TCP")]
     UdpSocks,
 }
@@ -245,6 +260,7 @@ impl FromStr for Remote {
     }
 }
 
+/// Remove brackets from possbly an IPv6 address
 pub fn remove_brackets(s: &str) -> &str {
     if s.starts_with('[') && s.ends_with(']') {
         &s[1..s.len() - 1]

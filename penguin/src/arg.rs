@@ -4,7 +4,7 @@
 
 use crate::parse_remote::Remote;
 #[cfg(feature = "acme")]
-use crate::server::acme::ChallengeHelper;
+use crate::server::ChallengeHelper;
 use clap::{ArgAction, Args, Parser, Subcommand, arg, command};
 use http::uri::{Authority, PathAndQuery, Scheme};
 use http::{HeaderValue, Uri, header::HeaderName};
@@ -14,14 +14,18 @@ use penguin_mux::timing::OptionalDuration;
 use std::{fmt::Debug, ops::Deref, str::FromStr, sync::OnceLock};
 use thiserror::Error;
 
+/// Command line arguments (main application)
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 #[command(propagate_version = true)]
 pub struct PenguinCli {
+    /// Subcommand (`client` or `server`)
     #[clap(subcommand)]
     pub subcommand: Commands,
+    /// Level of verbosity
     #[arg(short, long, conflicts_with = "quiet", action = ArgAction::Count, global = true)]
     pub verbose: u8,
+    /// Level of quietness
     #[arg(short, long, conflicts_with = "verbose", action = ArgAction::Count, global = true)]
     pub quiet: u8,
 }
@@ -30,16 +34,19 @@ pub struct PenguinCli {
 pub static ARGS: OnceLock<PenguinCli> = OnceLock::new();
 
 impl PenguinCli {
+    /// Obtain reference to the global static instance
     pub fn get_global() -> &'static Self {
         ARGS.get().expect("ARGS is not initialized (this is a bug)")
     }
 
+    /// Parse command line arguments and set the global static instance
     pub fn parse_global() {
         ARGS.set(Self::parse())
             .expect("`parse_global` should not be called twice (this is a bug)");
     }
 }
 
+/// Possible subcommands
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Penguin client
@@ -300,12 +307,16 @@ pub struct ServerArgs {
 /// Server URL parsing errors
 #[derive(Debug, Error)]
 pub enum ServerUrlError {
+    /// Failed to parse the input string as a URL
     #[error("failed to parse server URL: {0}")]
     UrlParse(#[from] http::uri::InvalidUri),
+    /// Scheme not one of `ws`, `wss`, `http`, or `https`
     #[error("incorrect scheme in server URL: {0}")]
     IncorrectScheme(Scheme),
+    /// Missing host
     #[error("missing host in server URL")]
     MissingHost,
+    /// Failed to build an URL
     #[error("cannot build server URL: {0}")]
     BuildUrl(#[from] http::Error),
 }
@@ -378,10 +389,13 @@ impl Deref for ServerUrl {
 /// Backend URL parsing errors
 #[derive(Debug, Error)]
 pub enum BackendUrlError {
+    /// Failed to parse the input string as a URL
     #[error("failed to parse backend URL: {0}")]
     UrlParse(#[from] http::uri::InvalidUri),
+    /// Missing authority in the URL
     #[error("missing authority in backend URL")]
     MissingAuthority,
+    /// Scheme not one of `http` or `https`
     #[error("invalid backend scheme: {0}")]
     InvalidScheme(Scheme),
 }
@@ -389,8 +403,11 @@ pub enum BackendUrlError {
 /// Backend URL
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackendUrl {
+    /// URL Scheme, either `http` or `https`
     pub scheme: Scheme,
+    /// URL Authority
     pub authority: Authority,
+    /// URL Path and Query
     pub path: PathAndQuery,
 }
 
@@ -428,10 +445,13 @@ impl std::fmt::Display for BackendUrl {
 /// HTTP Header parsing errors
 #[derive(Debug, Error)]
 pub enum HeaderError {
+    /// Header value not valid/acceptable
     #[error("invalid header value or hostname: {0}")]
     Value(#[from] http::header::InvalidHeaderValue),
+    /// Header name not valid/acceptable
     #[error("invalid header name: {0}")]
     Name(#[from] http::header::InvalidHeaderName),
+    /// Header not valid/acceptable
     #[error("invalid header: {0}")]
     Format(String),
 }
@@ -439,7 +459,9 @@ pub enum HeaderError {
 /// HTTP Header
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Header {
+    /// Header name
     pub name: HeaderName,
+    /// Header value
     pub value: HeaderValue,
 }
 

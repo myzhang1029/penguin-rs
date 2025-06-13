@@ -9,8 +9,11 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 /// A stream that may be encrypted with TLS
 // This lint is a false positive because `T` is typically `TcpStream` which is not a zero-sized type.
 #[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
 pub enum MaybeTlsStream<T> {
+    /// A TLS-encrypted stream
     Tls(TlsStream<T>),
+    /// An unencrypted stream
     Plain(T),
 }
 

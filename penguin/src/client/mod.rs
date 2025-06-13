@@ -4,7 +4,7 @@
 
 mod handle_remote;
 mod maybe_retryable;
-pub mod ws_connect;
+mod ws_connect;
 
 use self::handle_remote::handle_remote;
 use self::maybe_retryable::MaybeRetryableError;
@@ -36,32 +36,42 @@ use std::collections::HashMap as IntMap;
 /// Errors
 #[derive(Debug, Error)]
 pub enum Error {
+    /// Exceeded the maximum retry count
     #[error("Maximum retry count reached (last error: {0})")]
     MaxRetryCountReached(Box<Self>),
+    /// Error parsing the remote specifications
     #[error("Failed to parse remote: {0}")]
     ParseRemote(#[from] crate::parse_remote::Error),
+    /// A listener exited unexpectedly
     #[error("Remote handler exited: {0}")]
     RemoteHandlerExited(#[from] handle_remote::FatalError),
+    /// Given domain name is not encodable in UTF-8
     #[error("Given domain name is not encodable in UTF-8")]
     InvalidDomainName(#[from] http::header::ToStrError),
     /// Invalid URL or cannot connect
     #[error(transparent)]
     Tungstenite(#[from] tokio_tungstenite::tungstenite::Error),
+    /// Error making a TLS connection
     #[error("Error making a TCP connection: {0}")]
     TcpConnect(std::io::Error),
     /// TLS error
     #[error(transparent)]
     Tls(#[from] crate::tls::Error),
+    /// Errors from the multiplexor
     #[error(transparent)]
     Mux(#[from] penguin_mux::Error),
+    /// Initial WebSocket handshake timed out
     #[error("Initial WebSocket handshake timed out")]
     HandshakeTimeout,
+    /// User cancelled the initial WebSocket handshake
     #[error("User cancelled initial WebSocket handshake")]
     HandshakeCancelled,
+    /// A stream request timed out
     #[error("Stream request timed out")]
     StreamRequestTimeout,
-    #[error("Remote disconnected normally")]
-    RemoteDisconnected,
+    /// The peer disconnected normally but we were not expecting it
+    #[error("Server disconnected normally")]
+    ServerDisconnected,
 }
 
 // Send the information about how to send the stream to the listener
@@ -235,8 +245,9 @@ impl Dupe for ClientIdMapEntry {
 }
 
 impl ClientIdMapEntry {
+    /// Create a new `ClientIdMapEntry`
     #[must_use]
-    pub fn new(
+    fn new(
         peer_addr: SocketAddr,
         our_addr: SocketAddr,
         socket: Arc<UdpSocket>,
@@ -251,11 +262,13 @@ impl ClientIdMapEntry {
         }
     }
 
-    pub fn refresh(&mut self) {
+    /// Refresh the expiration time of this entry
+    fn refresh(&mut self) {
         self.expires = time::Instant::now() + config::UDP_PRUNE_TIMEOUT;
     }
 }
 
+/// Client entry point
 #[tracing::instrument(level = "trace")]
 pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
     static HANDLER_RESOURCES: OnceLock<HandlerResources> = OnceLock::new();
@@ -274,6 +287,7 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
     .await
 }
 
+/// Main client function, factored out for testing purposes
 pub async fn client_main_inner(
     args: &'static ClientArgs,
     handler_resources: &'static HandlerResources,
@@ -426,7 +440,7 @@ async fn on_connected(
             }
             else => {
                 // The multiplexor has closed for some reason
-                return Err(Error::RemoteDisconnected);
+                return Err(Error::ServerDisconnected);
             }
         }
     }

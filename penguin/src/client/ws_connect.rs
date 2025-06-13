@@ -26,15 +26,13 @@ async fn handshake_inner(
 
     // Get the host and port from the URL
     // Both are guaranteed to exist by the `ClientArgs` parser
-    let mut host = args
+    let host = args
         .server
         .0
         .host()
         .expect("URL host should be present (this is a bug)");
     // `Tcp*` functions expect IPv6 addresses to not be wrapped in square brackets
-    if host.starts_with('[') && host.ends_with(']') {
-        host = &host[1..host.len() - 1];
-    }
+    let host = crate::parse_remote::remove_brackets(host);
     let port = args
         .server
         .0
@@ -92,6 +90,7 @@ async fn handshake_inner(
     Ok(ws_stream)
 }
 
+/// Perform a `WebSocket` handshake with timeout and cancellation support
 pub async fn handshake(
     args: &ClientArgs,
 ) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, super::Error> {

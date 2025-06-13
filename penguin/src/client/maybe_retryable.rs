@@ -81,7 +81,7 @@ impl MaybeRetryableError for super::Error {
             Self::TcpConnect(e) => e.retryable(),
             Self::Tls(e) => e.retryable(),
             Self::Mux(e) => e.retryable(),
-            Self::HandshakeTimeout | Self::StreamRequestTimeout | Self::RemoteDisconnected => true,
+            Self::HandshakeTimeout | Self::StreamRequestTimeout | Self::ServerDisconnected => true,
             _ => false,
         }
     }

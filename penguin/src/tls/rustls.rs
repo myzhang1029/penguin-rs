@@ -21,6 +21,7 @@ pub type TlsIdentityInner = ServerConfig;
 pub type HyperConnector =
     hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>;
 
+/// Create a `rustls::ServerConfig` from the given certificate
 pub async fn make_server_config(
     cert_path: &str,
     key_path: &str,
@@ -73,6 +74,7 @@ async fn make_server_config_from_mem(
     Ok(config)
 }
 
+/// Create a `rustls::ClientConfig` with possibly a client certificate and a custom CA store
 pub async fn make_client_config(
     cert_path: Option<&str>,
     key_path: Option<&str>,

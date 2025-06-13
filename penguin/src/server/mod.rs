@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 #[cfg(feature = "acme")]
-pub mod acme;
+mod acme;
 mod forwarder;
 mod io_with_timeout;
 mod service;
@@ -25,23 +25,32 @@ use tokio::task::JoinSet;
 use tokio_tungstenite::WebSocketStream;
 use tracing::{debug, error, info, trace};
 
+#[cfg(feature = "acme")]
+pub use self::acme::ChallengeHelper;
+
 type WebSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 /// Server Errors
 #[derive(Debug, Error)]
 pub enum Error {
+    /// Specified listening address is invalid
     #[error("Invalid listening host: {0}")]
     InvalidHost(#[from] std::net::AddrParseError),
+    /// TLS errors
     #[error(transparent)]
     Tls(#[from] crate::tls::Error),
+    /// Errors registering signal handlers
     #[cfg(unix)]
     #[error("Cannot register signal handler: {0}")]
     Signal(std::io::Error),
+    /// HTTP server I/O errors
     #[error("HTTP server I/O error: {0}")]
     Io(#[from] std::io::Error),
+    /// Additional `native-tls` errors
     #[error("TLS error: {0}")]
     #[cfg(feature = "nativetls")]
     NativeTls(#[from] tokio_native_tls::native_tls::Error),
+    /// ACME client errors
     #[cfg(feature = "acme")]
     #[error(transparent)]
     Acme(#[from] acme::Error),
@@ -75,6 +84,7 @@ async fn check_start_tls(args: &'static ServerArgs) -> Result<Option<TlsIdentity
     Ok(None)
 }
 
+/// Server entry point
 #[tracing::instrument(level = "trace")]
 pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
     let state = State::new(

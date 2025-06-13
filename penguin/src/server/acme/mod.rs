@@ -14,6 +14,7 @@ use tracing::{debug, error, info};
 
 pub use challenge_helper::ChallengeHelper;
 
+/// Global ACME client instance
 pub static ACME_CLIENT: OnceLock<Client> = OnceLock::new();
 
 /// How many times to check the order status before giving up
