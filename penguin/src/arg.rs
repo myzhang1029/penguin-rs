@@ -35,11 +35,17 @@ pub static ARGS: OnceLock<PenguinCli> = OnceLock::new();
 
 impl PenguinCli {
     /// Obtain reference to the global static instance
+    ///
+    /// # Panics
+    /// Panics if `ARGS` is not initialized
     pub fn get_global() -> &'static Self {
         ARGS.get().expect("ARGS is not initialized (this is a bug)")
     }
 
     /// Parse command line arguments and set the global static instance
+    ///
+    /// # Panics
+    /// Panics if `ARGS` is already initialized
     pub fn parse_global() {
         ARGS.set(Self::parse())
             .expect("`parse_global` should not be called twice (this is a bug)");
@@ -61,7 +67,7 @@ pub enum Commands {
 
 // Descriptions are mainly directly stripped from myzhang1029/penguin
 /// Penguin client arguments.
-#[allow(clippy::doc_markdown)]
+#[allow(clippy::doc_markdown, clippy::pub_underscore_fields)]
 #[cfg(feature = "client")]
 #[derive(Args, Debug, Default)]
 pub struct ClientArgs {
@@ -200,7 +206,7 @@ pub struct ClientArgs {
 /// Penguin server arguments.
 #[cfg(feature = "server")]
 #[derive(Args, Debug, Default)]
-#[allow(clippy::struct_excessive_bools)]
+#[allow(clippy::struct_excessive_bools, clippy::pub_underscore_fields)]
 pub struct ServerArgs {
     /// Defines the HTTP listening host - the network interface.
     /// If multiple ports are specified, `penguin` will listen on all of them.

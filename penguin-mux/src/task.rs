@@ -102,7 +102,7 @@ impl<S: WebSocket> Task<S> {
     // Instead, the user will notice when `rx` channels return `None`.
     #[tracing::instrument(skip_all, level = "debug", fields(task_id = %tokio::task::id()))]
     async fn start(
-        mut self,
+        self,
         mut dropped_ports_rx: mpsc::UnboundedReceiver<u32>,
         mut tx_frame_rx: mpsc::UnboundedReceiver<FinalizedFrame>,
     ) -> Result<()> {
@@ -238,7 +238,7 @@ impl<S: WebSocket> Task<S> {
     /// Wind down the multiplexor task.
     #[tracing::instrument(skip_all, level = "trace")]
     async fn wind_down(
-        &mut self,
+        &self,
         should_drain_frame_rx: bool,
         tx_frame_rx: &mut mpsc::UnboundedReceiver<FinalizedFrame>,
     ) -> Result<()> {
@@ -328,6 +328,7 @@ impl<S: WebSocket> Task<S> {
     ///   - Send the data to the sender.
     ///   - If the receiver is closed or the port does not exist, send back a
     ///     `Reset` frame.
+    #[allow(clippy::too_many_lines)]
     #[tracing::instrument(skip_all, fields(flow_id), level = "debug")]
     #[inline]
     async fn process_frame(&self, frame: Frame<'static>, ignore_bind: bool) -> Result<()> {

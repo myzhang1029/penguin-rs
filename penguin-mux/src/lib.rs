@@ -7,6 +7,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 #![deny(rust_2018_idioms, missing_docs, missing_debug_implementations)]
 #![deny(clippy::pedantic, clippy::cargo, clippy::nursery, clippy::unwrap_used)]
+#![allow(clippy::multiple_crate_versions)]
 
 pub mod config;
 mod dupe;
@@ -196,6 +197,11 @@ impl Multiplexor {
     /// for the channel to be established, that channel may be established but
     /// inaccessible through normal means. Subsequent calls to this function
     /// will result in a new channel being established.
+    ///
+    /// # Errors
+    /// - Returns [`Error::Closed`] if the `Multiplexor` is already closed.
+    /// - Returns [`Error::FlowIdRejected`] if a flow ID could not be allocated
+    ///   after `max_flow_id_retries` attempts.
     #[tracing::instrument(skip(self), level = "debug")]
     pub async fn new_stream_channel(&self, host: &[u8], port: u16) -> Result<MuxStream> {
         let mut retries_left = self.max_flow_id_retries;
@@ -233,7 +239,7 @@ impl Multiplexor {
     /// Accept a new stream channel from the remote peer.
     ///
     /// # Errors
-    /// Returns [`Error::Closed`] if the connection is closed.
+    /// - Returns [`Error::Closed`] if the connection is closed.
     ///
     /// # Cancel Safety
     /// This function is cancel safe. If the task is cancelled while waiting
@@ -249,7 +255,7 @@ impl Multiplexor {
     /// Get the next available datagram.
     ///
     /// # Errors
-    /// Returns [`Error::Closed`] if the connection is closed.
+    /// - Returns [`Error::Closed`] if the connection is closed.
     ///
     /// # Cancel Safety
     /// This function is cancel safe. If the task is cancelled while waiting
@@ -265,9 +271,9 @@ impl Multiplexor {
     /// Send a datagram
     ///
     /// # Errors
-    /// * Returns [`Error::DatagramHostTooLong`] if the destination host is
+    /// - Returns [`Error::DatagramHostTooLong`] if the destination host is
     /// longer than 255 octets.
-    /// * Returns [`Error::Closed`] if the Multiplexor is already closed.
+    /// - Returns [`Error::Closed`] if the Multiplexor is already closed.
     ///
     /// # Cancel Safety
     /// This function is cancel safe. If the task is cancelled, it is
@@ -301,6 +307,9 @@ impl Multiplexor {
     /// This function is not cancel safe. If the task is cancelled while waiting
     /// for the peer to reply, the user will not be able to receive whether the
     /// peer accepted the bind request.
+    ///
+    /// # Errors
+    /// - Returns [`Error::Closed`] if the `Multiplexor` is already closed.
     #[tracing::instrument(skip(self), level = "debug")]
     pub async fn request_bind(&self, host: &[u8], port: u16, bind_type: BindType) -> Result<bool> {
         let (result_tx, result_rx) = oneshot::channel();
@@ -323,6 +332,11 @@ impl Multiplexor {
     /// # Cancel Safety
     /// This function is cancel safe. If the task is cancelled while waiting
     /// for a `Bind` request, it is guaranteed that no request will be lost.
+    ///
+    /// # Errors
+    /// - Returns [`Error::Closed`] if the `Multiplexor` is already closed.
+    /// - Returns [`Error::UnsupportedOperation`] if the `Multiplexor` was not
+    ///  configured to allow `Bind` requests.
     #[tracing::instrument(skip(self), level = "debug")]
     pub async fn next_bind_request(&self) -> Result<BindRequest<'static>> {
         if let Some(rx) = self.bnd_request_rx.as_ref() {
@@ -502,6 +516,9 @@ impl BindRequest<'_> {
     }
 
     /// Accept or reject the bind request
+    ///
+    /// # Errors
+    /// - Returns [`Error::Closed`] if the `Multiplexor` is already closed.
     #[tracing::instrument(skip(self), level = "debug")]
     pub fn reply(&self, accepted: bool) -> Result<()> {
         if accepted {

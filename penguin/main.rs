@@ -6,14 +6,14 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(not(all(feature = "client", feature = "server")), allow(dead_code))]
 
-use thiserror::Error;
-use tracing::{error, trace};
-use tracing_subscriber::{filter, fmt, prelude::*, reload};
 use rusty_penguin_lib::arg;
 #[cfg(feature = "client")]
 use rusty_penguin_lib::client;
 #[cfg(feature = "server")]
 use rusty_penguin_lib::server;
+use thiserror::Error;
+use tracing::{error, trace};
+use tracing_subscriber::{filter, fmt, prelude::*, reload};
 
 /// Errors
 #[derive(Error)]

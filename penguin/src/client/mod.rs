@@ -97,6 +97,7 @@ pub struct HandlerResources {
 
 impl HandlerResources {
     /// Create a new `HandlerResources`
+    #[must_use]
     pub fn create() -> (
         Self,
         mpsc::Receiver<StreamCommand>,
@@ -121,6 +122,10 @@ impl HandlerResources {
     }
 
     /// Add a new UDP client to the maps, returns the new client ID
+    ///
+    /// # Panics
+    /// Panics if the `socket` is not bound to a local address,
+    /// or if the `client_id_map` and `client_addr_map` are inconsistent.
     #[must_use = "This function returns the new client ID, which should be used to mark the datagram"]
     pub fn add_udp_client(&self, addr: SocketAddr, socket: Arc<UdpSocket>, socks5: bool) -> u32 {
         // `expect`: at this point `socket` should be bound. Otherwise, it's a bug.

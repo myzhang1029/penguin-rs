@@ -1,9 +1,10 @@
 //! A fast TCP/UDP tunnel, transported over HTTP WebSocket.
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
-#![warn(rust_2018_idioms, missing_docs, missing_debug_implementations)]
+#![warn(rust_2018_idioms, missing_debug_implementations)]
 #![warn(clippy::pedantic, clippy::cargo, clippy::unwrap_used)]
 #![forbid(unsafe_code)]
+#![allow(clippy::missing_panics_doc, clippy::missing_errors_doc)]
 #![cfg_attr(not(all(feature = "client", feature = "server")), allow(dead_code))]
 
 pub mod arg;

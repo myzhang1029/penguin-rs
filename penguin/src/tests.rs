@@ -378,8 +378,8 @@ async fn test_tls_reload() {
     let (cert_dir, cert) = make_server_cert_ecdsa(None).await;
     let cert_dir = cert_dir.unwrap();
     let cert_dir_path = cert_dir.path().display().to_string();
-    serv_cfg.tls_cert = Some(format!("{}/cert.pem", cert_dir_path));
-    serv_cfg.tls_key = Some(format!("{}/privkey.pem", cert_dir_path));
+    serv_cfg.tls_cert = Some(format!("{cert_dir_path}/cert.pem"));
+    serv_cfg.tls_key = Some(format!("{cert_dir_path}/privkey.pem"));
     SERVER_ARGS.set(serv_cfg).unwrap();
 
     let server_task = tokio::spawn(crate::server::server_main(SERVER_ARGS.get().unwrap()));
