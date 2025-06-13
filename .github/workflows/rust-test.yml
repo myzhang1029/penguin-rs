@@ -89,7 +89,7 @@ jobs:
 
     - name: Run cargo lib tests with loom
       if: ${{ matrix.config.name != 'aarch64-pc-windows-msvc' }}
-      run: cargo test --lib --release --no-default-features --package penguin-mux
+      run: cargo nextest run --lib --release --no-default-features --package penguin-mux
       env:
         RUSTFLAGS: --cfg loom -Cinstrument-coverage
         LOOM_LOG: debug
