@@ -422,9 +422,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Dupe, tests::setup_logging};
+    use crate::tests::setup_logging;
     use std::pin::pin;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadBuf};
 
     const DEFAULT_RWND_THRESHOLD: u32 = 4;
 
@@ -611,221 +610,6 @@ mod tests {
 
     #[tokio::test]
     #[cfg(not(loom))]
-    async fn test_copy_bidirectional_normal() {
-        const TX1: Bytes = Bytes::from_static(b"hello from mux");
-        const RX1: Bytes = Bytes::from_static(b"hello from other");
-        const TX2: Bytes = Bytes::from_static(b"short");
-        const RX2: Bytes = Bytes::from_static(b"hello after half-close");
-        const RX3: Bytes = Bytes::from_static(b"stout");
-        setup_logging();
-        let (rx_frame_tx, rx_frame_rx) = mpsc::channel(DEFAULT_RWND_THRESHOLD as usize);
-        let (tx_frame_tx, mut tx_frame_rx) = mpsc::unbounded_channel();
-        let (dropped_ports_tx, _) = mpsc::unbounded_channel();
-        let (other_stream, mut check_side) = tokio::io::duplex(1024);
-
-        let mux_stream = MuxStream {
-            frame_rx: rx_frame_rx,
-            flow_id: 1,
-            dest_host: Bytes::new(),
-            dest_port: 8080,
-            finish_sent: Arc::new(AtomicBool::new(false)),
-            psh_send_remaining: Arc::new(AtomicU32::new(10)), // Allow more frames for this test
-            psh_recvd_since: 0,
-            writer_waker: Arc::new(AtomicWaker::new()),
-            frame_tx: tx_frame_tx.clone(),
-            buf: Bytes::new(),
-            dropped_ports_tx: dropped_ports_tx.clone(),
-            rwnd_threshold: DEFAULT_RWND_THRESHOLD,
-        };
-
-        let copy_task = tokio::spawn(mux_stream.into_copy_bidirectional(other_stream));
-
-        let waker = futures_util::task::noop_waker();
-        let mut cx = Context::from_waker(&waker);
-        let mut buf = [0u8; 14];
-        let mut rbuf = ReadBuf::new(&mut buf);
-        let rs = Pin::new(&mut check_side).poll_read(&mut cx, &mut rbuf);
-        assert!(matches!(rs, Poll::Pending));
-
-        // Send data to the MuxStream
-        rx_frame_tx.send(TX1.dupe()).await.unwrap();
-        let size = check_side.read(&mut buf).await.unwrap();
-        // Should be ready
-        assert_eq!(size, TX1.len());
-        assert_eq!(&buf[..size], TX1);
-
-        // Write to the AsyncWrite side
-        check_side.write_all(&RX1).await.unwrap();
-        // This side has buffering
-        check_side.flush().await.unwrap();
-
-        // Verify data was sent to the remote peer
-        let frame = tx_frame_rx.recv().await.unwrap();
-        let frame = Frame::try_from(frame).unwrap();
-        assert_eq!(frame.id, 1);
-        if let crate::frame::Payload::Push(push) = frame.payload {
-            assert_eq!(push.as_ref(), RX1);
-        } else {
-            panic!("Expected a `Push` frame");
-        }
-
-        // Send some partial data before we go away to check that the
-        // data isn't lost in the process
-        rx_frame_tx.send(TX2.dupe()).await.unwrap();
-        drop(rx_frame_tx);
-        // Check that the data is not lost
-        let read = check_side.read(&mut buf).await.unwrap();
-        assert_eq!(read, TX2.len());
-        assert_eq!(&buf[..read], TX2);
-        // Make sure this side is getting EOF
-        let m = check_side.read(&mut buf).await.unwrap();
-        assert_eq!(m, 0);
-        // Make sure that only this side is closed and not the other side
-        check_side.write_all(&RX2).await.unwrap();
-        check_side.flush().await.unwrap();
-        // Check that this side is still open
-        let frame = tx_frame_rx.recv().await.unwrap();
-        let frame = Frame::try_from(frame).unwrap();
-        assert_eq!(frame.id, 1);
-        if let crate::frame::Payload::Push(push) = frame.payload {
-            assert_eq!(push.as_ref(), RX2);
-        } else {
-            panic!("Expected a `Push` frame");
-        }
-        // Again short data before we go away
-        check_side.write_all(&RX3).await.unwrap();
-        check_side.shutdown().await.unwrap();
-        // Check that the data is not lost
-        let frame = tx_frame_rx.recv().await.unwrap();
-        let frame = Frame::try_from(frame).unwrap();
-        assert_eq!(frame.id, 1);
-        if let crate::frame::Payload::Push(push) = frame.payload {
-            assert_eq!(push.as_ref(), RX3);
-        } else {
-            panic!("Expected a `Push` frame");
-        }
-
-        // Get final results
-        let (bytes_read, bytes_written) = copy_task.await.unwrap().unwrap();
-        // TX is copied from MuxStream to other_stream, which is `read_bytes` in `copy_bidirectional`
-        assert_eq!(bytes_read, (TX1.len() + TX2.len()) as u64);
-        assert_eq!(bytes_written, (RX1.len() + RX2.len() + RX3.len()) as u64);
-    }
-
-    #[tokio::test]
-    #[cfg(not(loom))]
-    async fn test_flow_control() {
-        const TEST_ACK_THRESHOLD: usize = 5;
-        const TEST_ACK_THRESHOLD_U32: u32 = 5;
-        assert_eq!(TEST_ACK_THRESHOLD, TEST_ACK_THRESHOLD_U32 as usize);
-        setup_logging();
-        let (rx_frame_tx, rx_frame_rx) = mpsc::channel(TEST_ACK_THRESHOLD);
-        let (tx_frame_tx, mut tx_frame_rx) = mpsc::unbounded_channel();
-        let (dropped_ports_tx, _) = mpsc::unbounded_channel();
-        let (other_stream, mut check_side) = tokio::io::duplex(1024);
-        let mut mux_stream = MuxStream {
-            frame_rx: rx_frame_rx,
-            flow_id: 1,
-            dest_host: Bytes::new(),
-            dest_port: 8080,
-            finish_sent: Arc::new(AtomicBool::new(false)),
-            psh_send_remaining: Arc::new(AtomicU32::new(10)), // Allow more frames for this test
-            psh_recvd_since: 0,
-            writer_waker: Arc::new(AtomicWaker::new()),
-            frame_tx: tx_frame_tx.clone(),
-            buf: Bytes::new(),
-            dropped_ports_tx: dropped_ports_tx.clone(),
-            rwnd_threshold: TEST_ACK_THRESHOLD_U32,
-        };
-        // First clog the congestion window
-        for i in 0..TEST_ACK_THRESHOLD {
-            debug!("sending frame {i}");
-            rx_frame_tx
-                .send(Bytes::from_static(b"hello"))
-                .await
-                .unwrap();
-        }
-        // Test that the `Acknowledge` frame has not arrived yet
-        // The point is to confirm that the reader processed the frames
-        // so if we get `Acknowledge` even before we started reading, then
-        // it is pointless.
-        tx_frame_rx.try_recv().unwrap_err();
-        // First test with just `AsyncRead`
-        let mut buf = [0u8; 5 * TEST_ACK_THRESHOLD];
-        let n = mux_stream.read_exact(&mut buf).await.unwrap();
-        assert_eq!(n, 5 * TEST_ACK_THRESHOLD);
-        assert_eq!(&buf[..n], b"hello".repeat(TEST_ACK_THRESHOLD).as_slice());
-        // Check that the `Acknowledge` frame has arrived
-        let frame = tx_frame_rx.recv().await.unwrap();
-        let frame = Frame::try_from(frame).unwrap();
-        assert_eq!(frame.id, 1);
-        if let crate::frame::Payload::Acknowledge(ack) = frame.payload {
-            assert_eq!(ack, TEST_ACK_THRESHOLD_U32);
-        } else {
-            panic!("Expected an `Acknowledge` frame");
-        }
-        // Now test with `copy_bidirectional`
-        let task = tokio::spawn(mux_stream.into_copy_bidirectional(other_stream));
-        for i in 0..2 * TEST_ACK_THRESHOLD {
-            debug!("sending frame {i}");
-            rx_frame_tx
-                .send(Bytes::from_static(b"hello"))
-                .await
-                .unwrap();
-        }
-        let frame = tx_frame_rx.recv().await.unwrap();
-        let frame = Frame::try_from(frame).unwrap();
-        assert_eq!(frame.id, 1);
-        if let crate::frame::Payload::Acknowledge(ack) = frame.payload {
-            assert_eq!(ack, TEST_ACK_THRESHOLD_U32);
-        } else {
-            panic!("Expected an `Acknowledge` frame");
-        }
-        let frame = tx_frame_rx.recv().await.unwrap();
-        let frame = Frame::try_from(frame).unwrap();
-        assert_eq!(frame.id, 1);
-        if let crate::frame::Payload::Acknowledge(ack) = frame.payload {
-            assert_eq!(ack, TEST_ACK_THRESHOLD_U32);
-        } else {
-            panic!("Expected an `Acknowledge` frame");
-        }
-        // Check for data
-        let mut buf = [0u8; 5 * 2 * TEST_ACK_THRESHOLD];
-        let n = check_side.read_exact(&mut buf).await.unwrap();
-        assert_eq!(n, 5 * 2 * TEST_ACK_THRESHOLD);
-        assert_eq!(
-            &buf[..n],
-            b"hello".repeat(2 * TEST_ACK_THRESHOLD).as_slice()
-        );
-        drop(rx_frame_tx);
-        // Write in the other side
-        for i in 0..TEST_ACK_THRESHOLD {
-            debug!("sending data chunk {i}");
-            check_side.write_all(b"hello").await.unwrap();
-            check_side.flush().await.unwrap();
-        }
-        check_side.shutdown().await.unwrap();
-        task.await.unwrap().unwrap();
-        // Check that the data has been sent
-        let mut buf = [0u8; 5 * TEST_ACK_THRESHOLD];
-        while let Some(frame) = tx_frame_rx.recv().await {
-            let frame = Frame::try_from(frame).unwrap();
-            assert_eq!(frame.id, 1);
-            match frame.payload {
-                crate::frame::Payload::Push(push) => {
-                    buf.copy_from_slice(push.as_ref());
-                }
-                crate::frame::Payload::Finish => {
-                    break;
-                }
-                _ => panic!("Expected a `Push` frame"),
-            }
-        }
-        assert_eq!(&buf[..], b"hello".repeat(TEST_ACK_THRESHOLD).as_slice());
-    }
-
-    #[tokio::test]
-    #[cfg(not(loom))]
     async fn test_mux_stream_shutdown() {
         test_mux_stream_shutdown_inner().await;
     }
@@ -872,5 +656,241 @@ mod tests {
         // Check that `Drop` sends its information
         let dropped_port = dropped_ports_rx.recv().await.unwrap();
         assert_eq!(dropped_port, 15);
+    }
+
+    #[cfg(loom)]
+    mod tests_loom {
+        use super::*;
+        use crate::dupe::Dupe;
+        use loom::{future::block_on, thread};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadBuf};
+
+        #[test]
+        fn test_copy_bidirectional_normal_loom() {
+            const TX1: Bytes = Bytes::from_static(b"hello from mux");
+            const RX1: Bytes = Bytes::from_static(b"hello from other");
+            const TX2: Bytes = Bytes::from_static(b"short");
+            const RX2: Bytes = Bytes::from_static(b"hello after half-close");
+            const RX3: Bytes = Bytes::from_static(b"stout");
+            setup_logging();
+            loom::model(|| {
+                let (rx_frame_tx, rx_frame_rx) = mpsc::channel(DEFAULT_RWND_THRESHOLD as usize);
+                let (tx_frame_tx, mut tx_frame_rx) = mpsc::unbounded_channel();
+                let (dropped_ports_tx, _) = mpsc::unbounded_channel();
+                let (other_stream, mut check_side) = tokio::io::duplex(1024);
+
+                let mux_stream = MuxStream {
+                    frame_rx: rx_frame_rx,
+                    flow_id: 1,
+                    dest_host: Bytes::new(),
+                    dest_port: 8080,
+                    finish_sent: Arc::new(AtomicBool::new(false)),
+                    psh_send_remaining: Arc::new(AtomicU32::new(10)), // Allow more frames for this test
+                    psh_recvd_since: 0,
+                    writer_waker: Arc::new(AtomicWaker::new()),
+                    frame_tx: tx_frame_tx.clone(),
+                    buf: Bytes::new(),
+                    dropped_ports_tx: dropped_ports_tx.clone(),
+                    rwnd_threshold: DEFAULT_RWND_THRESHOLD,
+                };
+
+                let copy_task = thread::spawn(move || {
+                    block_on(mux_stream.into_copy_bidirectional(other_stream))
+                });
+
+                block_on(async {
+                    let waker = futures_util::task::noop_waker();
+                    let mut cx = Context::from_waker(&waker);
+                    let mut buf = [0u8; 14];
+                    let mut rbuf = ReadBuf::new(&mut buf);
+                    let rs = Pin::new(&mut check_side).poll_read(&mut cx, &mut rbuf);
+                    assert!(matches!(rs, Poll::Pending));
+
+                    // Send data to the MuxStream
+                    rx_frame_tx.send(TX1.dupe()).await.unwrap();
+                    let size = check_side.read(&mut buf).await.unwrap();
+                    // Should be ready
+                    assert_eq!(size, TX1.len());
+                    assert_eq!(&buf[..size], TX1);
+
+                    // Write to the AsyncWrite side
+                    check_side.write_all(&RX1).await.unwrap();
+                    // This side has buffering
+                    check_side.flush().await.unwrap();
+
+                    // Verify data was sent to the remote peer
+                    let frame = tx_frame_rx.recv().await.unwrap();
+                    let frame = Frame::try_from(frame).unwrap();
+                    assert_eq!(frame.id, 1);
+                    if let crate::frame::Payload::Push(push) = frame.payload {
+                        assert_eq!(push.as_ref(), RX1);
+                    } else {
+                        panic!("Expected a `Push` frame");
+                    }
+
+                    // Send some partial data before we go away to check that the
+                    // data isn't lost in the process
+                    rx_frame_tx.send(TX2.dupe()).await.unwrap();
+                    drop(rx_frame_tx);
+                    // Check that the data is not lost
+                    let read = check_side.read(&mut buf).await.unwrap();
+                    assert_eq!(read, TX2.len());
+                    assert_eq!(&buf[..read], TX2);
+                    // Make sure this side is getting EOF
+                    let m = check_side.read(&mut buf).await.unwrap();
+                    assert_eq!(m, 0);
+                    // Make sure that only this side is closed and not the other side
+                    check_side.write_all(&RX2).await.unwrap();
+                    check_side.flush().await.unwrap();
+                    // Check that this side is still open
+                    let frame = tx_frame_rx.recv().await.unwrap();
+                    let frame = Frame::try_from(frame).unwrap();
+                    assert_eq!(frame.id, 1);
+                    if let crate::frame::Payload::Push(push) = frame.payload {
+                        assert_eq!(push.as_ref(), RX2);
+                    } else {
+                        panic!("Expected a `Push` frame");
+                    }
+                    // Again short data before we go away
+                    check_side.write_all(&RX3).await.unwrap();
+                    check_side.shutdown().await.unwrap();
+                    // Check that the data is not lost
+                    let frame = tx_frame_rx.recv().await.unwrap();
+                    let frame = Frame::try_from(frame).unwrap();
+                    assert_eq!(frame.id, 1);
+                    if let crate::frame::Payload::Push(push) = frame.payload {
+                        assert_eq!(push.as_ref(), RX3);
+                    } else {
+                        panic!("Expected a `Push` frame");
+                    }
+                });
+
+                // Get final results
+                let (bytes_read, bytes_written) = copy_task.join().unwrap().unwrap();
+                // TX is copied from MuxStream to other_stream, which is `read_bytes` in `copy_bidirectional`
+                assert_eq!(bytes_read, (TX1.len() + TX2.len()) as u64);
+                assert_eq!(bytes_written, (RX1.len() + RX2.len() + RX3.len()) as u64);
+            });
+        }
+
+        #[test]
+        fn test_flow_control_loom() {
+            const TEST_ACK_THRESHOLD: usize = 5;
+            const TEST_ACK_THRESHOLD_U32: u32 = 5;
+            assert_eq!(TEST_ACK_THRESHOLD, TEST_ACK_THRESHOLD_U32 as usize);
+            setup_logging();
+            loom::model(|| {
+                let (rx_frame_tx, rx_frame_rx) = mpsc::channel(TEST_ACK_THRESHOLD);
+                let (tx_frame_tx, mut tx_frame_rx) = mpsc::unbounded_channel();
+                let (dropped_ports_tx, _) = mpsc::unbounded_channel();
+                let (other_stream, mut check_side) = tokio::io::duplex(1024);
+                let mut mux_stream = MuxStream {
+                    frame_rx: rx_frame_rx,
+                    flow_id: 1,
+                    dest_host: Bytes::new(),
+                    dest_port: 8080,
+                    finish_sent: Arc::new(AtomicBool::new(false)),
+                    psh_send_remaining: Arc::new(AtomicU32::new(10)), // Allow more frames for this test
+                    psh_recvd_since: 0,
+                    writer_waker: Arc::new(AtomicWaker::new()),
+                    frame_tx: tx_frame_tx.clone(),
+                    buf: Bytes::new(),
+                    dropped_ports_tx: dropped_ports_tx.clone(),
+                    rwnd_threshold: TEST_ACK_THRESHOLD_U32,
+                };
+
+                block_on(async {
+                    // First clog the congestion window
+                    for i in 0..TEST_ACK_THRESHOLD {
+                        debug!("sending frame {i}");
+                        rx_frame_tx
+                            .send(Bytes::from_static(b"hello"))
+                            .await
+                            .unwrap();
+                    }
+                    // Test that the `Acknowledge` frame has not arrived yet
+                    // The point is to confirm that the reader processed the frames
+                    // so if we get `Acknowledge` even before we started reading, then
+                    // it is pointless.
+                    tx_frame_rx.try_recv().unwrap_err();
+                    // First test with just `AsyncRead`
+                    let mut buf = [0u8; 5 * TEST_ACK_THRESHOLD];
+                    let n = mux_stream.read_exact(&mut buf).await.unwrap();
+                    assert_eq!(n, 5 * TEST_ACK_THRESHOLD);
+                    assert_eq!(&buf[..n], b"hello".repeat(TEST_ACK_THRESHOLD).as_slice());
+                    // Check that the `Acknowledge` frame has arrived
+                    let frame = tx_frame_rx.recv().await.unwrap();
+                    let frame = Frame::try_from(frame).unwrap();
+                    assert_eq!(frame.id, 1);
+                    if let crate::frame::Payload::Acknowledge(ack) = frame.payload {
+                        assert_eq!(ack, TEST_ACK_THRESHOLD_U32);
+                    } else {
+                        panic!("Expected an `Acknowledge` frame");
+                    }
+                });
+                // Now test with `copy_bidirectional`
+                let task = thread::spawn(move || {
+                    block_on(mux_stream.into_copy_bidirectional(other_stream))
+                });
+                block_on(async {
+                    for i in 0..2 * TEST_ACK_THRESHOLD {
+                        debug!("sending frame {i}");
+                        rx_frame_tx
+                            .send(Bytes::from_static(b"hello"))
+                            .await
+                            .unwrap();
+                    }
+                    let frame = tx_frame_rx.recv().await.unwrap();
+                    let frame = Frame::try_from(frame).unwrap();
+                    assert_eq!(frame.id, 1);
+                    if let crate::frame::Payload::Acknowledge(ack) = frame.payload {
+                        assert_eq!(ack, TEST_ACK_THRESHOLD_U32);
+                    } else {
+                        panic!("Expected an `Acknowledge` frame");
+                    }
+                    let frame = tx_frame_rx.recv().await.unwrap();
+                    let frame = Frame::try_from(frame).unwrap();
+                    assert_eq!(frame.id, 1);
+                    if let crate::frame::Payload::Acknowledge(ack) = frame.payload {
+                        assert_eq!(ack, TEST_ACK_THRESHOLD_U32);
+                    } else {
+                        panic!("Expected an `Acknowledge` frame");
+                    }
+                    // Check for data
+                    let mut buf = [0u8; 5 * 2 * TEST_ACK_THRESHOLD];
+                    let n = check_side.read_exact(&mut buf).await.unwrap();
+                    assert_eq!(n, 5 * 2 * TEST_ACK_THRESHOLD);
+                    assert_eq!(
+                        &buf[..n],
+                        b"hello".repeat(2 * TEST_ACK_THRESHOLD).as_slice()
+                    );
+                    drop(rx_frame_tx);
+                    // Write in the other side
+                    for i in 0..TEST_ACK_THRESHOLD {
+                        debug!("sending data chunk {i}");
+                        check_side.write_all(b"hello").await.unwrap();
+                        check_side.flush().await.unwrap();
+                    }
+                    check_side.shutdown().await.unwrap();
+                    task.join().unwrap().unwrap();
+                    // Check that the data has been sent
+                    let mut buf = [0u8; 5 * TEST_ACK_THRESHOLD];
+                    while let Some(frame) = tx_frame_rx.recv().await {
+                        let frame = Frame::try_from(frame).unwrap();
+                        assert_eq!(frame.id, 1);
+                        match frame.payload {
+                            crate::frame::Payload::Push(push) => {
+                                buf.copy_from_slice(push.as_ref());
+                            }
+                            crate::frame::Payload::Finish => {
+                                break;
+                            }
+                            _ => panic!("Expected a `Push` frame"),
+                        }
+                    }
+                    assert_eq!(&buf[..], b"hello".repeat(TEST_ACK_THRESHOLD).as_slice());
+                });
+            });
+        }
     }
 }
