@@ -1,0 +1,24 @@
+copy_vcs = false
+exclude_re = [
+    "impl ((std::)?fmt::)?Debug",
+    "impl ((std::)?fmt::)?Display",
+    "impl( [a-zA-Z]+ for)? Stdio",
+    "handle_(udp|tcp)_stdio",
+]
+exclude_globs = [
+    "src/main.rs",
+    "src/client/maybe_retryable.rs",
+]
+no_default_features = true
+features = [
+    "penguin-binary",
+    "acme",
+    "tests-acme-has-pebble",
+    "tests-real-internet4",
+    "default-is-ipv6",
+    "ring",
+    "rustls-native-roots",
+]
+test_tool = "cargo"
+profile = "dev"
+cap_lints = true

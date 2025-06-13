@@ -160,14 +160,14 @@ mod tests {
             // Read from our end
             let _ = task.read_exact(&mut buf).await;
             // Delay a bit more
-            tokio::time::sleep(Duration::from_millis(600)).await;
+            tokio::time::sleep(Duration::from_millis(800)).await;
             // Write to the writer
             let _ = task.write_all(b"hello").await;
         });
 
         let mut buf = vec![0; 5];
         // Delay a little
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        tokio::time::sleep(Duration::from_millis(800)).await;
         // Write to reset the deadline
         let result = io.write_all(b"hello").await;
         assert!(result.is_ok());
