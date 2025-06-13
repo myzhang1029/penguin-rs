@@ -35,10 +35,10 @@ jobs:
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --component llvm-tools-preview
 
     - name: Check lib only
-      run: cargo check --verbose --no-default-features
+      run: cargo check --verbose --no-default-features --package penguin-mux
 
     - name: Check lib with tungstenite support
-      run: cargo check --verbose --features tungstenite --no-default-features
+      run: cargo check --verbose --features tungstenite --no-default-features --package penguin-mux
 
     - name: Check default features
       run: |
