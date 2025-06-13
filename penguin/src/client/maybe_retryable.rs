@@ -57,7 +57,6 @@ impl MaybeRetryableError for penguin_mux::Error {
     fn retryable(&self) -> bool {
         match self {
             Self::SendStreamToClient | Self::Closed => true,
-            #[cfg(feature = "tungstenite")]
             Self::WebSocket(e) => e
                 .downcast_ref::<tokio_tungstenite::tungstenite::Error>()
                 .is_some_and(MaybeRetryableError::retryable),

@@ -87,12 +87,14 @@ Servers and clients with the same protocol version are compatible with each othe
 The current protocol version is `penguin-v7`. See [PROTOCOL.md](PROTOCOL.md) for details.
 
 ## Cargo Features
-Library features:
-- `tungstenite`: implement our traits on `tokio_tungstenite::WebSocketStream` (default)
+Common features:
 - `nohash`: (caution) use `nohash_hasher` as the internal `flow_id` hashmap.
 This option may be an optimization for resource-constrained devices, but will also open up a DoS attack vector if the peer cannot be trusted.
 If both peers use this penguin implementation or any other implementation
 that generates flow_ids with a random number generator, this is safe.
+
+Library features:
+- `tungstenite`: implement our traits on `tokio_tungstenite::WebSocketStream` (default)
 
 Executable features:
 - `client`: build the client (default)

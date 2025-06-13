@@ -1,0 +1,50 @@
+[package]
+name = "penguin-mux"
+version = "0.7.0"
+authors = ["Zhang Maiyun <me@maiyun.me>"]
+edition = "2024"
+description = "TCP/UDP multiplexing over HTTP WebSocket"
+readme = "README.md"
+repository = "https://github.com/myzhang1029/penguin-rs"
+license = "Apache-2.0 OR GPL-3.0-or-later"
+keywords = ["web", "websocket"]
+categories = ["asynchronous", "command-line-utilities", "network-programming"]
+
+[[bench]]
+name = "stream_throughput"
+harness = false
+required-features = ["tungstenite"]
+
+[lib]
+name = "penguin_mux"
+path = "src/lib.rs"
+
+[dependencies]
+bytes = "1"
+futures-util = { version = "0.3", default-features = false }
+http = "1"
+nohash-hasher = { version = "0.2", optional = true }
+parking_lot = "0.12"
+rand = "0.9"
+thiserror = "2"
+tokio = { version = "^1, >=1.23.1", features = ["io-util", "macros", "parking_lot", "rt", "sync", "time"] }
+tokio-tungstenite = { version = "0.26", default-features = false, optional = true }
+tracing = "0.1"
+
+[dev-dependencies]
+divan = "0.1"
+tokio = { version = "^1, >=1.23.1", features = ["net", "rt-multi-thread"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[target.'cfg(loom)'.dependencies]
+loom = { version = "0.7", features = ["checkpoint", "futures"] }
+
+[features]
+default = ["tungstenite"]
+# use tungstenite as the WebSocket implementation
+tungstenite = ["dep:tokio-tungstenite"]
+# Use nohash-hasher for flow_id hashmaps
+nohash = ["dep:nohash-hasher"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)', 'cfg(loom)'] }
