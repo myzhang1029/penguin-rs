@@ -12,7 +12,11 @@ categories = ["asynchronous", "command-line-utilities", "network-programming"]
 
 [[bin]]
 name = "penguin"
-path = "src/main.rs"
+path = "main.rs"
+
+[lib]
+name = "rusty_penguin_lib"
+path = "src/lib.rs"
 
 [dependencies]
 arc-swap = "1"

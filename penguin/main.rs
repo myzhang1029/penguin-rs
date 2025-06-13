@@ -1,4 +1,4 @@
-//! A fast TCP/UDP tunnel, transported over HTTP WebSocket.
+//! A thin wrapper around the library to speed up sccached compilation.
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 #![warn(rust_2018_idioms, missing_docs, missing_debug_implementations)]
@@ -6,20 +6,14 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(not(all(feature = "client", feature = "server")), allow(dead_code))]
 
-mod arg;
-#[cfg(feature = "client")]
-mod client;
-mod config;
-mod parse_remote;
-#[cfg(feature = "server")]
-mod server;
-#[cfg(test)]
-mod tests;
-mod tls;
-
 use thiserror::Error;
 use tracing::{error, trace};
 use tracing_subscriber::{filter, fmt, prelude::*, reload};
+use rusty_penguin_lib::arg;
+#[cfg(feature = "client")]
+use rusty_penguin_lib::client;
+#[cfg(feature = "server")]
+use rusty_penguin_lib::server;
 
 /// Errors
 #[derive(Error)]
