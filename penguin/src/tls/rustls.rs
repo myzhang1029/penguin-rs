@@ -281,7 +281,7 @@ mod tests {
         let cert_path = tmpdir.path().join("cert.pem");
         let custom_crt = generate_simple_self_signed(vec!["example.com".into()]).unwrap();
         let crt = custom_crt.cert.pem();
-        let crt_key = custom_crt.key_pair.serialize_pem();
+        let crt_key = custom_crt.signing_key.serialize_pem();
         tokio::fs::write(&cert_path, crt).await.unwrap();
         tokio::fs::write(&key_path, crt_key).await.unwrap();
         let loaded_cert = try_load_certificate(
@@ -293,7 +293,7 @@ mod tests {
         .unwrap();
         let (loaded_cert, loaded_key) = loaded_cert;
         assert_eq!(loaded_cert.len(), 1);
-        assert_eq!(loaded_key.secret_der(), custom_crt.key_pair.serialize_der(),);
+        assert_eq!(loaded_key.secret_der(), custom_crt.signing_key.serialize_der(),);
         let cert_params = rcgen::CertificateParams::new(vec!["example.com".into()]).unwrap();
         let keypair = rcgen::KeyPair::generate_for(&rcgen::PKCS_ED25519).unwrap();
         let custom_crt = cert_params.self_signed(&keypair).unwrap();
@@ -321,7 +321,7 @@ mod tests {
         let cert_path = tmpdir.path().join("cert.pem");
         let custom_crt = generate_simple_self_signed(vec!["example.com".into()]).unwrap();
         let crt = custom_crt.cert.pem();
-        let crt_key = custom_crt.key_pair.serialize_pem();
+        let crt_key = custom_crt.signing_key.serialize_pem();
         tokio::fs::write(&cert_path, crt).await.unwrap();
         tokio::fs::write(&key_path, crt_key).await.unwrap();
         let config = make_server_config(

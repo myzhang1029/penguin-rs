@@ -37,7 +37,7 @@ log = { version = "0.4", optional = true }
 nohash-hasher = { version = "0.2", optional = true }
 parking_lot = "0.12"
 penguin-mux = { version = "0.7", path = "../penguin-mux", features = ["tungstenite"] }
-rcgen = { version = "0.13", features = ["pem"], optional = true, default-features = false }
+rcgen = { version = "0.14", features = ["pem"], optional = true, default-features = false }
 rustls = { version = "^0.23, >=0.23.18", features = ["logging", "tls12"], default-features = false, optional = true }
 rustls-native-certs = { version = "0.8", optional = true }
 rustls-pemfile = { version = "2", optional = true }
