@@ -1,6 +1,8 @@
 disallowed-types = [
-"std::sync::Mutex",
-"std::sync::RwLock",
-"tokio::sync::Mutex",
-"tokio::sync::RwLock",
+    "std::sync::Mutex",
+    "std::sync::RwLock",
+    "tokio::sync::Mutex",
+    "tokio::sync::RwLock",
 ]
+
+allow-unwrap-in-tests = true

@@ -13,7 +13,7 @@ pub struct IoWithTimeout<S> {
 impl<S> IoWithTimeout<S> {
     pub fn new(stream: S, timeout: OptionalDuration) -> Self {
         let deadline = Box::pin(timeout.sleep());
-        IoWithTimeout {
+        Self {
             stream,
             timeout,
             deadline,

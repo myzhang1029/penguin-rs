@@ -25,8 +25,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin> AsyncRead for MaybeTlsStream<T> {
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         match self.get_mut() {
-            MaybeTlsStream::Tls(stream) => Pin::new(stream).poll_read(cx, buf),
-            MaybeTlsStream::Plain(stream) => Pin::new(stream).poll_read(cx, buf),
+            Self::Tls(stream) => Pin::new(stream).poll_read(cx, buf),
+            Self::Plain(stream) => Pin::new(stream).poll_read(cx, buf),
         }
     }
 }
@@ -39,24 +39,24 @@ impl<T: AsyncRead + AsyncWrite + Unpin> AsyncWrite for MaybeTlsStream<T> {
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         match self.get_mut() {
-            MaybeTlsStream::Tls(stream) => Pin::new(stream).poll_write(cx, buf),
-            MaybeTlsStream::Plain(stream) => Pin::new(stream).poll_write(cx, buf),
+            Self::Tls(stream) => Pin::new(stream).poll_write(cx, buf),
+            Self::Plain(stream) => Pin::new(stream).poll_write(cx, buf),
         }
     }
 
     #[inline]
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match self.get_mut() {
-            MaybeTlsStream::Tls(stream) => Pin::new(stream).poll_flush(cx),
-            MaybeTlsStream::Plain(stream) => Pin::new(stream).poll_flush(cx),
+            Self::Tls(stream) => Pin::new(stream).poll_flush(cx),
+            Self::Plain(stream) => Pin::new(stream).poll_flush(cx),
         }
     }
 
     #[inline]
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match self.get_mut() {
-            MaybeTlsStream::Tls(stream) => Pin::new(stream).poll_shutdown(cx),
-            MaybeTlsStream::Plain(stream) => Pin::new(stream).poll_shutdown(cx),
+            Self::Tls(stream) => Pin::new(stream).poll_shutdown(cx),
+            Self::Plain(stream) => Pin::new(stream).poll_shutdown(cx),
         }
     }
 }
@@ -64,14 +64,14 @@ impl<T: AsyncRead + AsyncWrite + Unpin> AsyncWrite for MaybeTlsStream<T> {
 #[cfg(feature = "__rustls")]
 impl<S> From<tokio_rustls::server::TlsStream<S>> for MaybeTlsStream<S> {
     fn from(stream: tokio_rustls::server::TlsStream<S>) -> Self {
-        MaybeTlsStream::Tls(tokio_rustls::TlsStream::Server(stream))
+        Self::Tls(tokio_rustls::TlsStream::Server(stream))
     }
 }
 
 #[cfg(feature = "__rustls")]
 impl<S> From<tokio_rustls::client::TlsStream<S>> for MaybeTlsStream<S> {
     fn from(stream: tokio_rustls::client::TlsStream<S>) -> Self {
-        MaybeTlsStream::Tls(tokio_rustls::TlsStream::Client(stream))
+        Self::Tls(tokio_rustls::TlsStream::Client(stream))
     }
 }
 

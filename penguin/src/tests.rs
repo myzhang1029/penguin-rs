@@ -51,12 +51,10 @@ async fn make_server_cert_ecdsa(dest: Option<&str>) -> (Option<TempDir>, rcgen::
     let cert_params = rcgen::CertificateParams::new(vec!["localhost".to_string()]).unwrap();
     let keypair = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P384_SHA384).unwrap();
     let mut dir = None;
-    let dir_path = if let Some(dest) = dest {
-        dest
-    } else {
+    let dir_path = dest.unwrap_or_else(|| {
         dir = Some(TempDir::new().unwrap());
         dir.as_ref().unwrap().path().to_str().unwrap()
-    };
+    });
     let cert_path = format!("{dir_path}/cert.pem");
     let key_path = format!("{dir_path}/privkey.pem");
     let cert = cert_params.self_signed(&keypair).unwrap();
