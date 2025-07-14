@@ -32,12 +32,11 @@ hyper = { version = "1", features = ["server", "http1", "http2"], optional = tru
 hyper-rustls = { version = "0.27", features = ["http1", "http2", "logging", "tls12"], default-features = false, optional = true }
 hyper-tls = { version = "0.6", optional = true }
 hyper-util = { version = "0.1", features = ["client", "client-legacy", "server", "server-auto", "tokio"], optional = true }
-instant-acme = { version = "0.7", features = ["hyper-rustls"], default-features = false, optional = true }
+instant-acme = { version = "0.8", features = ["rcgen", "hyper-rustls"], default-features = false, optional = true }
 log = { version = "0.4", optional = true }
 nohash-hasher = { version = "0.2", optional = true }
 parking_lot = "0.12"
 penguin-mux = { version = "0.7", path = "../penguin-mux", features = ["tungstenite"] }
-rcgen = { version = "0.14", features = ["pem"], optional = true, default-features = false }
 rustls = { version = "^0.23, >=0.23.18", features = ["logging", "tls12"], default-features = false, optional = true }
 rustls-native-certs = { version = "0.8", optional = true }
 rustls-pemfile = { version = "2", optional = true }
@@ -54,6 +53,7 @@ webpki-roots = { version = "1", optional = true }
 [dev-dependencies]
 divan = "0.1"
 rand = "0.9"
+rcgen = { version = "0.14", features = ["pem"], default-features = false }
 tempfile = "3"
 # Hack; https://stackoverflow.com/q/73015087
 rusty-penguin = { path = ".", default-features = false, features = ["dev-dependencies"] }
@@ -68,10 +68,10 @@ rustls-native-roots = ["dep:rustls-native-certs", "hyper-rustls/native-tokio", "
 __rustls = ["dep:rustls", "dep:rustls-pemfile", "dep:tokio-rustls"]
 nativetls = ["dep:tokio-native-tls", "hyper-tls/alpn"]
 # Use ring or aws-lc-rs (supported on fewer platforms)
-ring = ["instant-acme/ring", "rcgen/ring", "rustls/ring", "tokio-rustls/ring", "hyper-rustls/ring"]
-aws-lc-rs = ["dep:aws-lc-rs", "instant-acme/aws-lc-rs", "rcgen/aws_lc_rs", "rustls/aws-lc-rs", "tokio-rustls/aws-lc-rs", "hyper-rustls/aws-lc-rs"]
+ring = ["instant-acme/ring", "rustls/ring", "tokio-rustls/ring", "hyper-rustls/ring"]
+aws-lc-rs = ["dep:aws-lc-rs", "instant-acme/aws-lc-rs", "rustls/aws-lc-rs", "tokio-rustls/aws-lc-rs", "hyper-rustls/aws-lc-rs"]
 # Dependencies for testing
-dev-dependencies = ["dep:rcgen", "tracing-subscriber/env-filter", "tokio/process"]
+dev-dependencies = ["tracing-subscriber/env-filter", "tokio/process"]
 # Allow some tests that require real internet connection
 tests-real-internet4 = []
 tests-real-internet6 = []
@@ -90,7 +90,7 @@ remove-logging = ["tracing/max_level_trace", "tracing/release_max_level_debug", 
 # `parking_lot`'s deadlock detection in a separate thread
 deadlock-detection = ["parking_lot/deadlock_detection"]
 # obtaining certificate automatically using ACME protocol
-acme = ["server", "dep:instant-acme", "dep:rcgen", "tokio/process"]
+acme = ["server", "dep:instant-acme", "tokio/process"]
 # Use nohash-hasher for flow_id hashmaps
 nohash = ["dep:nohash-hasher", "penguin-mux/nohash"]
 # `penguin` binary -- server

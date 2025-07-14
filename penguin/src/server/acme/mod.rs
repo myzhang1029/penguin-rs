@@ -2,12 +2,9 @@ mod challenge_helper;
 
 use self::challenge_helper::Action;
 use crate::arg::ServerArgs;
-use crate::tls::{
-    TlsIdentity, make_tls_identity_from_rcgen_pem, reload_tls_identity_from_rcgen_pem,
-};
+use crate::tls::{TlsIdentity, make_tls_identity_from_pem, reload_tls_identity_from_pem};
 use instant_acme::{Account, AuthorizationStatus, Identifier, NewAccount, NewOrder, OrderStatus};
 use penguin_mux::{Dupe, timing::Backoff};
-use rcgen::{CertificateParams, DistinguishedName, KeyPair};
 use std::sync::OnceLock;
 use std::time::Duration;
 use tracing::{debug, error, info};
@@ -27,8 +24,6 @@ pub enum Error {
     InstantAcme(#[from] instant_acme::Error),
     #[error("Failed to execute challenge helper command: {0}")]
     ChallengeHelperExecution(#[from] std::io::Error),
-    #[error("Failed to generate certificates: {0}")]
-    CertificateGeneration(#[from] rcgen::Error),
     #[error("Invalid authorization status: {0:?}")]
     AuthInvalid(AuthorizationStatus),
     #[error("Invalid order status: {0:?}")]
@@ -70,30 +65,31 @@ impl Client {
             .as_ref()
             .map_or_else(Vec::new, |email| vec![format!("mailto:{email}")]);
 
-        let (account, _cred) = Account::create(
-            &NewAccount {
-                contact: contact
-                    .iter()
-                    .map(String::as_str)
-                    .collect::<Vec<&str>>()
-                    .as_slice(),
-                terms_of_service_agreed: server_args.tls_acme_accept_tos,
-                only_return_existing: false,
-            },
-            &server_args.tls_acme_url,
-            None,
-        )
-        .await?;
-        let (keypair, cert) = issue(&account, helper, &server_args.tls_domain).await?;
+        let (account, _cred) = Account::builder()?
+            .create(
+                &NewAccount {
+                    contact: contact
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<&str>>()
+                        .as_slice(),
+                    terms_of_service_agreed: server_args.tls_acme_accept_tos,
+                    only_return_existing: false,
+                },
+                server_args.tls_acme_url.clone(),
+                None,
+            )
+            .await?;
+        let (priv_key, cert) = issue(&account, helper, &server_args.tls_domain).await?;
 
         let client = Self {
             account,
             challenge_helper: helper,
             domain_names: &server_args.tls_domain,
             tls_ca: server_args.tls_ca.as_deref(),
-            tls_config: make_tls_identity_from_rcgen_pem(
+            tls_config: make_tls_identity_from_pem(
                 cert,
-                keypair,
+                priv_key,
                 server_args.tls_ca.as_deref(), // Optional client CA path
             )
             .await?,
@@ -121,18 +117,13 @@ impl Client {
                 interval.tick().await;
                 info!("Renewing ACME certificate...");
                 match issue(&self.account, self.challenge_helper, self.domain_names).await {
-                    Ok((keypair, cert)) => {
+                    Ok((priv_key, cert)) => {
                         info!("Certificate renewed successfully.");
-                        reload_tls_identity_from_rcgen_pem(
-                            &self.tls_config,
-                            cert,
-                            keypair,
-                            self.tls_ca,
-                        )
-                        .await
-                        .unwrap_or_else(|e| {
-                            error!("Cannot reload TLS identity: {e}");
-                        });
+                        reload_tls_identity_from_pem(&self.tls_config, cert, priv_key, self.tls_ca)
+                            .await
+                            .unwrap_or_else(|e| {
+                                error!("Cannot reload TLS identity: {e}");
+                            });
                     }
                     Err(e) => {
                         error!("Failed to renew certificate: {e}");
@@ -150,19 +141,14 @@ async fn issue(
     account: &Account,
     challenge_helper: &ChallengeHelper,
     domains: &[String],
-) -> Result<(KeyPair, String), Error> {
+) -> Result<(String, String), Error> {
     let idents = domains
         .iter()
         .map(|domain| Identifier::Dns(domain.clone()))
         .collect::<Vec<_>>();
-    let new_order = NewOrder {
-        identifiers: idents.as_slice(),
-    };
+    let new_order = NewOrder::new(idents.as_slice());
     let mut order = account.new_order(&new_order).await?;
-    let authorizations: Vec<instant_acme::Authorization> = order.authorizations().await?;
-    let keyauths = challenge_helper
-        .process_challenges(&authorizations, &mut order)
-        .await?;
+    let keyauths = challenge_helper.process_challenges(&mut order).await?;
     // Back off until the order becomes ready or invalid
     let mut backoff = Backoff::new(
         Duration::from_secs(5),
@@ -200,11 +186,7 @@ async fn issue(
         OrderStatus::Ready,
         "Order not ready (this is a bug)"
     );
-    let mut params = CertificateParams::new(domains.to_vec())?;
-    params.distinguished_name = DistinguishedName::new();
-    let private_key = KeyPair::generate()?;
-    let csr = params.serialize_request(&private_key)?;
-    order.finalize(csr.der()).await?;
+    let private_key = order.finalize().await?;
     let cert_chain_pem = loop {
         match order.certificate().await? {
             Some(cert_chain_pem) => break cert_chain_pem,
@@ -237,7 +219,7 @@ mod tests_need_pebble {
     pub const TEST_PEBBLE_URL: &str = "https://localhost:14000/dir";
 
     #[derive(Clone, Debug)]
-    pub struct IgnoreTlsHttpClient(HyperClient<HyperConnector, http_body_util::Full<Bytes>>);
+    pub struct IgnoreTlsHttpClient(HyperClient<HyperConnector, instant_acme::BodyWrapper<Bytes>>);
     impl IgnoreTlsHttpClient {
         #[cfg(feature = "__rustls")]
         pub async fn new() -> Self {
@@ -270,7 +252,7 @@ mod tests_need_pebble {
     impl instant_acme::HttpClient for IgnoreTlsHttpClient {
         fn request(
             &self,
-            req: http::Request<http_body_util::Full<Bytes>>,
+            req: http::Request<instant_acme::BodyWrapper<Bytes>>,
         ) -> std::pin::Pin<
             Box<
                 dyn Future<Output = Result<instant_acme::BytesResponse, instant_acme::Error>>
@@ -281,7 +263,7 @@ mod tests_need_pebble {
             Box::pin(async move {
                 match fut.await {
                     Ok(rsp) => Ok(instant_acme::BytesResponse::from(rsp)),
-                    Err(e) => Err(e.into()),
+                    Err(e) => Err(instant_acme::Error::Other(Box::new(e))),
                 }
             })
         }
@@ -334,23 +316,24 @@ mod tests_need_pebble {
             }
         });
         let domains = vec!["localhost".to_string()];
-        let (account, _cred) = Account::create_with_http(
-            &NewAccount {
-                contact: &[],
-                terms_of_service_agreed: true,
-                only_return_existing: false,
-            },
-            TEST_PEBBLE_URL,
-            None,
-            Box::new(IgnoreTlsHttpClient::new().await),
-        )
-        .await
-        .unwrap();
+        let (account, _cred) =
+            Account::builder_with_http(Box::new(IgnoreTlsHttpClient::new().await))
+                .create(
+                    &NewAccount {
+                        contact: &[],
+                        terms_of_service_agreed: true,
+                        only_return_existing: false,
+                    },
+                    TEST_PEBBLE_URL.to_string(),
+                    None,
+                )
+                .await
+                .unwrap();
         let (keypair, cert) = issue(&account, &actual_path.into(), &domains)
             .await
             .unwrap();
         assert!(!cert.is_empty());
-        assert!(!keypair.serialize_pem().is_empty());
+        assert!(!keypair.is_empty());
         http_server_task.abort();
     }
 }
