@@ -32,7 +32,7 @@ hyper = { version = "1", features = ["server", "http1", "http2"], optional = tru
 hyper-rustls = { version = "0.27", features = ["http1", "http2", "logging", "tls12"], default-features = false, optional = true }
 hyper-tls = { version = "0.6", optional = true }
 hyper-util = { version = "0.1", features = ["client", "client-legacy", "server", "server-auto", "tokio"], optional = true }
-instant-acme = { version = "0.7", features = ["hyper-rustls"], default-features = false, optional = true }
+instant-acme = { version = "0.8", features = ["hyper-rustls"], default-features = false, optional = true }
 log = { version = "0.4", optional = true }
 nohash-hasher = { version = "0.2", optional = true }
 parking_lot = "0.12"
