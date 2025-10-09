@@ -12,7 +12,7 @@ use rusty_penguin_lib::client;
 #[cfg(feature = "server")]
 use rusty_penguin_lib::server;
 use thiserror::Error;
-use tracing::{error, trace};
+use tracing::trace;
 use tracing_subscriber::{filter, fmt, prelude::*, reload};
 
 /// Errors
@@ -43,6 +43,7 @@ const VERBOSE_VERBOSE_LOG_LEVEL: filter::LevelFilter = filter::LevelFilter::TRAC
 #[cfg(feature = "deadlock-detection")]
 fn spawn_deadlock_detection() {
     use std::thread;
+    use tracing::error;
 
     // Create a background thread which checks for deadlocks every 10s
     thread::spawn(move || {

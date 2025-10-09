@@ -5,7 +5,7 @@
 use crate::parse_remote::Remote;
 #[cfg(feature = "acme")]
 use crate::server::ChallengeHelper;
-use clap::{ArgAction, Args, Parser, Subcommand, arg, command};
+use clap::{ArgAction, Args, Parser, Subcommand};
 use http::uri::{Authority, PathAndQuery, Scheme};
 use http::{HeaderValue, Uri, header::HeaderName};
 #[cfg(feature = "acme")]

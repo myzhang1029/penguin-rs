@@ -452,7 +452,7 @@ async fn on_connected(
 }
 
 /// Get a new channel from the multiplexor and send it to the handler.
-/// If we fail, put the request back in the failed_stream_request slot.
+/// If we fail, put the request back in the `failed_stream_request` slot.
 #[tracing::instrument(skip_all, level = "trace")]
 async fn get_send_stream_chan(
     mux: &Multiplexor,

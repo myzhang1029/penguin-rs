@@ -23,7 +23,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tracing::{debug, error};
+use tracing::debug;
 
 /// Handler errors
 /// These are all fatal errors that will cause the client to exit.

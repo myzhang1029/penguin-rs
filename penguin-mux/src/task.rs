@@ -44,7 +44,7 @@ impl<S: WebSocket> TaskData<S> {
         } = self;
         let parent_id = tokio::task::try_id()
             .as_ref()
-            .map_or("0".to_string(), tokio::task::Id::to_string);
+            .map_or_else(|| "0".to_string(), tokio::task::Id::to_string);
         let future = async move {
             let id = tokio::task::id();
             debug!("spawning mux task {id} from {parent_id}",);
