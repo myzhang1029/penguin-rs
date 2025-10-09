@@ -47,7 +47,7 @@ tokio-native-tls = { version = "0.3", optional = true }
 tokio-rustls = { version = "0.26", features = ["logging", "tls12"], default-features = false, optional = true }
 tokio-tungstenite = { version = "0.28", features = ["handshake"], default-features = false }
 tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing-subscriber = "^0.3, >=0.3.20"
 webpki-roots = { version = "1", optional = true }
 
 [dev-dependencies]
