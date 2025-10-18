@@ -1,6 +1,6 @@
 [package]
 name = "rusty-penguin"
-version = "0.7.0"
+version = "0.8.0"
 authors = ["Zhang Maiyun <me@maiyun.me>"]
 edition = "2024"
 description = "A fast TCP/UDP tunnel, transported over HTTP WebSocket"
@@ -36,7 +36,7 @@ instant-acme = { version = "0.8", features = ["rcgen", "hyper-rustls"], default-
 log = { version = "0.4", optional = true }
 nohash-hasher = { version = "0.2", optional = true }
 parking_lot = "0.12"
-penguin-mux = { version = "0.7", path = "../penguin-mux", features = ["tungstenite"] }
+penguin-mux = { version = "0.8", path = "../penguin-mux", features = ["tungstenite"] }
 rustls = { version = "^0.23, >=0.23.18", features = ["logging", "tls12"], default-features = false, optional = true }
 rustls-native-certs = { version = "0.8", optional = true }
 rustls-pemfile = { version = "2", optional = true }
