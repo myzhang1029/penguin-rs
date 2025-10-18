@@ -46,7 +46,7 @@ fn make_sec_websocket_accept(key: &HeaderValue) -> HeaderValue {
     let mut hasher = Sha1::new();
     hasher.update(key.as_bytes());
     hasher.update(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
-    let accept = B64_STANDARD_ENGINE.encode(hasher.finalize().as_slice());
+    let accept = B64_STANDARD_ENGINE.encode(hasher.finalize());
     // `expect`: Base64-encoded string should be valid UTF-8
     accept.parse().expect("Broken header value (this is a bug)")
 }
