@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["penguin-mux", "penguin"]
+exclude = ["fuzz"]
 
 [profile.release]
 codegen-units = 1

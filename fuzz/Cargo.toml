@@ -13,8 +13,8 @@ libfuzzer-sys = "0.4"
 tokio = { version = "^1, >=1.23.1", features = ["io-util"] }
 tokio-tungstenite = { version = "0.26", default-features = false }
 
-[dependencies.rusty-penguin]
-path = ".."
+[dependencies.penguin-mux]
+path = "../penguin-mux"
 
 [[bin]]
 name = "frame_parser"
