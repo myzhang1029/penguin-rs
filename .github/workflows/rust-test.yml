@@ -16,12 +16,18 @@ jobs:
       fail-fast: false
       matrix:
         config:
-        - name: Intel macOS
+        - name: arm64 macOS
           os: macos-latest
+        - name: Intel macOS
+          os: macos-15-intel
         - name: Linux
           os: ubuntu-latest
+        - name: arm64 Linux
+          os: ubuntu-24.04-arm
         - name: Windows
           os: windows-latest
+        - name: arm64 Windows
+          os: windows-11-arm
         tls:
         - nativetls
         - rustls-native-roots
