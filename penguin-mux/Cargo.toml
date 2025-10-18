@@ -34,7 +34,7 @@ tracing = "0.1"
 [dev-dependencies]
 divan = "0.1"
 tokio = { version = "^1, >=1.23.1", features = ["net", "rt-multi-thread"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "^0.3, >=0.3.20", features = ["env-filter"] }
 
 [target.'cfg(loom)'.dependencies]
 loom = { version = "0.7", features = ["checkpoint", "futures"] }
