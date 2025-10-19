@@ -5,6 +5,7 @@ on:
     branches: [ "main" ]
     tags: [ "v*" ]
   pull_request:
+    branches: [ "main" ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -126,10 +127,37 @@ jobs:
       env:
         CROSS_NO_WARNINGS: 0
 
+    - name: Rename binary
+      run: |
+        mkdir binaries
+        mv target/${{ matrix.config.rust_target }}/${{ matrix.config.profile }}/penguin binaries/penguin-${{ matrix.config.rust_target }} || true
+        mv target/${{ matrix.config.rust_target }}/${{ matrix.config.profile }}/penguin.exe binaries/penguin-${{ matrix.config.rust_target }}.exe || true
+
     - name: Upload binary
       uses: actions/upload-artifact@v4
       with:
         name: penguin-${{ matrix.config.rust_target }}
         path: |
-          target/${{ matrix.config.rust_target }}/${{ matrix.config.profile }}/penguin
-          target/${{ matrix.config.rust_target }}/${{ matrix.config.profile }}/penguin.exe
+          binaries/penguin-${{ matrix.config.rust_target }}
+          binaries/penguin-${{ matrix.config.rust_target }}.exe
+
+    - name: Nightly Release
+      uses: softprops/action-gh-release@v2
+      if: github.ref == 'refs/heads/main'
+      with:
+        body: "Nightly release on commit ${{ github.sha }}."
+        draft: false
+        prerelease: true
+        files: binaries/*
+        name: Nightly Release
+        tag_name: nightly
+        generate_release_notes: false
+        make_latest: false
+
+    - name: Create GitHub Release for Tag
+      uses: softprops/action-gh-release@v2
+      if: github.ref_type == 'tag'
+      with:
+        body: "Release for tag ${{ github.ref }} on commit ${{ github.sha }}."
+        draft: true
+        files: binaries/*
