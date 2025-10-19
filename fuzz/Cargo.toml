@@ -10,11 +10,9 @@ cargo-fuzz = true
 [dependencies]
 bytes = "1"
 libfuzzer-sys = "0.4"
+penguin-mux = { version = "0.8", path = "../penguin-mux", features = ["tungstenite"] }
 tokio = { version = "^1, >=1.23.1", features = ["io-util"] }
-tokio-tungstenite = { version = "0.26", default-features = false }
-
-[dependencies.penguin-mux]
-path = "../penguin-mux"
+tokio-tungstenite = { version = "0.28", default-features = false }
 
 [[bin]]
 name = "frame_parser"
