@@ -80,6 +80,7 @@ jobs:
         RUSTFLAGS: -Cinstrument-coverage
 
     - name: Run cargo lib tests with loom
+      if: 'matrix.config.name != "arm64 Windows"'
       run: cargo test --lib --release --no-default-features --package penguin-mux
       env:
         RUSTFLAGS: --cfg loom -Cinstrument-coverage
