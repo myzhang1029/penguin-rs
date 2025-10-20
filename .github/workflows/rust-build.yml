@@ -16,7 +16,7 @@ jobs:
       fail-fast: false
       matrix:
         config:
-        - name: Intel macOS
+        - name: arm64 macOS
           os: macos-latest
         - name: Linux
           os: ubuntu-latest
