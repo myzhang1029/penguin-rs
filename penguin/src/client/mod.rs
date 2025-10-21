@@ -335,14 +335,12 @@ pub async fn client_main_inner(
             let r = ws_connect::handshake(args)
                 .and_then(|ws_stream| {
                     on_connected(
+                        args,
                         ws_stream,
                         &mut stream_command_rx,
                         &mut failed_stream_request,
                         &mut datagram_rx,
                         &handler_resources.udp_client_map,
-                        args.keepalive,
-                        args.keepalive_timeout,
-                        args.channel_timeout,
                     )
                     // Since we once connected, reset the retry count
                     .inspect_err(|_| backoff.reset())
@@ -389,24 +387,22 @@ pub async fn client_main_inner(
 /// retry based on the error.
 #[tracing::instrument(skip_all, level = "debug")]
 async fn on_connected(
+    args: &ClientArgs,
     ws_stream: tokio_tungstenite::WebSocketStream<MaybeTlsStream<TcpStream>>,
     stream_command_rx: &mut mpsc::Receiver<StreamCommand>,
     failed_stream_request: &mut Option<StreamCommand>,
     datagram_rx: &mut mpsc::Receiver<Datagram>,
     udp_client_map: &RwLock<ClientIdMaps>,
-    keepalive: OptionalDuration,
-    keepalive_timeout: OptionalDuration,
-    channel_timeout: OptionalDuration,
 ) -> Result<(), Error> {
     let mut mux_task_joinset = JoinSet::new();
     let options = penguin_mux::config::Options::new()
-        .keepalive_interval(keepalive)
-        .keepalive_timeout(keepalive_timeout);
+        .keepalive_interval(args.keepalive)
+        .keepalive_timeout(args.keepalive_timeout);
     let mux = Multiplexor::new(ws_stream, Some(options), Some(&mut mux_task_joinset));
     info!("Connected to server");
     // If we have a failed stream request, try it first
     if let Some(sender) = failed_stream_request.take() {
-        get_send_stream_chan(&mux, sender, failed_stream_request, channel_timeout).await?;
+        get_send_stream_chan(&mux, sender, failed_stream_request, args.channel_timeout).await?;
     }
     // Main loop
     loop {
@@ -415,7 +411,7 @@ async fn on_connected(
                 mux_task_joinset_result.expect("Task panicked (this is a bug)")?;
             }
             Some(sender) = stream_command_rx.recv() => {
-                get_send_stream_chan(&mux, sender, failed_stream_request, channel_timeout).await?;
+                get_send_stream_chan(&mux, sender, failed_stream_request, args.channel_timeout).await?;
             }
             Some(datagram) = datagram_rx.recv() => {
                 if let Err(e) = mux.send_datagram(datagram).await {
@@ -426,16 +422,10 @@ async fn on_connected(
                 let client_id = dgram_frame.flow_id;
                 let data = dgram_frame.data;
                 match ClientIdMaps::send_datagram_reply(udp_client_map, client_id, data.as_ref()).await {
-                    Some(Ok(())) => {
-                        trace!("sent datagram to client {client_id:08x}");
-                    }
-                    Some(Err(e)) => {
-                        warn!("Failed to send datagram to client {client_id:08x}: {e}");
-                    }
-                    None => {
-                        // Just drop the datagram
-                        info!("Received datagram for unknown client ID: {client_id:08x}");
-                    }
+                    Some(Ok(())) => trace!("sent datagram to client {client_id:08x}"),
+                    Some(Err(e)) => warn!("Failed to send datagram to client {client_id:08x}: {e}"),
+                    // Just drop the datagram
+                    None => info!("Received datagram for unknown client ID: {client_id:08x}"),
                 }
             }
             Ok(()) = tokio::signal::ctrl_c() => {
@@ -447,10 +437,8 @@ async fn on_connected(
                 }
                 return Ok(());
             }
-            else => {
-                // The multiplexor has closed for some reason
-                return Err(Error::ServerDisconnected);
-            }
+            // The multiplexor has closed for some reason
+            else => return Err(Error::ServerDisconnected),
         }
     }
 }
