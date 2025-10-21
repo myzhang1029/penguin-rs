@@ -42,15 +42,15 @@ jobs:
       with:
         path: binaries/*
 
-    - name: Nightly Release
+    - name: Nightly Binaries
       uses: softprops/action-gh-release@v2
       if: github.ref == 'refs/heads/main'
       with:
-        body: "Nightly release on commit ${{ github.sha }}."
+        body: "Nightly binaries for commit ${{ github.sha }}. DO NOT USE the source tarball here."
         draft: false
         prerelease: true
         files: binaries/*
-        name: Nightly Release
+        name: Nightly Binaries
         tag_name: nightly
         generate_release_notes: false
         make_latest: false

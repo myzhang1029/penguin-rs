@@ -19,6 +19,10 @@ with the prompt ["a penguin standing behind a gear wheel, digital art, logo."](
 )
 
 ## Basic Usage
+### Download
+Prebuilt binaries are available for the latest commit on `main` under
+[nightly releases](https://github.com/myzhang1029/penguin-rs/releases/tag/nightly).
+
 ### Server
 ```bash
 $ penguin server --host ::1 --port 443 --tls-cert cert.pem --tls-key key.pem --ws-psk some-secret
@@ -91,7 +95,7 @@ Common features:
 - `nohash`: (caution) use `nohash_hasher` as the internal `flow_id` hashmap.
 This option may be an optimization for resource-constrained devices, but will also open up a DoS attack vector if the peer cannot be trusted.
 If both peers use this penguin implementation or any other implementation
-that generates flow_ids with a random number generator, this is safe.
+that generates `flow_id`s with a random number generator, this is safe.
 
 Library features:
 - `tungstenite`: implement our traits on `tokio_tungstenite::WebSocketStream` (default)
@@ -113,7 +117,7 @@ Executable features:
 - `deadlock-detection`: spawn a background thread running `parking_lot`'s deadlock detection
 - `acme`: (requires `server`) enable the built-in ACME client (default)
 Will also make the binary use `rustls` even if `nativetls` is enabled due to internal dependencies.
-- `rustls_keylog`: (caution) export TLS session data to the file specified in the environmental variable `SSLKEYLOGFILE`
+- `rustls-keylog`: (caution) export TLS session data to the file specified in the environmental variable `SSLKEYLOGFILE`
 
 Testing features:
 - `tests-real-internet4`: run tests that require IPv4 access to the internet
