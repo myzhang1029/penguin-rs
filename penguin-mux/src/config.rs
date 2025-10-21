@@ -7,6 +7,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Options {
     pub(crate) keepalive_interval: crate::timing::OptionalDuration,
+    pub(crate) keepalive_timeout: crate::timing::OptionalDuration,
     pub(crate) datagram_buffer_size: usize,
     pub(crate) stream_buffer_size: usize,
     pub(crate) bind_buffer_size: usize,
@@ -39,6 +40,7 @@ impl Options {
         const DEFAULT_RWND_THRESHOLD: u32 = RWND;
         Self {
             keepalive_interval: crate::timing::OptionalDuration::NONE,
+            keepalive_timeout: crate::timing::OptionalDuration::NONE,
             datagram_buffer_size: DATAGRAM_BUFFER_SIZE,
             stream_buffer_size: STREAM_BUFFER_SIZE,
             bind_buffer_size: 0,
@@ -52,6 +54,14 @@ impl Options {
     #[must_use]
     pub const fn keepalive_interval(mut self, interval: crate::timing::OptionalDuration) -> Self {
         self.keepalive_interval = interval;
+        self
+    }
+
+    /// Sets the maximum allowed delay between sending a [`Ping`](crate::ws::Message::Ping)
+    /// and receiving a corresponding [`Pong`](crate::ws::Message::Pong).
+    #[must_use]
+    pub fn keepalive_timeout(mut self, timeout: crate::timing::OptionalDuration) -> Self {
+        self.keepalive_timeout = timeout.max(self.keepalive_interval);
         self
     }
 

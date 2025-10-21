@@ -307,6 +307,7 @@ async fn test_it_works_tls_simple() {
         remote: vec![Remote::from_str("127.0.0.1:24368:127.0.0.1:12034").unwrap()],
         ws_psk: None,
         keepalive: OptionalDuration::NONE,
+        keepalive_timeout: OptionalDuration::NONE,
         max_retry_count: 10,
         max_retry_interval: 10,
         handshake_timeout: OptionalDuration::NONE,

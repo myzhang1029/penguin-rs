@@ -53,8 +53,9 @@ async fn get_pair(
     let server = WebSocketStream::from_raw_socket(server, Role::Server, None).await;
     (client, server)
 }
-
 #[cfg(not(feature = "tungstenite"))]
+use mock::{MockWebSocketStream as WebSocketStream, get_pair};
+
 mod mock {
     use crate::ws::{Message, WebSocket};
     use std::task::{Context, Poll};
@@ -107,8 +108,6 @@ mod mock {
         (client, server)
     }
 }
-#[cfg(not(feature = "tungstenite"))]
-use mock::*;
 
 #[tokio::test]
 #[cfg(not(loom))]
@@ -919,4 +918,66 @@ async fn test_bind_request() {
     assert_eq!(request.port(), 8011);
     request.reply(false).unwrap();
     server_task.await.unwrap();
+}
+
+#[tokio::test]
+#[cfg(not(loom))]
+async fn test_timeout_if_no_pong_1() {
+    setup_logging();
+    // use the mock websocket for this test because tungstenite always auto-Pongs for us
+    let (client, server) = mock::get_pair(None).await;
+    let keepalive_config = crate::config::Options {
+        keepalive_interval: crate::timing::OptionalDuration::from_secs(1),
+        keepalive_timeout: crate::timing::OptionalDuration::from_secs(2),
+        ..Default::default()
+    };
+    let client_mux = Multiplexor::new(client, Some(keepalive_config), None);
+    let _server_mux = Multiplexor::new(server, None, None);
+    let r = tokio::time::timeout(std::time::Duration::from_secs(3), client_mux.get_datagram())
+        .await
+        .expect("Expected the timeout to produce `Ok`");
+    // Expect an error instead of elapsed timeout
+    let res = r.expect_err("Expected `get_datagram` to error out due to no Pong");
+    assert!(matches!(res, Error::Closed));
+    // There is no way to check what reason the task exited as of now, except for reading the logs
+}
+
+#[tokio::test]
+#[cfg(not(loom))]
+async fn test_timeout_if_no_pong_2() {
+    setup_logging();
+    // use the mock websocket for this test because tungstenite always auto-Pongs for us
+    let (client, server) = mock::get_pair(None).await;
+    let keepalive_config = crate::config::Options {
+        keepalive_interval: crate::timing::OptionalDuration::from_secs(1),
+        keepalive_timeout: crate::timing::OptionalDuration::from_secs(3),
+        ..Default::default()
+    };
+    let client_mux = Multiplexor::new(client, Some(keepalive_config), None);
+    let _server_mux = Multiplexor::new(server, None, None);
+    let r = tokio::time::timeout(
+        std::time::Duration::from_secs(4),
+        client_mux.accept_stream_channel(),
+    )
+    .await
+    .expect("Expected the timeout to produce `Ok`");
+    // Expect an error instead of elapsed timeout
+    let res = r.expect_err("Expected `accept_stream_channel` to error out due to no Pong");
+    assert!(matches!(res, Error::Closed));
+    // There is no way to check what reason the task exited as of now, except for reading the logs
+}
+
+#[tokio::test]
+#[cfg(not(loom))]
+async fn test_no_timeout_if_no_keepalive() {
+    // Make sure that if keepalive is disabled, no Pong timeout occurs
+    setup_logging();
+    let (client, server) = mock::get_pair(None).await;
+    let client_mux = Multiplexor::new(client, None, None);
+    let _server_mux = Multiplexor::new(server, None, None);
+    // Default is no keepalive
+    let r = tokio::time::timeout(std::time::Duration::from_secs(5), client_mux.get_datagram())
+        .await
+        .expect_err("Expected the timeout to timeout");
+    assert!(matches!(r, tokio::time::error::Elapsed { .. }));
 }

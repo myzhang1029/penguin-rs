@@ -341,6 +341,7 @@ pub async fn client_main_inner(
                         &mut datagram_rx,
                         &handler_resources.udp_client_map,
                         args.keepalive,
+                        args.keepalive_timeout,
                         args.channel_timeout,
                     )
                     // Since we once connected, reset the retry count
@@ -394,10 +395,13 @@ async fn on_connected(
     datagram_rx: &mut mpsc::Receiver<Datagram>,
     udp_client_map: &RwLock<ClientIdMaps>,
     keepalive: OptionalDuration,
+    keepalive_timeout: OptionalDuration,
     channel_timeout: OptionalDuration,
 ) -> Result<(), Error> {
     let mut mux_task_joinset = JoinSet::new();
-    let options = penguin_mux::config::Options::new().keepalive_interval(keepalive);
+    let options = penguin_mux::config::Options::new()
+        .keepalive_interval(keepalive)
+        .keepalive_timeout(keepalive_timeout);
     let mux = Multiplexor::new(ws_stream, Some(options), Some(&mut mux_task_joinset));
     info!("Connected to server");
     // If we have a failed stream request, try it first

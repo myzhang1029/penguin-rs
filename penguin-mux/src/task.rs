@@ -12,8 +12,9 @@ use crate::{
 use bytes::Bytes;
 use std::future::poll_fn;
 use std::task::{Context, Poll, ready};
-use tokio::sync::mpsc;
+use std::time::Instant;
 use tokio::sync::mpsc::error::TrySendError;
+use tokio::sync::{mpsc, watch};
 use tokio::task::JoinSet;
 use tokio::time::MissedTickBehavior;
 use tracing::{debug, error, info, trace, warn};
@@ -31,6 +32,8 @@ pub struct TaskData<S: WebSocket> {
     pub tx_frame_rx: mpsc::UnboundedReceiver<FinalizedFrame>,
     // To be taken out when the task is spawned
     pub dropped_ports_rx: mpsc::UnboundedReceiver<u32>,
+    // To be taken out when the task is spawned
+    pub last_pong_timestamp_rx: watch::Receiver<Instant>,
 }
 
 impl<S: WebSocket> TaskData<S> {
@@ -41,6 +44,7 @@ impl<S: WebSocket> TaskData<S> {
             task,
             tx_frame_rx,
             dropped_ports_rx,
+            last_pong_timestamp_rx,
         } = self;
         let parent_id = tokio::task::try_id()
             .as_ref()
@@ -48,7 +52,9 @@ impl<S: WebSocket> TaskData<S> {
         let future = async move {
             let id = tokio::task::id();
             debug!("spawning mux task {id} from {parent_id}",);
-            let result = task.start(dropped_ports_rx, tx_frame_rx).await;
+            let result = task
+                .start(dropped_ports_rx, tx_frame_rx, last_pong_timestamp_rx)
+                .await;
             if let Err(e) = &result {
                 error!("Multiplexor task exited with error: {e}");
             }
@@ -80,6 +86,8 @@ pub struct Task<S: WebSocket> {
     /// if the user did not call `poll_shutdown` on the `MuxStream`.
     pub dropped_ports_tx: mpsc::UnboundedSender<u32>,
     pub con_recv_stream_tx: mpsc::Sender<MuxStream>,
+    /// Channel for notifying the `Ping` task that a `Pong` has been received.
+    pub last_pong_timestamp_tx: watch::Sender<Instant>,
     /// Default threshold for `Acknowledge` replies. See [`config::Options`] for more details.
     pub default_rwnd_threshold: u32,
     /// Our rwnd. See [`config::Options`] for more details.
@@ -88,6 +96,8 @@ pub struct Task<S: WebSocket> {
     pub bnd_request_tx: Option<mpsc::Sender<BindRequest<'static>>>,
     /// Interval between keepalive `Ping`s,
     pub keepalive_interval: OptionalDuration,
+    /// Maximum allowed delay between sending a `Ping` and receiving a corresponding `Pong`.
+    pub keepalive_timeout: OptionalDuration,
 }
 
 impl<S: WebSocket> Task<S> {
@@ -105,13 +115,14 @@ impl<S: WebSocket> Task<S> {
         self,
         mut dropped_ports_rx: mpsc::UnboundedReceiver<u32>,
         mut tx_frame_rx: mpsc::UnboundedReceiver<FinalizedFrame>,
+        mut last_pong_timestamp_rx: watch::Receiver<Instant>,
     ) -> Result<()> {
         let (should_drain_frame_rx, res) = tokio::select! {
             r = self.process_dropped_ports_task(&mut dropped_ports_rx) => {
                 debug!("mux dropped ports task finished: {r:?}");
                 (true, r)
             }
-            r = self.process_frame_recv_task(&mut tx_frame_rx) => {
+            r = self.process_frame_recv_task(&mut tx_frame_rx, &mut last_pong_timestamp_rx) => {
                 debug!("mux frame recv task finished: {r:?}");
                 (false, r)
             }
@@ -170,19 +181,39 @@ impl<S: WebSocket> Task<S> {
     async fn process_frame_recv_task(
         &self,
         tx_frame_rx: &mut mpsc::UnboundedReceiver<FinalizedFrame>,
+        last_pong_timestamp_rx: &mut watch::Receiver<Instant>,
     ) -> Result<()> {
         let mut interval = OptionalInterval::from(self.keepalive_interval);
         // If we missed a tick, it is probably doing networking, so we don't need to
         // make up for it.
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        let mut last_pong_timestamp = Instant::now();
+
         loop {
             tokio::select! {
                 biased;
                 r = poll_fn(|cx| self.poll_reserve_space_recv_frame(cx, tx_frame_rx)) => {
                     r?;
                 }
+                r = last_pong_timestamp_rx.changed() => {
+                    // `Err` when (sender dropped AND current value is read)
+                    // The sender is inside `self`
+                    if r.is_ok() {
+                        last_pong_timestamp = *last_pong_timestamp_rx.borrow();
+                        trace!("updated last pong timestamp");
+                    } else {
+                        debug_assert!(false, "last pong timestamp sender should not be closed (this is a bug)");
+                        return Err(Error::ChannelClosed("last_pong_timestamp_rx"));
+                    }
+                }
                 _ = interval.tick() => {
                     trace!("sending keepalive ping");
+                    // Check if we have received a pong recently enough
+                    let elapsed_since_last_pong = Instant::now().duration_since(last_pong_timestamp);
+                    if self.keepalive_timeout.cmp_duration(&elapsed_since_last_pong) == std::cmp::Ordering::Less {
+                        warn!("No pong received for {elapsed_since_last_pong:?}");
+                        return Err(Error::KeepaliveTimeout);
+                    }
                     poll_fn(|cx| self.ws.lock().poll_ready_unpin(cx)).await?;
                     self.ws.lock().start_send_unpin(Message::Ping)?;
                 }
@@ -308,7 +339,15 @@ impl<S: WebSocket> Task<S> {
             }
             // The underlying `WebSocket` implementation is expected to
             // respond to `Ping` messages automatically.
-            Message::Ping | Message::Pong => Ok(false),
+            Message::Ping => Ok(false),
+            Message::Pong => {
+                self.last_pong_timestamp_tx.send(Instant::now()).ok();
+                // Fails only if the receiver is dropped. This may happen
+                // after `process_frame_recv_task` exits and we receive some
+                // late `Pong`s inside `wind_down`. We can safely ignore them.
+                trace!("received pong");
+                Ok(false)
+            }
             Message::Close => Ok(true),
         }
     }

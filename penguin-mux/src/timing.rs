@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use std::{
+    cmp,
     fmt::{self, Debug},
     time::Duration,
 };
@@ -96,6 +97,18 @@ impl OptionalDuration {
             None => std::future::pending().await,
         }
     }
+
+    /// Transform the value if present
+    #[must_use = "This function does not modify the original value"]
+    pub fn map<F: FnOnce(Duration) -> Duration>(self, f: F) -> Self {
+        Self(self.0.map(f))
+    }
+
+    /// Compare with a [`std::time::Duration`]
+    #[must_use]
+    pub fn cmp_duration(&self, other: &Duration) -> cmp::Ordering {
+        self.0.map_or(cmp::Ordering::Greater, |d| d.cmp(other))
+    }
 }
 
 impl std::str::FromStr for OptionalDuration {
@@ -133,6 +146,23 @@ impl From<Duration> for OptionalDuration {
 impl From<OptionalDuration> for Option<Duration> {
     fn from(opt_dur: OptionalDuration) -> Self {
         opt_dur.0
+    }
+}
+
+impl PartialOrd for OptionalDuration {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for OptionalDuration {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
+        match (self.0, other.0) {
+            (Some(a), Some(b)) => a.cmp(&b),
+            (None, None) => cmp::Ordering::Equal,
+            (Some(_), None) => cmp::Ordering::Less,
+            (None, Some(_)) => cmp::Ordering::Greater,
+        }
     }
 }
 
@@ -213,6 +243,36 @@ mod tests {
         assert_eq!(parsed.to_string(), "20s");
         let parsed_none: OptionalDuration = "0".parse().unwrap();
         assert_eq!(parsed_none, OptionalDuration::NONE);
+
+        let dur = OptionalDuration::from_secs(2);
+        let twice = dur.map(|d| d * 2);
+        assert_eq!(twice, OptionalDuration::from_secs(4));
+        let dur_none = OptionalDuration::NONE;
+        let still_none = dur_none.map(|d| d * 2);
+        assert_eq!(still_none, OptionalDuration::NONE);
+
+        assert_eq!(
+            OptionalDuration::from_secs(5).cmp_duration(&Duration::from_secs(10)),
+            cmp::Ordering::Less
+        );
+        assert!(OptionalDuration::from_secs(10) > OptionalDuration::from_secs(5));
+        assert_eq!(
+            OptionalDuration::from_secs(10).cmp_duration(&Duration::from_secs(10)),
+            cmp::Ordering::Equal
+        );
+        assert!(OptionalDuration::from_secs(10) == OptionalDuration::from_secs(10));
+        assert_eq!(
+            OptionalDuration::from_secs(15).cmp_duration(&Duration::from_secs(10)),
+            cmp::Ordering::Greater
+        );
+        assert!(OptionalDuration::from_secs(15) > OptionalDuration::from_secs(10));
+        assert_eq!(
+            OptionalDuration::NONE.cmp_duration(&Duration::from_secs(10)),
+            cmp::Ordering::Greater
+        );
+        assert!(OptionalDuration::NONE > OptionalDuration::from_secs(10));
+        assert!(OptionalDuration::NONE == OptionalDuration::NONE);
+        assert!(OptionalDuration::from_secs(10) < OptionalDuration::NONE);
     }
 
     #[tokio::test]

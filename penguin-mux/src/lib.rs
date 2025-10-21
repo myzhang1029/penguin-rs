@@ -29,9 +29,10 @@ use bytes::Bytes;
 use rand::distr::uniform::SampleUniform;
 use std::future::poll_fn;
 use std::hash::{BuildHasher, Hash};
+use std::time::Instant;
 use thiserror::Error;
 use tokio::sync::mpsc::error::TrySendError;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinSet;
 use tracing::{error, trace, warn};
 
@@ -64,6 +65,9 @@ pub enum Error {
     /// Peer rejected the flow ID selection.
     #[error("Peer rejected flow ID selection")]
     FlowIdRejected,
+    /// Keepalive timeout: no pong received within the allowed time.
+    #[error("No keepalive pong received within the allowed time")]
+    KeepaliveTimeout,
 
     /// WebSocket errors
     #[error("WebSocket Error: {0}")]
@@ -144,6 +148,7 @@ impl Multiplexor {
         let (tx_frame_tx, tx_frame_rx) = mpsc::unbounded_channel();
         // This one cannot be bounded because it needs to be used in Drop
         let (dropped_ports_tx, dropped_ports_rx) = mpsc::unbounded_channel();
+        let (last_pong_timestamp_tx, last_pong_timestamp_rx) = watch::channel(Instant::now());
 
         let (bnd_request_tx, bnd_request_rx) = if options.bind_buffer_size > 0 {
             let (tx, rx) = mpsc::channel(options.bind_buffer_size);
@@ -170,14 +175,17 @@ impl Multiplexor {
                 flows,
                 dropped_ports_tx,
                 con_recv_stream_tx,
+                last_pong_timestamp_tx,
                 default_rwnd_threshold: options.default_rwnd_threshold,
                 rwnd: options.rwnd,
                 datagram_tx,
                 bnd_request_tx,
                 keepalive_interval: options.keepalive_interval,
+                keepalive_timeout: options.keepalive_timeout,
             },
             dropped_ports_rx,
             tx_frame_rx,
+            last_pong_timestamp_rx,
         };
         taskdata.spawn(task_joinset);
         mux

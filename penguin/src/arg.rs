@@ -140,6 +140,12 @@ pub struct ClientArgs {
     /// specify a time in seconds (set to 0 to disable).
     #[arg(long, default_value = "25")]
     pub keepalive: OptionalDuration,
+    /// Allow this amount of time without the server acknowledging the
+    /// keepalive pings before disconnecting.
+    /// This value must be at least `keepalive`, and will be implicitly
+    /// clamped to that value if it is lower.
+    #[arg(long, default_value = "60")]
+    pub keepalive_timeout: OptionalDuration,
     /// Maximum number of times to retry before exiting.
     /// A value of 0 means unlimited.
     #[arg(long, default_value_t = 0)]
@@ -623,6 +629,8 @@ mod tests {
             "avocado",
             "--keepalive",
             "10",
+            "--keepalive-timeout",
+            "15",
             "--max-retry-count",
             "400",
             "--max-retry-interval",
@@ -659,6 +667,7 @@ mod tests {
             );
             assert_eq!(args.ws_psk, Some(HeaderValue::from_static("avocado")));
             assert_eq!(args.keepalive, OptionalDuration::from_secs(10));
+            assert_eq!(args.keepalive_timeout, OptionalDuration::from_secs(15));
             assert_eq!(args.max_retry_count, 400);
             assert_eq!(args.max_retry_interval, 1000);
             assert_eq!(args.handshake_timeout, OptionalDuration::from_secs(5));
