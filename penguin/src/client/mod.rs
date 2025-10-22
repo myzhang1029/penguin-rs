@@ -13,7 +13,7 @@ use crate::config;
 use crate::tls::MaybeTlsStream;
 use bytes::Bytes;
 use futures_util::TryFutureExt;
-use parking_lot::RwLock;
+use parking_lot::Mutex;
 use penguin_mux::timing::{Backoff, OptionalDuration};
 use penguin_mux::{Datagram, Dupe, IntKey, Multiplexor, MuxStream};
 use std::collections::HashMap;
@@ -26,7 +26,7 @@ use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
 use tokio::time;
-use tracing::{error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 #[cfg(feature = "nohash")]
 use nohash_hasher::IntMap;
@@ -92,7 +92,7 @@ pub struct HandlerResources {
     /// Send a UDP datagram to the main loop
     datagram_tx: mpsc::Sender<Datagram>,
     /// The map of client IDs to UDP sockets and the map of client addresses to client IDs
-    udp_client_map: Arc<RwLock<ClientIdMaps>>,
+    udp_client_map: Arc<Mutex<ClientIdMaps>>,
 }
 
 impl HandlerResources {
@@ -109,7 +109,7 @@ impl HandlerResources {
         // Channel for listeners to send UDP datagrams to the main loop
         let (datagram_tx, datagram_rx) = mpsc::channel(config::INCOMING_DATAGRAM_BUFFER_SIZE);
         // Map of client IDs to `ClientIdMapEntry`
-        let udp_client_map = Arc::new(RwLock::new(ClientIdMaps::new()));
+        let udp_client_map = Arc::new(Mutex::new(ClientIdMaps::new()));
         (
             Self {
                 stream_command_tx,
@@ -135,7 +135,7 @@ impl HandlerResources {
         let ClientIdMaps {
             client_id_map,
             client_addr_map,
-        } = &mut *self.udp_client_map.write();
+        } = &mut *self.udp_client_map.lock();
         if let Some(client_id) = client_addr_map.get(&(addr, our_addr)) {
             // The client already exists, just refresh the entry
             client_id_map
@@ -160,17 +160,21 @@ impl HandlerResources {
         let ClientIdMaps {
             client_id_map,
             client_addr_map,
-        } = &mut *self.udp_client_map.write();
+        } = &mut *self.udp_client_map.lock();
         let now = time::Instant::now();
         client_id_map.retain(|_, entry| {
             if entry.expires > now {
                 true
             } else {
-                client_addr_map
+                let client_id = client_addr_map
                     .remove(&(entry.peer_addr, entry.our_addr))
                     .expect(
                         "`client_id_map` and `client_addr_map` are inconsistent (this is a bug)",
                     );
+                debug!(
+                    "pruned inactive UDP client {client_id:08x} for address {}",
+                    entry.peer_addr
+                );
                 false
             }
         });
@@ -201,7 +205,7 @@ impl ClientIdMaps {
 
     /// Send a datagram to a client
     async fn send_datagram_reply(
-        lock_self: &RwLock<Self>,
+        lock_self: &Mutex<Self>,
         client_id: u32,
         data: &[u8],
     ) -> Option<std::io::Result<()>> {
@@ -209,12 +213,19 @@ impl ClientIdMaps {
             // Used for stdio
             return Some(tokio::io::stdout().write_all(data).await);
         }
-        let info = lock_self.read().client_id_map.get(&client_id)?.dupe();
-
-        let send_result = if info.socks5 {
-            handle_remote::socks::send_udp_relay_response(&info.socket, info.peer_addr, data).await
+        let (socket, peer_addr, socks5) = {
+            let ClientIdMaps {
+                client_id_map,
+                client_addr_map: _,
+            } = &mut *lock_self.lock();
+            let entry = client_id_map.get_mut(&client_id)?;
+            entry.refresh();
+            (entry.socket.dupe(), entry.peer_addr, entry.socks5)
+        };
+        let send_result = if socks5 {
+            handle_remote::socks::send_udp_relay_response(&socket, peer_addr, data).await
         } else {
-            info.socket.send_to(data, info.peer_addr).await
+            socket.send_to(data, peer_addr).await
         }
         .map(|_| ());
         Some(send_result)
@@ -392,7 +403,7 @@ async fn on_connected(
     stream_command_rx: &mut mpsc::Receiver<StreamCommand>,
     failed_stream_request: &mut Option<StreamCommand>,
     datagram_rx: &mut mpsc::Receiver<Datagram>,
-    udp_client_map: &RwLock<ClientIdMaps>,
+    udp_client_map: &Mutex<ClientIdMaps>,
 ) -> Result<(), Error> {
     let mut mux_task_joinset = JoinSet::new();
     let options = penguin_mux::config::Options::new()
@@ -499,7 +510,7 @@ mod tests {
         let handler_resources = HandlerResources {
             stream_command_tx: stub_stream_tx,
             datagram_tx: stub_datagram_tx,
-            udp_client_map: Arc::new(RwLock::new(ClientIdMaps::new())),
+            udp_client_map: Arc::new(Mutex::new(ClientIdMaps::new())),
         };
         let stub_socket = Arc::new(UdpSocket::bind(("127.0.0.1", 0)).await.unwrap());
         let client_id = handler_resources.add_udp_client(
@@ -539,7 +550,7 @@ mod tests {
         let handler_resources = HandlerResources {
             stream_command_tx: stub_stream_tx,
             datagram_tx: stub_datagram_tx,
-            udp_client_map: Arc::new(RwLock::new(ClientIdMaps::new())),
+            udp_client_map: Arc::new(Mutex::new(ClientIdMaps::new())),
         };
         let stub_socket = Arc::new(UdpSocket::bind(("127.0.0.1", 0)).await.unwrap());
         let _ = handler_resources.add_udp_client(
@@ -552,7 +563,7 @@ mod tests {
         assert!(
             handler_resources
                 .udp_client_map
-                .read()
+                .lock()
                 .client_id_map
                 .is_empty()
         );

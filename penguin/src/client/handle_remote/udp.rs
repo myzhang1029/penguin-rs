@@ -90,7 +90,7 @@ pub(super) async fn handle_udp_stdio(
 mod tests {
     use super::*;
     use crate::client::ClientIdMaps;
-    use parking_lot::RwLock;
+    use parking_lot::Mutex;
 
     #[tokio::test]
     async fn test_handle_udp() {
@@ -99,7 +99,7 @@ mod tests {
         crate::tests::setup_logging();
         let (datagram_tx, mut datagram_rx) = tokio::sync::mpsc::channel(1);
         let (stream_command_tx, _) = tokio::sync::mpsc::channel(1);
-        let udp_client_map = Arc::new(RwLock::new(ClientIdMaps::new()));
+        let udp_client_map = Arc::new(Mutex::new(ClientIdMaps::new()));
         let handler_resources = HandlerResources {
             datagram_tx,
             stream_command_tx,
@@ -118,7 +118,7 @@ mod tests {
         assert_eq!(frame.target_port, 255);
         assert_eq!(*frame.data, *b"hello");
         let client_id = *udp_client_map
-            .read()
+            .lock()
             .client_addr_map
             .get(&(local_addr, ([127, 0, 0, 1], 14196).into()))
             .unwrap();
