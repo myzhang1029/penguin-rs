@@ -40,33 +40,33 @@ jobs:
 
     - name: Check default features
       run: |
-        cargo check --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-udp,penguin-binary,acme,tungstenite --no-default-features
-        cargo run --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-udp,penguin-binary,acme,tungstenite --no-default-features -- --help
+        cargo check --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-udp,penguin-binary,acme,tungstenite,tproxy --no-default-features
+        cargo run --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-udp,penguin-binary,acme,tungstenite,tproxy --no-default-features -- --help
 
     - name: Check client only
       run: |
-        cargo check --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-udp,client --no-default-features
-        cargo run --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-udp,client --no-default-features -- --help
+        cargo check --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-udp,client,tproxy --no-default-features
+        cargo run --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-udp,client,tproxy --no-default-features -- --help
 
     - name: Check with most features on, using ring
       run: |
-        cargo check --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-real-internet6,default-is-ipv6,tests-acme-has-pebble,penguin-binary,acme,remove-logging,deadlock-detection,nohash --no-default-features
-        cargo run --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-real-internet6,default-is-ipv6,tests-acme-has-pebble,penguin-binary,acme,remove-logging,deadlock-detection,nohash --no-default-features -- --help
+        cargo check --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-real-internet6,default-is-ipv6,tests-acme-has-pebble,penguin-binary,acme,remove-logging,deadlock-detection,nohash,tproxy --no-default-features
+        cargo run --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-real-internet6,default-is-ipv6,tests-acme-has-pebble,penguin-binary,acme,remove-logging,deadlock-detection,nohash,tproxy --no-default-features -- --help
 
     - name: Check with most features on, using aws-lc-rs
       run: |
-        cargo check --verbose --features ${{ matrix.tls }},aws-lc-rs,tests-real-internet4,tests-real-internet6,default-is-ipv6,tests-acme-has-pebble,penguin-binary,acme,remove-logging,deadlock-detection,nohash --no-default-features
-        cargo run --verbose --features ${{ matrix.tls }},aws-lc-rs,tests-real-internet4,tests-real-internet6,default-is-ipv6,tests-acme-has-pebble,penguin-binary,acme,remove-logging,deadlock-detection,nohash --no-default-features -- --help
+        cargo check --verbose --features ${{ matrix.tls }},aws-lc-rs,tests-real-internet4,tests-real-internet6,default-is-ipv6,tests-acme-has-pebble,penguin-binary,acme,remove-logging,deadlock-detection,nohash,tproxy --no-default-features
+        cargo run --verbose --features ${{ matrix.tls }},aws-lc-rs,tests-real-internet4,tests-real-internet6,default-is-ipv6,tests-acme-has-pebble,penguin-binary,acme,remove-logging,deadlock-detection,nohash,tproxy --no-default-features -- --help
 
     - name: Check with most features on (nativetls without any rustls)
       if: matrix.tls == 'nativetls'
       run: |
-        cargo check --verbose --features ${{ matrix.tls }},tests-real-internet4,tests-real-internet6,default-is-ipv6,penguin-binary,remove-logging,deadlock-detection,nohash --no-default-features
-        cargo run --verbose --features ${{ matrix.tls }},tests-real-internet4,tests-real-internet6,penguin-binary,remove-logging,deadlock-detection,nohash --no-default-features -- --help
+        cargo check --verbose --features ${{ matrix.tls }},tests-real-internet4,tests-real-internet6,default-is-ipv6,penguin-binary,remove-logging,deadlock-detection,nohash,tproxy --no-default-features
+        cargo run --verbose --features ${{ matrix.tls }},tests-real-internet4,tests-real-internet6,penguin-binary,remove-logging,deadlock-detection,nohash,tproxy --no-default-features -- --help
 
     - name: Check with tokio-console
       run: |
-        cargo check --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-real-internet6,tests-acme-has-pebble,penguin-binary,acme,default-is-ipv6,tokio-console,deadlock-detection --no-default-features
-        cargo run --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-real-internet6,tests-acme-has-pebble,penguin-binary,acme,default-is-ipv6,tokio-console,deadlock-detection --no-default-features -- --help
+        cargo check --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-real-internet6,tests-acme-has-pebble,penguin-binary,acme,default-is-ipv6,tokio-console,deadlock-detection,tproxy --no-default-features
+        cargo run --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-real-internet6,tests-acme-has-pebble,penguin-binary,acme,default-is-ipv6,tokio-console,deadlock-detection,tproxy --no-default-features -- --help
       env:
         RUSTFLAGS: "--cfg tokio_unstable"

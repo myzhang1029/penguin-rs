@@ -108,12 +108,25 @@ pub struct ClientArgs {
     /// stdio:example.com:22
     ///
     /// 1.1.1.1:53/udp
+    ///
+    /// tproxy/udp
+    ///
+    /// 5000:tproxy
+    ///
+    /// [::1]:12345:tproxy/udp
     /// ```
     ///
     /// The word `socks` may be in the place of `remote-host` and `remote-port`
     /// to create a SOCKS4/SOCKS5 proxy server. The default local host and
     /// port for a `socks` remote is `127.0.0.1:1080`. `socks` remotes cannot
     /// be UDP.
+    ///
+    /// The word `tproxy` may be in the place of `remote-host` and `remote-port`.
+    /// The default local host and port for a `tproxy` remote is
+    /// `127.0.0.1:1234`. This only works on Linux. The local listening socket
+    /// will have the `IP_TRANSPARENT` option set, allowing it to accept
+    /// connections to any IP address, which will then be tunneled to the
+    /// server. `tproxy` cannot be used with `stdio`.
     ///
     /// When `stdio` is used as `local-host`, the tunnel will connect standard
     /// input/output of this program with the remote. This is useful when

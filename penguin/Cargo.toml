@@ -41,6 +41,7 @@ rustls = { version = "^0.23, >=0.23.18", features = ["logging", "tls12"], defaul
 rustls-native-certs = { version = "0.8", optional = true }
 rustls-pemfile = { version = "2", optional = true }
 sha1 = { version = "0.10", optional = true }
+socket2 = { version = "0.6", features = ["all"], optional = true }
 thiserror = "2"
 tokio = { version = "^1, >=1.23.1", features = ["fs", "io-util", "macros", "net", "parking_lot", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-native-tls = { version = "0.3", optional = true }
@@ -59,7 +60,7 @@ tempfile = "3"
 rusty-penguin = { path = ".", default-features = false, features = ["dev-dependencies"] }
 
 [features]
-default = ["rustls-native-roots", "tests-real-internet4", "tests-udp", "penguin-binary", "acme", "ring"]
+default = ["rustls-native-roots", "tests-real-internet4", "tests-udp", "penguin-binary", "acme", "ring", "tproxy"]
 # Note that it does not make sense to use more than one TLS implementations
 # at the same time, but there must be at least one if `penguin-binary` is
 # enabled.
@@ -93,14 +94,10 @@ deadlock-detection = ["parking_lot/deadlock_detection"]
 acme = ["server", "dep:instant-acme", "tokio/process"]
 # Use nohash-hasher for flow_id hashmaps
 nohash = ["dep:nohash-hasher", "penguin-mux/nohash"]
+# Enable transparent proxy support in the client
+tproxy = ["dep:socket2"]
 # `penguin` binary -- server
-server = [
-    "dep:base64",
-    "dep:sha1",
-    "dep:http-body-util",
-    "dep:hyper",
-    "dep:hyper-util",
-]
+server = ["dep:base64", "dep:sha1", "dep:http-body-util", "dep:hyper", "dep:hyper-util"]
 # `penguin` binary -- client
 client = ["tokio/io-std"]
 # `penguin` binary
