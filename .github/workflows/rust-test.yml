@@ -63,13 +63,13 @@ jobs:
         RUSTFLAGS: -Cinstrument-coverage
 
     - name: Run cargo tests with default features
-      if: ${{ matrix.config.name != 'arm64 Linux' && matrix.config.name != 'Linux' }}
+      if: ${{ !endsWith(matrix.config.name, 'linux-gnu') }}
       run: cargo nextest run --all-targets --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,acme,penguin-binary,tproxy --no-default-features
       env:
         RUSTFLAGS: -Cinstrument-coverage
 
     - name: Run cargo tests with default features (Linux with sudo)
-      if: ${{ matrix.config.name == 'arm64 Linux' || matrix.config.name == 'Linux' }}
+      if: ${{ endsWith(matrix.config.name, 'linux-gnu') }}
       run: |
         printf '[target.%s]\nrunner="sudo -E"' "$(rustc -vV | sed -n 's,host: ,,p')" > ~/.cargo/config.toml
         cargo nextest run --all-targets --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,acme,penguin-binary,tproxy --no-default-features
@@ -88,7 +88,7 @@ jobs:
         RUSTFLAGS: -Cinstrument-coverage
 
     - name: Run cargo lib tests with loom
-      if: ${{ matrix.config.name != 'arm64 Windows' }}
+      if: ${{ matrix.config.name != 'aarch64-pc-windows-msvc' }}
       run: cargo test --lib --release --no-default-features --package penguin-mux
       env:
         RUSTFLAGS: --cfg loom -Cinstrument-coverage
