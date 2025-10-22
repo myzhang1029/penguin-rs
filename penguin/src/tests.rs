@@ -1046,10 +1046,13 @@ async fn test_tproxy_something_happens() {
     {
         let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
         tokio::time::sleep(Duration::from_secs(2)).await;
-        let mut stream = TcpStream::connect((crate::parse_remote::default_host!(local), 20445)).await.unwrap();
+        let mut stream = TcpStream::connect((crate::parse_remote::default_host!(local), 20445))
+            .await
+            .unwrap();
         // Should immediately EOF
         let mut output_bytes = vec![0u8; 2];
         stream.read_exact(&mut output_bytes).await.unwrap_err();
+        server_task.abort();
+        client_task.abort();
     }
-
 }
