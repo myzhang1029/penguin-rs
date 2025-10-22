@@ -1013,3 +1013,43 @@ async fn test_it_works_dns_v6() {
     server_task.abort();
     client_task.abort();
 }
+
+#[tokio::test]
+async fn test_tproxy_something_happens() {
+    static SERVER_ARGS: LazyLock<arg::ServerArgs> =
+        LazyLock::new(|| make_server_args("[::1]", 28362));
+    static CLIENT_ARGS: LazyLock<arg::ClientArgs> = LazyLock::new(|| {
+        make_client_args(
+            "[::1]",
+            28362,
+            vec![Remote::from_str("20445:tproxy").unwrap()],
+        )
+    });
+    static HANDLER_RESOURCES: OnceLock<crate::client::HandlerResources> = OnceLock::new();
+    setup_logging();
+
+    let (handler_resources, stream_command_rx, datagram_rx) =
+        crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let client_task = tokio::spawn(crate::client::client_main_inner(
+        &CLIENT_ARGS,
+        HANDLER_RESOURCES.get().unwrap(),
+        stream_command_rx,
+        datagram_rx,
+    ));
+    #[cfg(not(feature = "tproxy"))]
+    {
+        let err = client_task.await.unwrap().unwrap_err();
+        assert!(matches!(err, crate::client::Error::RemoteHandlerExited(_)));
+    }
+    #[cfg(feature = "tproxy")]
+    {
+        let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let mut stream = TcpStream::connect((crate::parse_remote::default_host!(local), 20445)).await.unwrap();
+        // Should immediately EOF
+        let mut output_bytes = vec![0u8; 2];
+        stream.read_exact(&mut output_bytes).await.unwrap_err();
+    }
+
+}
