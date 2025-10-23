@@ -876,6 +876,156 @@ async fn test_socks5_udp_v6v6() {
 }
 
 #[tokio::test]
+#[cfg(feature = "tests-udp")]
+async fn test_socks5_udp_client_prune() {
+    static SERVER_ARGS: LazyLock<arg::ServerArgs> =
+        LazyLock::new(|| make_server_args("127.0.0.1", 16720));
+    static CLIENT_ARGS: LazyLock<arg::ClientArgs> = LazyLock::new(|| {
+        make_client_args(
+            "127.0.0.1",
+            16720,
+            vec![Remote::from_str("127.0.0.1:10350:socks").unwrap()],
+        )
+    });
+    static HANDLER_RESOURCES: OnceLock<crate::client::HandlerResources> = OnceLock::new();
+    setup_logging();
+    let (handler_resources, stream_command_rx, datagram_rx) =
+        crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let client_task = tokio::spawn(crate::client::client_main_inner(
+        &CLIENT_ARGS,
+        HANDLER_RESOURCES.get().unwrap(),
+        stream_command_rx,
+        datagram_rx,
+    ));
+    let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let target_udp_listener = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let listener_port = target_udp_listener.local_addr().unwrap().port();
+    let mut sock = TcpStream::connect("127.0.0.1:10350").await.unwrap();
+    sock.write_all(b"\x05\x01\x00").await.unwrap();
+    let mut buf = vec![0u8; 32];
+    let n = sock.read(&mut buf).await.unwrap();
+    assert_eq!(n, 2);
+    assert_eq!(&buf[..n], b"\x05\x00");
+    let mut cmd = Vec::from(b"\x05\x03\x00\x01\x7f\x00\x00\x01\xff\xff");
+    let len = cmd.len();
+    cmd[len - 2..].copy_from_slice(&listener_port.to_be_bytes());
+    sock.write_all(&cmd).await.unwrap();
+    let n = sock.read(&mut buf).await.unwrap();
+    assert!(n > 3);
+    assert_eq!(&buf[..3], b"\x05\x00\x00");
+    let bind_addr = &buf[4..n - 2];
+    let bind_port = u16::from_be_bytes([buf[n - 2], buf[n - 1]]);
+    let (bind_addr, udp_socket) = match buf[3] {
+        1 => {
+            let mut addr = [0u8; 4];
+            addr.copy_from_slice(bind_addr);
+            let bind_addr = IpAddr::V4(Ipv4Addr::from(addr));
+            let udp_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            (bind_addr, udp_socket)
+        }
+        4 => {
+            let mut addr = [0u8; 16];
+            addr.copy_from_slice(bind_addr);
+            let bind_addr = IpAddr::V6(Ipv6Addr::from(addr));
+            let udp_socket = UdpSocket::bind("[::1]:0").await.unwrap();
+            (bind_addr, udp_socket)
+        }
+        _ => unreachable!(),
+    };
+    // Send a packet and reply after 1/2 the prune timeout
+    let mut request_header = vec![0x00, 0x00, 0x00, 0x01, 0x7f, 0x00, 0x00, 0x01, 0xff, 0xff];
+    let len = request_header.len();
+    let data_len = 32 - request_header.len();
+    request_header[len - 2..].copy_from_slice(&listener_port.to_be_bytes());
+    // Make it immutable
+    let request_header = request_header;
+    let input_bytes: Vec<u8> = (0..data_len).map(|_| rand::random::<u8>()).collect();
+    let mut request = request_header.clone();
+    request.extend(&input_bytes);
+    udp_socket
+        .send_to(&request, (bind_addr, bind_port))
+        .await
+        .unwrap();
+    let mut buf = vec![0u8; input_bytes.len() + request_header.len()];
+    let (n, server_src1) = tokio::time::timeout(
+        Duration::from_secs(3),
+        target_udp_listener.recv_from(&mut buf),
+    )
+    .await
+    .expect("Timed out waiting for client packet 1")
+    .unwrap();
+    assert_eq!(n, input_bytes.len());
+    assert_eq!(&buf[..n], &input_bytes);
+    // Wait for half the prune timeout and send another packet
+    tokio::time::sleep(config::UDP_PRUNE_TIMEOUT / 2).await;
+    let input_bytes: Vec<u8> = (0..data_len).map(|_| rand::random::<u8>()).collect();
+    let mut request = request_header.clone();
+    request.extend(&input_bytes);
+    udp_socket
+        .send_to(&request, (bind_addr, bind_port))
+        .await
+        .unwrap();
+    let (n, server_src2) = tokio::time::timeout(
+        Duration::from_secs(3),
+        target_udp_listener.recv_from(&mut buf),
+    )
+    .await
+    .expect("Timed out waiting for client packet 2")
+    .unwrap();
+    assert_eq!(server_src1, server_src2);
+    assert_eq!(n, input_bytes.len());
+    assert_eq!(&buf[..n], &input_bytes);
+    // Wait for half plus a bit to exceed the prune timeout,
+    // check that the second packet caused the client to extend the timeout
+    tokio::time::sleep(config::UDP_PRUNE_TIMEOUT / 2 + Duration::from_millis(100)).await;
+    // Send reply
+    target_udp_listener
+        .send_to(&input_bytes, server_src1)
+        .await
+        .unwrap();
+    let (n, client_src) =
+        tokio::time::timeout(Duration::from_secs(3), udp_socket.recv_from(&mut buf))
+            .await
+            .expect("Timed out waiting for server reply 1")
+            .unwrap();
+    assert_eq!(client_src, (bind_addr, bind_port).into());
+    assert_eq!(n, input_bytes.len() + request_header.len());
+    assert_eq!(&buf[request_header.len()..n], &input_bytes);
+    // Wait for another half plus a bit to exceed the prune timeout,
+    // check that the reply also causes the client to extend the timeout
+    tokio::time::sleep(config::UDP_PRUNE_TIMEOUT / 2 + Duration::from_millis(100)).await;
+    // Send another reply
+    target_udp_listener
+        .send_to(&input_bytes, server_src1)
+        .await
+        .unwrap();
+    let (n, client_src) =
+        tokio::time::timeout(Duration::from_secs(3), udp_socket.recv_from(&mut buf))
+            .await
+            .expect("Timed out waiting for server reply 2")
+            .unwrap();
+    assert_eq!(client_src, (bind_addr, bind_port).into());
+    assert_eq!(n, input_bytes.len() + request_header.len());
+    assert_eq!(&buf[request_header.len()..n], &input_bytes);
+    // Now wait for the prune timeout to expire
+    tokio::time::sleep(config::UDP_PRUNE_TIMEOUT + Duration::from_millis(100)).await;
+    // Send another packet, which should not be received by the client
+    let input_bytes: Vec<u8> = (0..data_len).map(|_| rand::random::<u8>()).collect();
+    let mut request = request_header.clone();
+    request.extend(&input_bytes);
+    target_udp_listener
+        .send_to(&request, server_src1)
+        .await
+        .unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(3), udp_socket.recv_from(&mut buf)).await;
+    assert!(result.is_err(), "Did not expect to receive server reply 3");
+    server_task.abort();
+    client_task.abort();
+}
+
+#[tokio::test]
 async fn test_socks4_works() {
     static SERVER_ARGS: LazyLock<arg::ServerArgs> =
         LazyLock::new(|| make_server_args("127.0.0.1", 10796));

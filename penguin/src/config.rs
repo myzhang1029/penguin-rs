@@ -5,7 +5,10 @@
 use std::time;
 
 /// Both: how long to wait for responses to UDP outgoing datagrams
+#[cfg(not(test))]
 pub const UDP_PRUNE_TIMEOUT: time::Duration = time::Duration::from_secs(10);
+#[cfg(test)]
+pub const UDP_PRUNE_TIMEOUT: time::Duration = time::Duration::from_secs(4);
 /// Client side: Number of stream requests to buffer in the channels for the main
 /// loop to read from.
 pub const STREAM_REQUEST_COMMAND_SIZE: usize = 1 << 6;
