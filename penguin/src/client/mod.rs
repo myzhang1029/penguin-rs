@@ -214,7 +214,7 @@ impl ClientIdMaps {
             return Some(tokio::io::stdout().write_all(data).await);
         }
         let (socket, peer_addr, socks5) = {
-            let ClientIdMaps {
+            let Self {
                 client_id_map,
                 client_addr_map: _,
             } = &mut *lock_self.lock();
