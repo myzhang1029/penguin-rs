@@ -1,0 +1,14 @@
+[Unit]
+Description=Penguin tunnel
+Wants=syslog.service local-fs.target network-online.target
+After=local-fs.target network-online.target
+Documentation=https://github.com/myzhang1029/penguin-rs
+
+[Service]
+Restart=on-failure
+EnvironmentFile=-/etc/default/rusty-penguin
+ExecStart=/usr/bin/penguin server --host $PENGUIN_ADDR --port $PENGUIN_PORT $PENGUIN_ADDITIONAL_OPTS
+ExecReload=/bin/kill -USR1 $MAINPID
+
+[Install]
+WantedBy=multi-user.target

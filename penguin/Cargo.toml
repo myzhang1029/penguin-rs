@@ -108,3 +108,23 @@ penguin-binary = ["server", "client"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)', 'cfg(loom)'] }
+
+[package.metadata.deb]
+depends = "$auto"
+suggests = ["socat"]
+section = "net"
+priority = "optional"
+assets = [
+    ["target/release/penguin", "usr/bin/", "755"],
+    # multiarch is automatically handled by cargo-deb
+    ["../tools/penguin-v7.lua", "usr/lib/wireshark/plugins/rusty-penguin/", "644"],
+    ["../tools/http01_helper", "usr/libexec/rusty-penguin/", "755"],
+    ["../tools/http01_socat_helper", "usr/libexec/rusty-penguin/", "755"],
+    ["../README.md", "usr/share/doc/rusty-penguin/README", "644"],
+]
+maintainer-scripts = "../tools"
+[package.metadata.deb.systemd-units]
+unit-name = "rusty-penguin"
+enable = false
+start = false
+restart-after-upgrade = true
