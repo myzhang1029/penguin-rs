@@ -128,3 +128,14 @@ unit-name = "rusty-penguin"
 enable = false
 start = false
 restart-after-upgrade = true
+
+[package.metadata.generate-rpm]
+suggests = { socat = "*" }
+assets = [
+    { source = "target/release/penguin", dest = "/usr/bin/", mode = "755" },
+    { source = "../tools/penguin-v7.lua", dest = "/usr/lib/wireshark/plugins/rusty-penguin/", mode = "644" },
+    { source = "../tools/http01_helper", dest = "/usr/libexec/rusty-penguin/", mode = "755" },
+    { source = "../tools/http01_socat_helper", dest = "/usr/libexec/rusty-penguin/", mode = "755" },
+    { source = "../tools/rusty-penguin.service", dest = "/usr/lib/systemd/system/", mode = "644" },
+    { source = "../README.md", dest = "/usr/share/doc/rusty-penguin/README", mode = "644" },
+]
