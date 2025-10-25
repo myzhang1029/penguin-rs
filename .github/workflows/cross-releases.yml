@@ -155,8 +155,11 @@ jobs:
     - name: Checkout source
       uses: actions/checkout@v4
 
-    - name: Install dependencies
-      run: cargo install cross --git https://github.com/cross-rs/cross
+    - name: Install cargo cross
+      uses: baptiste0928/cargo-install@v3
+      with:
+        crate: cross
+        git: https://github.com/cross-rs/cross
 
     - name: Install cargo-deb
       if: ${{ matrix.config.linux_packaging }}
