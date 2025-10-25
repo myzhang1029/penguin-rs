@@ -181,24 +181,25 @@ jobs:
       run: |
         cross build --profile ${{ matrix.config.profile }} --target ${{ matrix.config.rust_target }} --features "${{ matrix.config.rust_features }}"
         mkdir binaries
-        mv -v target/${{ matrix.config.rust_target }}/${{ matrix.config.profile }}/penguin binaries/penguin-${{ matrix.config.rust_target }} || true
-        mv -v target/${{ matrix.config.rust_target }}/${{ matrix.config.profile }}/penguin.exe binaries/penguin-${{ matrix.config.rust_target }}.exe || true
+        cp -v target/${{ matrix.config.rust_target }}/${{ matrix.config.profile }}/penguin binaries/penguin-${{ matrix.config.rust_target }} || true
+        cp -v target/${{ matrix.config.rust_target }}/${{ matrix.config.profile }}/penguin.exe binaries/penguin-${{ matrix.config.rust_target }}.exe || true
       env:
         CROSS_NO_WARNINGS: 0
 
     - name: Build deb and rpm packages
       if: ${{ matrix.config.linux_packaging }}
       run: |
-        cargo deb --target=${{ matrix.config.rust_target }} --no-build
-        cargo generate-rpm --target=${{ matrix.config.rust_target }}
+        cargo deb --target=${{ matrix.config.rust_target }} --no-build --no-strip --package rusty-penguin --profile ${{ matrix.config.profile }}
+        cargo generate-rpm --target=${{ matrix.config.rust_target }} --package penguin --profile ${{ matrix.config.profile }}
         mkdir packages
-        mv -v target/debian/*.deb packages
-        mv -v target/generate-rpm/*.rpm packages
+        cp -v target/${{ matrix.config.rust_target }}/debian/*.deb packages
+        cp -v target/${{ matrix.config.rust_target }}/generate-rpm/*.rpm packages
 
     - name: Upload packages
       if: ${{ matrix.config.linux_packaging }}
       uses: actions/upload-artifact@v4
       with:
+        name: ${{ matrix.config.rust_target }}-packages
         path: packages/*
 
     - name: Nightly Binaries

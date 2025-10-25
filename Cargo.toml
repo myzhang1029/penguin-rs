@@ -4,6 +4,7 @@ members = ["penguin-mux", "penguin"]
 exclude = ["fuzz"]
 
 [profile.release]
+strip = true
 codegen-units = 1
 lto = true
 
