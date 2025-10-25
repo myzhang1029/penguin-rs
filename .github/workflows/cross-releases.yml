@@ -222,3 +222,23 @@ jobs:
         body: "Release for tag ${{ github.ref }} on commit ${{ github.sha }}."
         draft: true
         files: binaries/*
+
+    - name: Upload Nightly Binaries to ZipZen
+      if: ${{ github.ref == 'refs/heads/main' }}
+      env:
+        ZIPZEN_API_TOKEN: ${{ secrets.ZIPZEN_API_TOKEN }}
+      run: |
+        curl -fsSL https://get.zipzen.dev | sh
+        zipzen delete file -r nightly -p rusty-penguin $(basename binaries/*) || true
+        zipzen upload -r nightly -p rusty-penguin binaries/*
+
+    - name: Create ZipZen Release for Tag
+      if: github.ref_type == 'tag'
+      env:
+        ZIPZEN_API_TOKEN: ${{ secrets.ZIPZEN_API_TOKEN }}
+      run: |
+        curl -fsSL https://get.zipzen.dev | sh
+        zipzen get release ${{ github.ref_name }} -p rusty-penguin || zipzen create release ${{ github.ref_name }} -p rusty-penguin
+        zipzen upload -r ${{ github.ref_name }} -p rusty-penguin binaries/*
+        if [ -f packages/*.deb ]; then zipzen upload -r ${{ github.ref_name }} -p rusty-penguin packages/*.deb; fi
+        if [ -f packages/*.rpm ]; then zipzen upload -r ${{ github.ref_name }} -p rusty-penguin packages/*.rpm; fi
