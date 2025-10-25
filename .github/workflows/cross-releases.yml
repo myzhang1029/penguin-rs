@@ -229,8 +229,10 @@ jobs:
         ZIPZEN_API_TOKEN: ${{ secrets.ZIPZEN_API_TOKEN }}
       run: |
         curl -fsSL https://get.zipzen.dev | sh
-        zipzen delete file -r nightly -p rusty-penguin $(basename binaries/*) || true
-        zipzen upload -r nightly -p rusty-penguin binaries/*
+        zipzen delete file -r nightly -p rusty-penguin penguin-${{ matrix.config.rust_target }} || true
+        zipzen delete file -r nightly -p rusty-penguin penguin-${{ matrix.config.rust_target }}.exe || true
+        zipzen upload -r nightly -p rusty-penguin binaries/penguin-${{ matrix.config.rust_target }} || true
+        zipzen upload -r nightly -p rusty-penguin binaries/penguin-${{ matrix.config.rust_target }}.exe || true
 
     - name: Create ZipZen Release for Tag
       if: github.ref_type == 'tag'
@@ -239,6 +241,7 @@ jobs:
       run: |
         curl -fsSL https://get.zipzen.dev | sh
         zipzen get release ${{ github.ref_name }} -p rusty-penguin || zipzen create release ${{ github.ref_name }} -p rusty-penguin
-        zipzen upload -r ${{ github.ref_name }} -p rusty-penguin binaries/*
+        zipzen upload -r ${{ github.ref_name }} -p rusty-penguin binaries/penguin-${{ matrix.config.rust_target }} || true
+        zipzen upload -r ${{ github.ref_name }} -p rusty-penguin binaries/penguin-${{ matrix.config.rust_target }}.exe || true
         if [ -f packages/*.deb ]; then zipzen upload -r ${{ github.ref_name }} -p rusty-penguin packages/*.deb; fi
         if [ -f packages/*.rpm ]; then zipzen upload -r ${{ github.ref_name }} -p rusty-penguin packages/*.rpm; fi

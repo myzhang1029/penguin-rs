@@ -65,8 +65,10 @@ jobs:
         ZIPZEN_API_TOKEN: ${{ secrets.ZIPZEN_API_TOKEN }}
       run: |
         curl -fsSL https://get.zipzen.dev | sh
-        zipzen delete file -r nightly -p rusty-penguin $(basename binaries/*)
-        zipzen upload -r nightly -p rusty-penguin binaries/*
+        zipzen delete file -r nightly -p rusty-penguin penguin-x86_64-apple-darwin || true
+        zipzen delete file -r nightly -p rusty-penguin penguin-aarch64-apple-darwin || true
+        zipzen upload -r nightly -p rusty-penguin binaries/penguin-x86_64-apple-darwin
+        zipzen upload -r nightly -p rusty-penguin binaries/penguin-aarch64-apple-darwin
 
     - name: Create ZipZen Release for Tag
       if: github.ref_type == 'tag'
@@ -75,4 +77,5 @@ jobs:
       run: |
         curl -fsSL https://get.zipzen.dev | sh
         zipzen get release ${{ github.ref_name }} -p rusty-penguin || zipzen create release ${{ github.ref_name }} -p rusty-penguin
-        zipzen upload -r ${{ github.ref_name }} -p rusty-penguin binaries/*
+        zipzen upload -r ${{ github.ref_name }} -p rusty-penguin binaries/penguin-x86_64-apple-darwin
+        zipzen upload -r ${{ github.ref_name }} -p rusty-penguin binaries/penguin-aarch64-apple-darwin
