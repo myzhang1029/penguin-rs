@@ -22,50 +22,72 @@ jobs:
         config:
         - rust_target: aarch64-linux-android
           profile: release-size
+          linux_packaging: false
         - rust_target: aarch64-unknown-linux-gnu
           profile: release
+          linux_packaging: false
         - rust_target: aarch64-unknown-linux-musl
           profile: release
+          linux_packaging: true
         - rust_target: arm-linux-androideabi
           profile: release-size
+          linux_packaging: false
         - rust_target: arm-unknown-linux-gnueabi
           profile: release
+          linux_packaging: false
         - rust_target: arm-unknown-linux-gnueabihf
           profile: release
+          linux_packaging: false
         - rust_target: arm-unknown-linux-musleabi
           profile: release-size
+          linux_packaging: false
         - rust_target: arm-unknown-linux-musleabihf
           profile: release-size
+          linux_packaging: false
         - rust_target: armv5te-unknown-linux-gnueabi
           profile: release
+          linux_packaging: false
         - rust_target: armv5te-unknown-linux-musleabi
           profile: release-size
+          linux_packaging: false
         - rust_target: armv7-linux-androideabi
           profile: release-size
+          linux_packaging: false
         - rust_target: armv7-unknown-linux-gnueabi
           profile: release
+          linux_packaging: false
         - rust_target: armv7-unknown-linux-gnueabihf
           profile: release
+          linux_packaging: false
         - rust_target: armv7-unknown-linux-musleabi
           profile: release-size
+          linux_packaging: false
         - rust_target: armv7-unknown-linux-musleabihf
           profile: release-size
+          linux_packaging: true
         # - rust_target: i586-unknown-linux-gnu (ring v1.17.8 SSE)
         # - rust_target: i586-unknown-linux-musl (ring v1.17.8 SSE)
         - rust_target: i686-unknown-freebsd # (crate `aws-lc-sys`)
           profile: release
+          linux_packaging: false
         - rust_target: i686-linux-android
           profile: release
+          linux_packaging: false
         - rust_target: i686-pc-windows-gnu # (crate `aws-lc-sys`)
           profile: release
+          linux_packaging: false
         - rust_target: i686-unknown-linux-gnu
           profile: release
+          linux_packaging: false
         - rust_target: i686-unknown-linux-musl
           profile: release
+          linux_packaging: true
         - rust_target: loongarch64-unknown-linux-gnu
           profile: release
+          linux_packaging: false
         - rust_target: loongarch64-unknown-linux-musl
           profile: release
+          linux_packaging: true
         # - rust_target: mips-unknown-linux-gnu (cargo-cross image support)
         # - rust_target: mips-unknown-linux-musl (cargo-cross image support)
         # - rust_target: mips64-unknown-linux-gnuabi64 (cargo-cross image support)
@@ -76,14 +98,19 @@ jobs:
         # - rust_target: mipsel-unknown-linux-musl (cargo-cross image support)
         - rust_target: powerpc-unknown-linux-gnu
           profile: release
+          linux_packaging: true
         - rust_target: powerpc64-unknown-linux-gnu
           profile: release
+          linux_packaging: true
         - rust_target: powerpc64le-unknown-linux-gnu
           profile: release
+          linux_packaging: false
         - rust_target: riscv64gc-unknown-linux-gnu # (crate `aws-lc-sys`)
           profile: release
+          linux_packaging: true
         - rust_target: s390x-unknown-linux-gnu
           profile: release
+          linux_packaging: true
         # - rust_target: sparc64-unknown-linux-gnu (ring support)
         # - rust_target: sparcv9-sun-solaris (ring support)
         # - rust_target: thumbv6m-none-eabi # (can't find crate for `std`)
@@ -92,28 +119,37 @@ jobs:
         # - rust_target: thumbv7m-none-eabi # (can't find crate for `std`)
         - rust_target: thumbv7neon-linux-androideabi
           profile: release-size
+          linux_packaging: false
         - rust_target: thumbv7neon-unknown-linux-gnueabihf
           profile: release-size
+          linux_packaging: false
         # - rust_target: thumbv8m.base-none-eabi # (can't find crate for `std`)
         # - rust_target: thumbv8m.main-none-eabi # (can't find crate for `std`)
         # - rust_target: thumbv8m.main-none-eabihf # (can't find crate for `std`)
         # - rust_target: wasm32-unknown-emscripten (mio support)
         - rust_target: x86_64-linux-android
           profile: release
+          linux_packaging: false
         - rust_target: x86_64-pc-windows-gnu # (crate `aws-lc-sys`)
           profile: release
+          linux_packaging: false
         # - rust_target: x86_64-pc-solaris # (linking issues)
         - rust_target: x86_64-unknown-freebsd # (crate `aws-lc-sys`)
           profile: release
+          linux_packaging: false
         # - rust_target: x86_64-unknown-dragonfly (can't find crate for `core`)
         - rust_target: x86_64-unknown-illumos # (bindgen)
           profile: release
+          linux_packaging: false
         - rust_target: x86_64-unknown-linux-gnu
           profile: release
+          linux_packaging: false
         - rust_target: x86_64-unknown-linux-musl
           profile: release
+          linux_packaging: true
         - rust_target: x86_64-unknown-netbsd # (crate `aws-lc-sys`)
           profile: release
+          linux_packaging: false
 
     steps:
     - name: Checkout source
@@ -122,10 +158,31 @@ jobs:
     - name: Install dependencies
       run: cargo install cross --git https://github.com/cross-rs/cross
 
+    - name: Install cargo-deb
+      if: ${{ matrix.config.linux_packaging }}
+      uses: baptiste0928/cargo-install@v3
+      with:
+        crate: cargo-deb
+
+    - name: Install cargo-generate-rpm
+      if: ${{ matrix.config.linux_packaging }}
+      uses: baptiste0928/cargo-install@v3
+      with:
+        crate: cargo-generate-rpm
+
     - name: Build release
       run: cross build --profile ${{ matrix.config.profile }} --target ${{ matrix.config.rust_target }} --features "${{ matrix.config.rust_features }}"
       env:
         CROSS_NO_WARNINGS: 0
+
+    - name: Build deb and rpm packages
+      if: ${{ matrix.config.linux_packaging }}
+      run: |
+        cargo deb --target=${{ matrix.config.rust_target }} --no-build
+        cargo generate-rpm --target=${{ matrix.config.rust_target }}
+        mkdir packages
+        mv target/debian/*.deb packages
+        mv target/generate-rpm/*.rpm packages
 
     - name: Rename binary
       run: |
