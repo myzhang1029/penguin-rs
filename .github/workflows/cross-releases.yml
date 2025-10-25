@@ -190,13 +190,11 @@ jobs:
         mv target/${{ matrix.config.rust_target }}/${{ matrix.config.profile }}/penguin binaries/penguin-${{ matrix.config.rust_target }} || true
         mv target/${{ matrix.config.rust_target }}/${{ matrix.config.profile }}/penguin.exe binaries/penguin-${{ matrix.config.rust_target }}.exe || true
 
-    - name: Upload binary
+    - name: Upload packages
+      if: ${{ matrix.config.linux_packaging }}
       uses: actions/upload-artifact@v4
       with:
-        name: penguin-${{ matrix.config.rust_target }}
-        path: |
-          binaries/penguin-${{ matrix.config.rust_target }}
-          binaries/penguin-${{ matrix.config.rust_target }}.exe
+        path: packages/*
 
     - name: Nightly Binaries
       uses: softprops/action-gh-release@v2

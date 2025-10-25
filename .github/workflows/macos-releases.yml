@@ -37,11 +37,6 @@ jobs:
         mv target/x86_64-apple-darwin/release/penguin binaries/penguin-x86_64-apple-darwin
         mv target/aarch64-apple-darwin/release/penguin binaries/penguin-aarch64-apple-darwin
 
-    - name: Upload binary
-      uses: actions/upload-artifact@v4
-      with:
-        path: binaries/*
-
     - name: Nightly Binaries
       uses: softprops/action-gh-release@v2
       if: github.ref == 'refs/heads/main'
