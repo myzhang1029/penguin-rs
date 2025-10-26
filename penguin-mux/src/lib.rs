@@ -10,6 +10,8 @@
 #![allow(clippy::multiple_crate_versions)]
 
 pub mod config;
+#[cfg(feature = "deadlock-detection")]
+pub mod deadlock_detection;
 mod dupe;
 pub mod frame;
 mod loom;

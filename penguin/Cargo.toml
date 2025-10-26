@@ -89,7 +89,7 @@ tokio-console = ["dep:console-subscriber"]
 # Statically remove some logging code. This breaks `tokio-console`
 remove-logging = ["tracing/max_level_trace", "tracing/release_max_level_debug", "log/max_level_trace", "log/release_max_level_debug"]
 # `parking_lot`'s deadlock detection in a separate thread
-deadlock-detection = ["parking_lot/deadlock_detection"]
+deadlock-detection = ["parking_lot/deadlock_detection", "penguin-mux/deadlock-detection"]
 # obtaining certificate automatically using ACME protocol
 acme = ["server", "dep:instant-acme", "tokio/process"]
 # Use nohash-hasher for flow_id hashmaps

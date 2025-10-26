@@ -45,6 +45,8 @@ default = ["tungstenite"]
 tungstenite = ["dep:tokio-tungstenite"]
 # Use nohash-hasher for flow_id hashmaps
 nohash = ["dep:nohash-hasher"]
+# Facility to launch `parking_lot`'s deadlock detection in a separate thread in tests
+deadlock-detection = ["parking_lot/deadlock_detection"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)', 'cfg(loom)'] }

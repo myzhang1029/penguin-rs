@@ -40,32 +40,6 @@ const DEFAULT_LOG_LEVEL: filter::LevelFilter = filter::LevelFilter::INFO;
 const VERBOSE_LOG_LEVEL: filter::LevelFilter = filter::LevelFilter::DEBUG;
 const VERBOSE_VERBOSE_LOG_LEVEL: filter::LevelFilter = filter::LevelFilter::TRACE;
 
-#[cfg(feature = "deadlock-detection")]
-fn spawn_deadlock_detection() {
-    use std::thread;
-    use tracing::error;
-
-    // Create a background thread which checks for deadlocks every 10s
-    thread::spawn(move || {
-        loop {
-            thread::sleep(std::time::Duration::from_secs(10));
-            let deadlocks = parking_lot::deadlock::check_deadlock();
-            if deadlocks.is_empty() {
-                continue;
-            }
-
-            error!("{} deadlocks detected", deadlocks.len());
-            for (i, threads) in deadlocks.iter().enumerate() {
-                error!("Deadlock #{}", i);
-                for t in threads {
-                    error!("Thread Id {:#?}", t.thread_id());
-                    error!("{:#?}", t.backtrace());
-                }
-            }
-        }
-    });
-}
-
 #[tokio::main]
 /// Entry point
 async fn main() -> Result<(), Box<Error>> {
@@ -103,8 +77,9 @@ async fn main() -> Result<(), Box<Error>> {
             .reload(QUIET_QUIET_LOG_LEVEL)
             .expect("Resetting log level failed (this is a bug)"),
     }
+
     #[cfg(feature = "deadlock-detection")]
-    spawn_deadlock_detection();
+    penguin_mux::deadlock_detection::try_spawn_deadlock_detection();
     match &cli_args.subcommand {
         #[cfg(feature = "client")]
         arg::Commands::Client(args) => client::client_main(args)
