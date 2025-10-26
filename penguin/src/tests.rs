@@ -12,13 +12,13 @@ use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 pub fn setup_logging() {
-    #[cfg(feature = "deadlock-detection")]
-    penguin_mux::deadlock_detection::try_spawn_deadlock_detection();
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
         .with(EnvFilter::from_default_env())
         .try_init()
         .ok();
+    #[cfg(feature = "deadlock-detection")]
+    penguin_mux::deadlock_detection::try_spawn_deadlock_detection();
 }
 
 fn make_server_args(host: &str, port: u16) -> arg::ServerArgs {

@@ -33,13 +33,13 @@ trait CompatSinkStreamWebSocket: WebSocket {
 impl<T: WebSocket> CompatSinkStreamWebSocket for T {}
 
 pub fn setup_logging() {
-    #[cfg(feature = "deadlock-detection")]
-    crate::deadlock_detection::try_spawn_deadlock_detection();
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
         .with(EnvFilter::from_default_env())
         .try_init()
         .ok();
+    #[cfg(feature = "deadlock-detection")]
+    crate::deadlock_detection::try_spawn_deadlock_detection();
 }
 
 #[cfg(feature = "tungstenite")]

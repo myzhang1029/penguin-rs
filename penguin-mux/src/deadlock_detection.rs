@@ -8,7 +8,7 @@
 //
 // SPDX-License-Identifier:  Apache-2.0 OR GPL-3.0-or-later
 use std::{sync::OnceLock, thread};
-use tracing::error;
+use tracing::{error, info};
 
 /// Global deadlock detection thread handle
 static DETECTION_THREAD: OnceLock<thread::JoinHandle<()>> = OnceLock::new();
@@ -18,6 +18,7 @@ pub fn try_spawn_deadlock_detection() {
     DETECTION_THREAD.get_or_init(|| {
         // Create a background thread which checks for deadlocks every 10s
         thread::spawn(move || {
+            info!("Deadlock detection thread started");
             loop {
                 thread::sleep(std::time::Duration::from_secs(10));
                 let deadlocks = parking_lot::deadlock::check_deadlock();
