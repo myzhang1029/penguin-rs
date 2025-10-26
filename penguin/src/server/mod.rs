@@ -117,13 +117,28 @@ pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
             listening_tasks.spawn(run_listener(listener, None, state.dupe()));
         }
     }
-    while let Some(res) = listening_tasks.join_next().await {
-        if let Err(err) = res {
-            assert!(!err.is_panic(), "Panic in a listener: {err}");
-            error!("Listener finished with error: {err}");
+    loop {
+        tokio::select! {
+            Ok(()) = tokio::signal::ctrl_c() => {
+                // `Err` means unable to listen for Ctrl-C, which we will ignore
+                info!("Received Ctrl-C, shutting down");
+                listening_tasks.abort_all();
+                // Let the loop continue to reap the tasks
+            }
+            r = listening_tasks.join_next() => {
+                match r {
+                    None => break Ok(()),
+                    // `run_listener` does not return
+                    Some(Ok(())) => unreachable!("Listener should not terminate (this is a bug)"),
+                    Some(Err(err)) => {
+                        assert!(!err.is_panic(), "Panic in a listener: {err}");
+                        // else is due to task cancelled
+                        assert!(err.is_cancelled(), "Unexpected task error {err} (this is a bug)");
+                    }
+                }
+            }
         }
     }
-    Ok(())
 }
 
 /// Run a signal handler task to reload the TLS certificate.
