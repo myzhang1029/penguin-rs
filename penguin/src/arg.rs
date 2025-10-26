@@ -16,7 +16,10 @@ use thiserror::Error;
 
 /// Command line arguments (main application)
 #[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
+#[command(
+    author, about, long_about = None,
+    version = format!("{} (protocol {})", clap::crate_version!(), penguin_mux::PROTOCOL_VERSION)
+)]
 #[command(propagate_version = true)]
 pub struct PenguinCli {
     /// Subcommand (`client` or `server`)

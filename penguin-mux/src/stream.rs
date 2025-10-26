@@ -280,7 +280,7 @@ impl MuxStream {
         self.into_copy_bidirectional_with_buf(other_bufreader)
     }
 
-    /// See [`into_copy_bidirectional`]. This version allows you to
+    /// See [`into_copy_bidirectional`](Self::into_copy_bidirectional). This version allows you to
     /// provide your own read buffer for the other side.
     #[inline]
     pub const fn into_copy_bidirectional_with_buf<BRW>(self, other: BRW) -> CopyBidirectional<BRW>
