@@ -20,8 +20,43 @@ with the prompt ["a penguin standing behind a gear wheel, digital art, logo."](
 
 ## Basic Usage
 ### Download
-Prebuilt binaries are available for the latest commit on `main` under
-[nightly releases](https://github.com/myzhang1029/penguin-rs/releases/tag/nightly).
+Prebuilt binaries are available for the latest commit on `main`:
+- On the Releases page, under [nightly releases](https://github.com/myzhang1029/penguin-rs/releases/tag/nightly).
+- On ZipZen [nightly releases](https://www.zipzen.dev/releases/mzh/rusty-penguin/nightly).
+
+ZipZen kindly hosts DEB and RPM packages for us.
+
+Debian/Ubuntu configuration:
+```bash
+sudo curl -fsSLo /usr/share/keyrings/zipzen-rusty-penguin.gpg https://apt.zipzen.dev/mzh/rusty-penguin/pub.gpg
+sudo tee /etc/apt/sources.list.d/zipzen-rusty-penguin.sources << EOF
+Types: deb
+URIs: https://apt.zipzen.dev/mzh/rusty-penguin
+Suites: stable
+Components: main
+Signed-By: /usr/share/keyrings/zipzen-rusty-penguin.gpg
+EOF
+sudo apt update
+```
+
+RPM configuration:
+```bash
+sudo tee /etc/yum.repos.d/zipzen-rusty-penguin.repo << EOF
+[rusty-penguin]
+name=rusty-penguin Packages
+baseurl=https://yum.zipzen.dev/mzh/rusty-penguin/9/\$basearch/
+enabled=1
+gpgcheck=1
+gpgkey=https://yum.zipzen.dev/mzh/rusty-penguin/RPM-GPG-KEY
+EOF
+```
+
+The correct signing key is currently
+```
+pub   rsa4096/0x161B8E07A27FC919 2025-10-25 [SC] [expires: 2026-10-25]
+      493DBFE421EAA3FEEA1C393F161B8E07A27FC919
+uid   Zhang Maiyun (ZipZen Release Signing Key) <zipzen@maiyun.me>
+```
 
 ### Server
 ```bash
