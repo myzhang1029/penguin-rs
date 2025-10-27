@@ -170,19 +170,15 @@ impl State {
     /// Convert the request to our types and execute
     async fn exec_request_inner(
         &self,
-        mut parts: http::request::Parts,
-        body: IncomingOrFullBody,
+        mut req: Request<IncomingOrFullBody>,
         force_http1: bool,
     ) -> Result<Response<IncomingOrFullBody>, Error> {
         if force_http1 {
             // Downgrade to HTTP/1.1
-            parts.version = http::Version::default();
+            *req.version_mut() = http::Version::default();
         }
-        let req = Request::from_parts(parts, body);
         let resp = self.client.request(req).await?;
-        let (parts, body) = resp.into_parts();
-        let resp = Response::from_parts(parts, IncomingOrFullBody::Incoming(body));
-        Ok(resp)
+        Ok(resp.map(IncomingOrFullBody::Incoming))
     }
 
     /// Helper for sending a request to the backend
@@ -190,22 +186,21 @@ impl State {
         &self,
         req: Request<IncomingOrFullBody>,
     ) -> Result<Response<IncomingOrFullBody>, Error> {
-        let (parts, body) = req.into_parts();
-        let is_http2 = parts.version == http::Version::HTTP_2;
+        let is_http2 = req.version() == http::Version::HTTP_2;
         match (self.http2_support.get(), is_http2) {
             // HTTP/1.1 request or known HTTP/2 support: just send it
-            (_, false) | (Some(true), true) => self.exec_request_inner(parts, body, false).await,
+            (_, false) | (Some(true), true) => self.exec_request_inner(req, false).await,
             // Known no HTTP/2 support: downgrade to HTTP/1.1
-            (Some(false), true) => self.exec_request_inner(parts, body, true).await,
+            (Some(false), true) => self.exec_request_inner(req, true).await,
             (None, true) => {
                 // First HTTP/2 request: probe if the backend supports HTTP/2
                 // Duplicate the body so that we can retry if needed
+                let (parts, body) = req.into_parts();
                 let body = body.collect().await?.to_bytes();
                 let saved_parts = parts.clone();
                 let saved_body = body.dupe();
-                let resp = self
-                    .exec_request_inner(parts, IncomingOrFullBody::new_full(body), false)
-                    .await;
+                let old_req = Request::from_parts(parts, IncomingOrFullBody::new_full(body.dupe()));
+                let resp = self.exec_request_inner(old_req, false).await;
                 match resp {
                     Ok(resp) => {
                         // Backend supports HTTP/2
@@ -231,12 +226,11 @@ impl State {
                         );
                         // Ignore the error because we do allow concurrent sets
                         self.http2_support.set(false).ok();
-                        self.exec_request_inner(
+                        let saved_req = Request::from_parts(
                             saved_parts,
                             IncomingOrFullBody::new_full(saved_body),
-                            true,
-                        )
-                        .await
+                        );
+                        self.exec_request_inner(saved_req, true).await
                     }
                 }
             }
@@ -408,8 +402,7 @@ impl Service<Request<hyper::body::Incoming>> for State {
     type Error = Error;
     type Future = <Self as Service<Request<IncomingOrFullBody>>>::Future;
     fn call(&self, req: Request<hyper::body::Incoming>) -> Self::Future {
-        let (parts, body) = req.into_parts();
-        let req = Request::from_parts(parts, IncomingOrFullBody::Incoming(body));
+        let req = req.map(IncomingOrFullBody::Incoming);
         Self::call(self, req)
     }
 }
@@ -419,8 +412,7 @@ impl Service<Request<http_body_util::Empty<Bytes>>> for State {
     type Error = Error;
     type Future = <Self as Service<Request<IncomingOrFullBody>>>::Future;
     fn call(&self, req: Request<http_body_util::Empty<Bytes>>) -> Self::Future {
-        let (parts, _) = req.into_parts();
-        let req = Request::from_parts(parts, IncomingOrFullBody::new_full(Bytes::new()));
+        let req = req.map(|_| IncomingOrFullBody::new_full(Bytes::new()));
         Self::call(self, req)
     }
 }
