@@ -11,6 +11,7 @@ use rusty_penguin_lib::arg;
 use rusty_penguin_lib::client;
 #[cfg(feature = "server")]
 use rusty_penguin_lib::server;
+use std::sync::OnceLock;
 use thiserror::Error;
 use tracing::trace;
 use tracing_subscriber::{filter, fmt, prelude::*, reload};
@@ -47,6 +48,10 @@ const VERBOSE_VERBOSE_LOG_LEVEL: filter::LevelFilter = filter::LevelFilter::TRAC
 #[tokio::main]
 /// Entry point
 async fn main() -> Result<(), Box<Error>> {
+    // Whether the backend supports HTTP/2
+    // This setting starts as `None` and will be probed on the first HTTP/2 request.
+    #[cfg(feature = "server")]
+    static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
     #[cfg(dhat)]
     let _profiler = dhat::Profiler::new_heap();
     let (level_layer, reload_handle) = reload::Layer::new(DEFAULT_LOG_LEVEL);
@@ -92,7 +97,7 @@ async fn main() -> Result<(), Box<Error>> {
             .await
             .map_err(|e| Box::new(e.into()))?,
         #[cfg(feature = "server")]
-        arg::Commands::Server(args) => server::server_main(args)
+        arg::Commands::Server(args) => server::server_main(args, &BACKEND_SUPPORTS_HTTP2)
             .await
             .map_err(|e| Box::new(e.into()))?,
     }

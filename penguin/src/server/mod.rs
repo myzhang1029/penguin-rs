@@ -18,7 +18,7 @@ use hyper_util::rt::{TokioIo, tokio::TokioExecutor};
 use hyper_util::server::conn::auto;
 use penguin_mux::Dupe;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use thiserror::Error;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinSet;
@@ -86,9 +86,19 @@ async fn check_start_tls(args: &'static ServerArgs) -> Result<Option<TlsIdentity
 
 /// Server entry point
 #[tracing::instrument(level = "trace")]
-pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
+pub async fn server_main(
+    args: &'static ServerArgs,
+    http2_support: &'static OnceLock<bool>,
+) -> Result<(), Error> {
+    if args.backend.is_none() {
+        // No backend at all, set to `false` here to catch bugs
+        http2_support
+            .set(false)
+            .expect("`http2_support` already set (this is a bug)");
+    }
     let state = State::new(
         args.backend.as_ref(),
+        http2_support,
         args.ws_psk.as_ref(),
         &args.not_found_resp,
         args.obfs,
@@ -187,7 +197,7 @@ fn arg_to_sockaddrs(arg: &ServerArgs) -> Result<Vec<SocketAddr>, Error> {
 async fn run_listener(
     listener: TcpListener,
     tls_config: Option<crate::tls::TlsIdentity>,
-    state: State<'static, hyper::body::Incoming>,
+    state: State,
 ) {
     loop {
         let new_state = state.dupe();
@@ -212,11 +222,7 @@ async fn run_listener(
 }
 
 /// Serves a single connection from a client with TLS, ignoring errors.
-async fn serve_connection_tls(
-    stream: TcpStream,
-    state: State<'static, hyper::body::Incoming>,
-    tls_config: Arc<TlsIdentityInner>,
-) {
+async fn serve_connection_tls(stream: TcpStream, state: State, tls_config: Arc<TlsIdentityInner>) {
     let tls_timeout = state.tls_timeout;
     #[cfg(feature = "__rustls")]
     let stream_future = tokio_rustls::TlsAcceptor::from(tls_config).accept(stream);
@@ -240,10 +246,7 @@ async fn serve_connection_tls(
 
 /// Serves a single connection from a client, ignoring errors.
 #[tracing::instrument(skip_all, level = "debug")]
-async fn serve_connection(
-    stream: MaybeTlsStream<TcpStream>,
-    state: State<'static, hyper::body::Incoming>,
-) {
+async fn serve_connection(stream: MaybeTlsStream<TcpStream>, state: State) {
     let stream_with_timeout = io_with_timeout::IoWithTimeout::new(stream, state.http_timeout);
     let hyper_io = TokioIo::new(stream_with_timeout);
     let exec = auto::Builder::new(TokioExecutor::new());

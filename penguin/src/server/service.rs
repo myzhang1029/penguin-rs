@@ -11,7 +11,7 @@ use base64::engine::general_purpose::STANDARD as B64_STANDARD_ENGINE;
 use bytes::Bytes;
 use http::{HeaderValue, Method, Request, Response, StatusCode, Uri, header};
 use http_body_util::{BodyExt, Full as FullBody};
-use hyper::body::Body;
+use hyper::body::Incoming;
 use hyper::service::Service;
 use hyper::upgrade::OnUpgrade;
 use hyper_util::client::legacy::{Client as HyperClient, Error as HyperClientError};
@@ -20,6 +20,7 @@ use hyper_util::server::conn::auto::upgrade::{Parts, downcast};
 use penguin_mux::{Dupe, PROTOCOL_VERSION, timing::OptionalDuration};
 use sha1::{Digest, Sha1};
 use std::pin::Pin;
+use std::sync::OnceLock;
 use thiserror::Error;
 use tokio::net::TcpStream;
 use tokio_tungstenite::WebSocketStream;
@@ -63,28 +64,63 @@ pub(super) enum Error {
     Body(#[from] hyper::Error),
 }
 
+/// Wrapper enum for hyper body types
+#[derive(Debug)]
+pub enum IncomingOrFullBody {
+    /// `hyper::body::Incoming` body
+    Incoming(Incoming),
+    /// Full body in memory
+    Full(FullBody<Bytes>),
+}
+
+impl IncomingOrFullBody {
+    /// Create a new `Full` body from bytes
+    fn new_full(bytes: Bytes) -> Self {
+        Self::Full(FullBody::new(bytes))
+    }
+}
+
+impl hyper::body::Body for IncomingOrFullBody {
+    type Data = Bytes;
+    type Error = hyper::Error;
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>> {
+        match self.get_mut() {
+            Self::Incoming(body) => Pin::new(body).poll_frame(cx),
+            Self::Full(body) => Pin::new(body)
+                .poll_frame(cx)
+                .map(|res| res.map(|res| res.map_err(|e| match e {}))),
+        }
+    }
+}
+
 /// Required state for each request.
 #[derive(Clone, Debug)]
-pub(super) struct State<'a, B> {
+pub(super) struct State {
     /// Backend URL
-    backend: Option<&'a BackendUrl>,
+    backend: Option<&'static BackendUrl>,
     /// Websocket PSK
-    ws_psk: Option<&'a HeaderValue>,
+    ws_psk: Option<&'static HeaderValue>,
     /// 404 response
-    not_found_resp: &'a str,
+    not_found_resp: &'static str,
     /// Whether to obfuscate
     obfs: bool,
     /// Whether we accept reverse binding
     reverse: bool,
     /// Backend client
-    client: HyperClient<HyperConnector, B>,
+    client: HyperClient<HyperConnector, IncomingOrFullBody>,
+    /// Whether the backend supports HTTP/2
+    /// This setting will be probed on the first HTTP/2 request.
+    http2_support: &'static OnceLock<bool>,
     /// TLS handshake timeout
     pub tls_timeout: OptionalDuration,
     /// HTTP timeout
     pub http_timeout: OptionalDuration,
 }
 
-impl<B> Dupe for State<'_, B> {
+impl Dupe for State {
     fn dupe(&self) -> Self {
         Self {
             backend: self.backend,
@@ -94,22 +130,21 @@ impl<B> Dupe for State<'_, B> {
             reverse: self.reverse,
             // `hyper` client is designed to be cheaply cloned.
             client: self.client.clone(),
+            http2_support: self.http2_support,
             tls_timeout: self.tls_timeout,
             http_timeout: self.http_timeout,
         }
     }
 }
 
-impl<'a, B> State<'a, B>
-where
-    B: Body + Send,
-    <B as Body>::Data: Send,
-{
+impl State {
     /// Create a new `State`
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
-        backend: Option<&'a BackendUrl>,
-        ws_psk: Option<&'a HeaderValue>,
-        not_found_resp: &'a str,
+        backend: Option<&'static BackendUrl>,
+        http2_support: &'static OnceLock<bool>,
+        ws_psk: Option<&'static HeaderValue>,
+        not_found_resp: &'static str,
         obfs: bool,
         reverse: bool,
         tls_timeout: OptionalDuration,
@@ -124,32 +159,95 @@ where
             obfs,
             reverse,
             client,
+            http2_support,
             tls_timeout,
             http_timeout,
         })
     }
 }
 
-impl<B> State<'static, B>
-where
-    B: Body + Send + Unpin + 'static,
-    <B as Body>::Data: Send,
-    <B as Body>::Error: std::error::Error + Send + Sync,
-{
-    /// Helper for sending a request to the backend
-    async fn exec_request(&self, req: Request<B>) -> Result<Response<FullBody<Bytes>>, Error> {
+impl State {
+    /// Convert the request to our types and execute
+    async fn exec_request_inner(
+        &self,
+        mut parts: http::request::Parts,
+        body: IncomingOrFullBody,
+        force_http1: bool,
+    ) -> Result<Response<IncomingOrFullBody>, Error> {
+        if force_http1 {
+            // Downgrade to HTTP/1.1
+            parts.version = http::Version::default();
+        }
+        let req = Request::from_parts(parts, body);
         let resp = self.client.request(req).await?;
         let (parts, body) = resp.into_parts();
-        let body = body.collect().await?.to_bytes();
-        let collected = Response::from_parts(parts, FullBody::new(body));
-        Ok(collected)
+        let resp = Response::from_parts(parts, IncomingOrFullBody::Incoming(body));
+        Ok(resp)
+    }
+
+    /// Helper for sending a request to the backend
+    async fn exec_request(
+        &self,
+        req: Request<IncomingOrFullBody>,
+    ) -> Result<Response<IncomingOrFullBody>, Error> {
+        let (parts, body) = req.into_parts();
+        let is_http2 = parts.version == http::Version::HTTP_2;
+        match (self.http2_support.get(), is_http2) {
+            // HTTP/1.1 request or known HTTP/2 support: just send it
+            (_, false) | (Some(true), true) => self.exec_request_inner(parts, body, false).await,
+            // Known no HTTP/2 support: downgrade to HTTP/1.1
+            (Some(false), true) => self.exec_request_inner(parts, body, true).await,
+            (None, true) => {
+                // First HTTP/2 request: probe if the backend supports HTTP/2
+                // Duplicate the body so that we can retry if needed
+                let body = body.collect().await?.to_bytes();
+                let saved_parts = parts.clone();
+                let saved_body = body.dupe();
+                let resp = self
+                    .exec_request_inner(parts, IncomingOrFullBody::new_full(body), false)
+                    .await;
+                match resp {
+                    Ok(resp) => {
+                        // Backend supports HTTP/2
+                        // Ignore the error because we do allow concurrent sets
+                        self.http2_support.set(true).ok();
+                        Ok(resp)
+                    }
+                    Err(err) => {
+                        // Pass the error if it is not related to HTTP/2
+                        let Error::Client(client_err) = &err else {
+                            return Err(err);
+                        };
+                        let Some(info) = client_err.connect_info() else {
+                            return Err(err);
+                        };
+                        if info.is_negotiated_h2() {
+                            // Server did negotiate HTTP/2, so the error is not related to HTTP/2 support
+                            return Err(err);
+                        }
+                        // No HTTP/2 support, retry with HTTP/1.1
+                        debug!(
+                            "backend does not support HTTP/2, permanently downgrading to HTTP/1.1: {err}"
+                        );
+                        // Ignore the error because we do allow concurrent sets
+                        self.http2_support.set(false).ok();
+                        self.exec_request_inner(
+                            saved_parts,
+                            IncomingOrFullBody::new_full(saved_body),
+                            true,
+                        )
+                        .await
+                    }
+                }
+            }
+        }
     }
 
     /// Reverse proxy and 404
     async fn backend_or_404_handler(
         self,
-        mut req: Request<B>,
-    ) -> Result<Response<FullBody<Bytes>>, Error> {
+        mut req: Request<IncomingOrFullBody>,
+    ) -> Result<Response<IncomingOrFullBody>, Error> {
         if let Some(BackendUrl {
             scheme,
             authority,
@@ -177,12 +275,6 @@ where
                 .path_and_query(new_path)
                 .build()?;
             *req.uri_mut() = uri;
-            // This is no longer relevant since we're using reqwest instead of hyper.
-            // Kept here for reference.
-            // This may not be the best way to do this, but to avoid panicking if
-            // we have a HTTP/2 request, but `backend` does not support h2, let's
-            // downgrade to HTTP/1.1 and let them upgrade if they want to.
-            // *req.version_mut() = http::version::Version::default();
             self.exec_request(req).await.or_else(|e| {
                 error!("Failed to proxy request to backend: {e}");
                 self.not_found_handler()
@@ -193,10 +285,10 @@ where
     }
 
     /// 404 handler
-    fn not_found_handler(self) -> Result<Response<FullBody<Bytes>>, Error> {
+    fn not_found_handler(self) -> Result<Response<IncomingOrFullBody>, Error> {
         Ok(Response::builder()
             .status(StatusCode::NOT_FOUND)
-            .body(FullBody::new(Bytes::from_static(
+            .body(IncomingOrFullBody::new_full(Bytes::from_static(
                 self.not_found_resp.as_bytes(),
             )))?)
     }
@@ -204,9 +296,9 @@ where
     /// Check the PSK and protocol version and upgrade to a WebSocket if the PSK matches (if required).
     async fn ws_handler(
         self,
-        mut req: Request<B>,
+        mut req: Request<IncomingOrFullBody>,
         reverse: bool,
-    ) -> Result<Response<FullBody<Bytes>>, Error> {
+    ) -> Result<Response<IncomingOrFullBody>, Error> {
         let on_upgrade = req.extensions_mut().remove::<OnUpgrade>();
         let headers = req.headers();
         let connection = headers.get(header::CONNECTION);
@@ -276,31 +368,30 @@ where
             .header(header::UPGRADE, &WEBSOCKET)
             .header(header::SEC_WEBSOCKET_PROTOCOL, &WANTED_PROTOCOL)
             .header(header::SEC_WEBSOCKET_ACCEPT, sec_websocket_accept)
-            .body(FullBody::new(Bytes::new()))?)
+            .body(IncomingOrFullBody::new_full(Bytes::new()))?)
     }
 }
 
-impl<B> Service<Request<B>> for State<'static, B>
-where
-    B: Body + Send + Unpin + 'static,
-    <B as Body>::Data: Send,
-    <B as Body>::Error: std::error::Error + Send + Sync,
-{
-    type Response = Response<FullBody<Bytes>>;
+impl Service<Request<IncomingOrFullBody>> for State {
+    type Response = Response<IncomingOrFullBody>;
     type Error = Error;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
     /// Hyper service handler
-    fn call(&self, req: Request<B>) -> Self::Future {
+    fn call(&self, req: Request<IncomingOrFullBody>) -> Self::Future {
         // Only allow `/health` and `/version` if not obfuscating
         if req.uri().path() == "/health" && !self.obfs {
-            return Box::pin(async { Ok(Response::new(FullBody::new(Bytes::from_static(b"OK")))) });
+            return Box::pin(async {
+                Ok(Response::new(IncomingOrFullBody::new_full(
+                    Bytes::from_static(b"OK"),
+                )))
+            });
         }
         if req.uri().path() == "/version" && !self.obfs {
             return Box::pin(async {
-                Ok(Response::new(FullBody::new(Bytes::from_static(
-                    env!("CARGO_PKG_VERSION").as_bytes(),
-                ))))
+                Ok(Response::new(IncomingOrFullBody::new_full(
+                    Bytes::from_static(env!("CARGO_PKG_VERSION").as_bytes()),
+                )))
             });
         }
         // If `/ws`, handle WebSocket
@@ -312,13 +403,82 @@ where
     }
 }
 
+impl Service<Request<hyper::body::Incoming>> for State {
+    type Response = <Self as Service<Request<IncomingOrFullBody>>>::Response;
+    type Error = Error;
+    type Future = <Self as Service<Request<IncomingOrFullBody>>>::Future;
+    fn call(&self, req: Request<hyper::body::Incoming>) -> Self::Future {
+        let (parts, body) = req.into_parts();
+        let req = Request::from_parts(parts, IncomingOrFullBody::Incoming(body));
+        Self::call(self, req)
+    }
+}
+
+impl Service<Request<http_body_util::Empty<Bytes>>> for State {
+    type Response = <Self as Service<Request<IncomingOrFullBody>>>::Response;
+    type Error = Error;
+    type Future = <Self as Service<Request<IncomingOrFullBody>>>::Future;
+    fn call(&self, req: Request<http_body_util::Empty<Bytes>>) -> Self::Future {
+        let (parts, _) = req.into_parts();
+        let req = Request::from_parts(parts, IncomingOrFullBody::new_full(Bytes::new()));
+        Self::call(self, req)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use http_body_util::Full;
+    use hyper::service::service_fn;
+    use std::convert::Infallible;
+    use std::net::SocketAddr;
     use std::str::FromStr;
     use std::sync::LazyLock;
+    use tokio::net::TcpListener;
+    use tokio::task::JoinHandle;
 
     type EmptyBody = http_body_util::Empty<Bytes>;
+
+    /// A simple HTTP handler for testing
+    async fn http_return_status(
+        req: Request<hyper::body::Incoming>,
+    ) -> Result<Response<Full<Bytes>>, Infallible> {
+        let resp = Response::builder()
+            .status(
+                req.uri()
+                    .path()
+                    .trim_start_matches('/')
+                    .parse::<u16>()
+                    .unwrap_or(200),
+            )
+            .body(Full::new(
+                req.into_body().collect().await.unwrap().to_bytes(),
+            ))
+            .unwrap();
+        Ok(resp)
+    }
+
+    /// Start the test server
+    async fn start_test_server() -> (JoinHandle<()>, SocketAddr) {
+        let listener = TcpListener::bind(("::1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let task = tokio::task::spawn(async move {
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                let io = TokioIo::new(stream);
+                tokio::task::spawn(async move {
+                    if let Err(err) = hyper::server::conn::http1::Builder::new()
+                        .serve_connection(io, service_fn(http_return_status))
+                        .await
+                    {
+                        eprintln!("Error serving connection: {:?}", err);
+                    }
+                });
+            }
+        });
+        (task, addr)
+    }
 
     #[test]
     fn test_make_sec_websocket_accept() {
@@ -335,10 +495,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_obfs_or_not() {
+        static TEST_OBFS_OR_NOT_BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
+        TEST_OBFS_OR_NOT_BACKEND_SUPPORTS_HTTP2.set(false).unwrap();
         crate::tests::setup_logging();
         // Test `/health` without obfuscation
         let state = State::new(
             None,
+            &TEST_OBFS_OR_NOT_BACKEND_SUPPORTS_HTTP2,
             None,
             "not found in the test",
             false,
@@ -359,6 +522,7 @@ mod tests {
         // Test `/health` with obfuscation
         let state = State::new(
             None,
+            &TEST_OBFS_OR_NOT_BACKEND_SUPPORTS_HTTP2,
             None,
             "not found in the test",
             true,
@@ -379,6 +543,7 @@ mod tests {
         // Test `/version` without obfuscation
         let state = State::new(
             None,
+            &TEST_OBFS_OR_NOT_BACKEND_SUPPORTS_HTTP2,
             None,
             "not found in the test",
             false,
@@ -399,6 +564,7 @@ mod tests {
         // Test `/version` with obfuscation
         let state = State::new(
             None,
+            &TEST_OBFS_OR_NOT_BACKEND_SUPPORTS_HTTP2,
             None,
             "not found in the test",
             true,
@@ -418,15 +584,19 @@ mod tests {
         assert_eq!(body_bytes, "not found in the test");
     }
 
-    #[cfg(any(feature = "tests-real-internet4", feature = "tests-real-internet6"))]
     #[tokio::test]
-    async fn test_backend() {
-        static BACKEND: LazyLock<BackendUrl> =
-            LazyLock::new(|| BackendUrl::from_str("http://httpbin.io").unwrap());
+    async fn test_backend_status() {
+        static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
+        static BACKEND: OnceLock<BackendUrl> = OnceLock::new();
         crate::tests::setup_logging();
+        let (server_task, server_addr) = start_test_server().await;
+        BACKEND
+            .set(BackendUrl::from_str(&format!("http://{}", server_addr)).unwrap())
+            .unwrap();
         // Test that the backend is actually working
         let state = State::new(
-            Some(&BACKEND),
+            Some(BACKEND.get().unwrap()),
+            &BACKEND_SUPPORTS_HTTP2,
             None,
             "not found in the test",
             false,
@@ -437,13 +607,14 @@ mod tests {
         .unwrap();
         let req = Request::builder()
             .method(Method::GET)
-            .uri("http://example.com/status/200")
+            .uri("http://example.com/200")
             .body(EmptyBody::new())
             .unwrap();
         let resp = state.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let state = State::new(
-            Some(&BACKEND),
+            Some(BACKEND.get().unwrap()),
+            &BACKEND_SUPPORTS_HTTP2,
             None,
             "not found in the test",
             false,
@@ -454,23 +625,86 @@ mod tests {
         .unwrap();
         let req = Request::builder()
             .method(Method::GET)
-            .uri("http://example.com/status/418")
+            .uri("http://example.com/418")
             .body(EmptyBody::new())
             .unwrap();
         let resp = state.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::IM_A_TEAPOT);
+        server_task.abort();
+    }
+
+    #[tokio::test]
+    async fn test_backend_http1_from_http2_client() {
+        static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
+        static BACKEND: OnceLock<BackendUrl> = OnceLock::new();
+        crate::tests::setup_logging();
+        let (server_task, server_addr) = start_test_server().await;
+        BACKEND
+            .set(BackendUrl::from_str(&format!("http://{}", server_addr)).unwrap())
+            .unwrap();
+        let state = State::new(
+            Some(BACKEND.get().unwrap()),
+            &BACKEND_SUPPORTS_HTTP2,
+            None,
+            "not found in the test",
+            false,
+            false,
+            OptionalDuration::NONE,
+            OptionalDuration::NONE,
+        )
+        .unwrap();
+        let req = Request::builder()
+            .version(http::Version::HTTP_11)
+            .method(Method::GET)
+            .uri("http://example.com/200")
+            .body(EmptyBody::new())
+            .unwrap();
+        let resp = state.call(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        // No probing should happen here
+        assert!(BACKEND_SUPPORTS_HTTP2.get().is_none());
+        let req = Request::builder()
+            .version(http::Version::HTTP_2)
+            .method(Method::GET)
+            .uri("http://example.com/200")
+            .body(EmptyBody::new())
+            .unwrap();
+        let resp = state.call(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        // Probing should have happened here
+        assert_eq!(BACKEND_SUPPORTS_HTTP2.get(), Some(&false));
+        let state = State::new(
+            Some(BACKEND.get().unwrap()),
+            &BACKEND_SUPPORTS_HTTP2,
+            None,
+            "not found in the test",
+            false,
+            false,
+            OptionalDuration::NONE,
+            OptionalDuration::NONE,
+        )
+        .unwrap();
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("http://example.com/418")
+            .body(EmptyBody::new())
+            .unwrap();
+        let resp = state.call(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::IM_A_TEAPOT);
+        server_task.abort();
     }
 
     #[cfg(any(feature = "tests-real-internet4", feature = "tests-real-internet6"))]
     #[tokio::test]
     async fn test_backend_tls() {
-        // Check that this test makes sense: remove TLS deps of `reqwest`
+        static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
         static BACKEND: LazyLock<BackendUrl> =
             LazyLock::new(|| BackendUrl::from_str("https://www.google.com").unwrap());
         crate::tests::setup_logging();
         // Test that the backend is actually working
         let state = State::new(
             Some(&BACKEND),
+            &BACKEND_SUPPORTS_HTTP2,
             None,
             "not found in the test",
             false,
@@ -479,7 +713,9 @@ mod tests {
             OptionalDuration::NONE,
         )
         .unwrap();
+        // Google does support HTTP/2. We try that here, but let's not expect it to always work
         let req = Request::builder()
+            .version(http::Version::HTTP_2)
             .method(Method::GET)
             .uri("http://example.com")
             .body(EmptyBody::new())
@@ -488,6 +724,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let state = State::new(
             Some(&BACKEND),
+            &BACKEND_SUPPORTS_HTTP2,
             None,
             "not found in the test",
             false,
@@ -496,6 +733,7 @@ mod tests {
             OptionalDuration::NONE,
         )
         .unwrap();
+        assert!(BACKEND_SUPPORTS_HTTP2.get().is_some());
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/teapot")
@@ -507,10 +745,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_stealth_websocket_upgrade_method() {
+        static TEST_STEALTH_WEBSOCKET_UPGRADE_METHOD: OnceLock<bool> = OnceLock::new();
+        TEST_STEALTH_WEBSOCKET_UPGRADE_METHOD.set(false).unwrap();
         crate::tests::setup_logging();
         // Test non-GET request
         let state = State::new(
             None,
+            &TEST_STEALTH_WEBSOCKET_UPGRADE_METHOD,
             None,
             "not found in the test",
             false,
@@ -536,10 +777,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_stealth_websocket_upgrade_missing_key_header() {
+        static TEST_STEALTH_WEBSOCKET_UPGRADE_MISSING_KEY_HEADER: OnceLock<bool> = OnceLock::new();
+        TEST_STEALTH_WEBSOCKET_UPGRADE_MISSING_KEY_HEADER
+            .set(false)
+            .unwrap();
         crate::tests::setup_logging();
         // Test missing upgrade header
         let state = State::new(
             None,
+            &TEST_STEALTH_WEBSOCKET_UPGRADE_MISSING_KEY_HEADER,
             None,
             "not found in the test",
             false,
@@ -564,11 +810,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_stealth_websocket_upgrade_wrong_psk() {
+        static TEST_STEALTH_WEBSOCKET_UPGRADE_WRONG_PSK: OnceLock<bool> = OnceLock::new();
+        TEST_STEALTH_WEBSOCKET_UPGRADE_WRONG_PSK.set(false).unwrap();
         // Test wrong PSK
         static PSK: HeaderValue = HeaderValue::from_static("correct PSK");
         crate::tests::setup_logging();
         let state = State::new(
             None,
+            &TEST_STEALTH_WEBSOCKET_UPGRADE_WRONG_PSK,
             Some(&PSK),
             "not found in the test",
             false,
@@ -595,11 +844,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_stealth_websocket_upgrade_correct_psk() {
+        static TEST_STEALTH_WEBSOCKET_UPGRADE_CORRECT_PSK: OnceLock<bool> = OnceLock::new();
+        TEST_STEALTH_WEBSOCKET_UPGRADE_CORRECT_PSK
+            .set(false)
+            .unwrap();
         // Test correct PSK
         static PSK: HeaderValue = HeaderValue::from_static("correct PSK");
         crate::tests::setup_logging();
         let state = State::new(
             None,
+            &TEST_STEALTH_WEBSOCKET_UPGRADE_CORRECT_PSK,
             Some(&PSK),
             "not found in the test",
             false,
