@@ -16,16 +16,22 @@ jobs:
         config:
         - name: aarch64-apple-darwin
           os: macos-latest
+          codecov_os_name: macos
         - name: x86_64-apple-darwin
           os: macos-15-intel
+          codecov_os_name: macos
         - name: x86_64-unknown-linux-gnu
           os: ubuntu-latest
+          codecov_os_name: linux
         - name: aarch64-unknown-linux-gnu
           os: ubuntu-24.04-arm
+          codecov_os_name: linux-arm64
         - name: x86_64-pc-windows-msvc
           os: windows-latest
+          codecov_os_name: windows
         - name: aarch64-pc-windows-msvc
           os: windows-11-arm
+          codecov_os_name: windows
         tls:
         - nativetls
         - rustls-native-roots
@@ -104,6 +110,7 @@ jobs:
         fail_ci_if_error: false
         token: ${{ secrets.CODECOV_TOKEN }}
         flags: ${{ matrix.tls }}-${{ matrix.config.name }}
+        os: ${{ matrix.config.codecov_os_name }}
 
     - name: Upload coverage to Codecov
       if: ${{ !cancelled() }}
@@ -114,3 +121,4 @@ jobs:
         files: ./lcov.info
         token: ${{ secrets.CODECOV_TOKEN }}
         flags: ${{ matrix.tls }}-${{ matrix.config.name }}
+        os: ${{ matrix.config.codecov_os_name }}
