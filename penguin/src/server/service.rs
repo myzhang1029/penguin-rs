@@ -420,7 +420,6 @@ impl Service<Request<http_body_util::Empty<Bytes>>> for State {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use http_body_util::Full;
     use hyper::service::service_fn;
     use std::convert::Infallible;
     use std::net::SocketAddr;
@@ -432,9 +431,7 @@ mod tests {
     type EmptyBody = http_body_util::Empty<Bytes>;
 
     /// A simple HTTP handler for testing
-    async fn http_return_status(
-        req: Request<hyper::body::Incoming>,
-    ) -> Result<Response<Full<Bytes>>, Infallible> {
+    async fn http_return_status(req: Request<Incoming>) -> Result<Response<Incoming>, Infallible> {
         let resp = Response::builder()
             .status(
                 req.uri()
@@ -443,9 +440,7 @@ mod tests {
                     .parse::<u16>()
                     .unwrap_or(200),
             )
-            .body(Full::new(
-                req.into_body().collect().await.unwrap().to_bytes(),
-            ))
+            .body(req.into_body())
             .unwrap();
         Ok(resp)
     }
@@ -665,6 +660,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         // Probing should have happened here
         assert_eq!(BACKEND_SUPPORTS_HTTP2.get(), Some(&false));
+        // Now create a new state. Both version requests should still work
         let state = State::new(
             Some(BACKEND.get().unwrap()),
             &BACKEND_SUPPORTS_HTTP2,
@@ -676,6 +672,14 @@ mod tests {
             OptionalDuration::NONE,
         )
         .unwrap();
+        let req = Request::builder()
+            .version(http::Version::HTTP_2)
+            .method(Method::GET)
+            .uri("http://example.com/404")
+            .body(EmptyBody::new())
+            .unwrap();
+        let resp = state.call(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/418")
