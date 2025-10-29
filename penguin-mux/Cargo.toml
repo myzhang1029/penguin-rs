@@ -1,6 +1,6 @@
 [package]
 name = "penguin-mux"
-version = "0.8.1"
+version = "0.8.2"
 authors = ["Zhang Maiyun <me@maiyun.me>"]
 edition = "2024"
 description = "TCP/UDP multiplexing over HTTP WebSocket"
