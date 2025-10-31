@@ -24,7 +24,7 @@ aws-lc-rs = { version = "1", optional = true }
 base64 = { version = "0.22", optional = true }
 bytes = "1"
 clap = { version = "4", features = ["cargo", "derive", "string"] }
-console-subscriber = { version = "0.4", features = ["parking_lot"], optional = true }
+console-subscriber = { version = "0.5", features = ["parking_lot"], optional = true }
 futures-util = { version = "0.3", default-features = false }
 http = "1"
 http-body-util = { version = "0.1", optional = true }
@@ -88,7 +88,7 @@ default-is-ipv6 = []
 # Export key logs to a file specified via env SSLKEYLOGFILE
 rustls-keylog = ["__rustls"]
 # Enabling this causes `penguin` to listen for `tokio-console` connections
-tokio-console = ["dep:console-subscriber"]
+tokio-console = ["dep:console-subscriber", "tokio/tracing"]
 # Statically remove some logging code. This breaks `tokio-console`
 remove-logging = ["tracing/max_level_trace", "tracing/release_max_level_debug", "log/max_level_trace", "log/release_max_level_debug"]
 # `parking_lot`'s deadlock detection in a separate thread
