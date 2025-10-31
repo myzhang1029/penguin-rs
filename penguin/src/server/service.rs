@@ -139,7 +139,7 @@ impl Dupe for State {
 
 impl State {
     /// Create a new `State`
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         backend: Option<&'static BackendUrl>,
         http2_support: &'static OnceLock<bool>,

@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::missing_panics_doc, clippy::missing_errors_doc)]
 #![cfg_attr(not(all(feature = "client", feature = "server")), allow(dead_code))]
+#![cfg(any(feature = "client", feature = "server"))]
 
 pub mod arg;
 #[cfg(feature = "client")]

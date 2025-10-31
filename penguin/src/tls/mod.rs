@@ -20,7 +20,7 @@ use thiserror::Error;
 
 #[cfg(all(feature = "__rustls", feature = "server"))]
 pub use self::rustls::{HyperConnector, make_hyper_connector};
-#[allow(clippy::module_name_repetitions)]
+#[expect(clippy::module_name_repetitions)]
 #[cfg(feature = "__rustls")]
 pub use self::rustls::{TlsIdentityInner, make_client_config, make_server_config};
 #[cfg(all(feature = "nativetls", feature = "server"))]
@@ -36,7 +36,7 @@ use tokio_rustls::TlsStream;
 pub use maybe_tls::MaybeTlsStream;
 
 /// A hot-swappable container for a TLS key and certificate.
-#[allow(clippy::module_name_repetitions)]
+#[expect(clippy::module_name_repetitions)]
 pub type TlsIdentity = Arc<ArcSwap<TlsIdentityInner>>;
 
 /// HTTP/2 ALPN protocols

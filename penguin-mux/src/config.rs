@@ -118,7 +118,7 @@ impl Options {
     /// # Panics
     /// Panics if the buffer size is not positive or does not fit in a `usize`.
     #[must_use]
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(clippy::cast_possible_truncation)]
     pub const fn rwnd(mut self, rwnd: u32) -> Self {
         // Make sure this value fits in a usize
         assert!((rwnd as usize) as u32 == rwnd, "rwnd must fit in a usize");

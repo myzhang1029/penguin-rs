@@ -228,7 +228,7 @@ impl ServerCertVerifier for EmptyVerifier {
 
 /// For backend requests
 #[cfg(feature = "server")]
-#[allow(clippy::unnecessary_wraps)]
+#[cfg_attr(feature = "rustls-webpki-roots", expect(clippy::unnecessary_wraps))]
 pub fn make_hyper_connector() -> std::io::Result<HyperConnector> {
     #[cfg(feature = "rustls-native-roots")]
     let builder1 = hyper_rustls::HttpsConnectorBuilder::new().with_native_roots()?;

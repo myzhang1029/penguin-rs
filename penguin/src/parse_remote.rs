@@ -40,7 +40,7 @@ pub struct Remote {
     /// Local-side forwarding info
     pub local_addr: LocalSpec,
     /// Peer-side forwarding info
-    #[allow(clippy::struct_field_names)]
+    #[expect(clippy::struct_field_names)]
     pub remote_addr: RemoteSpec,
     /// Layer-4 protocol this instance forwards
     pub protocol: Protocol,
@@ -174,7 +174,7 @@ impl FromStr for Remote {
     type Err = Error;
 
     /// Parse a remote specification.
-    #[allow(clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines)]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (rest, proto) = match s.rsplit_once('/') {
             Some((rest, proto)) => (rest, proto.parse()?),

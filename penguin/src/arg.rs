@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
+#[cfg(feature = "client")]
 use crate::parse_remote::Remote;
 #[cfg(feature = "acme")]
 use crate::server::ChallengeHelper;
@@ -70,7 +71,7 @@ pub enum Commands {
 
 // Descriptions are mainly directly stripped from myzhang1029/penguin
 /// Penguin client arguments.
-#[allow(clippy::doc_markdown, clippy::pub_underscore_fields)]
+#[expect(clippy::doc_markdown, clippy::pub_underscore_fields)]
 #[cfg(feature = "client")]
 #[derive(Args, Debug, Default)]
 pub struct ClientArgs {
@@ -228,7 +229,7 @@ pub struct ClientArgs {
 /// Penguin server arguments.
 #[cfg(feature = "server")]
 #[derive(Args, Debug, Default)]
-#[allow(clippy::struct_excessive_bools, clippy::pub_underscore_fields)]
+#[expect(clippy::struct_excessive_bools, clippy::pub_underscore_fields)]
 pub struct ServerArgs {
     /// Defines the HTTP listening host - the network interface.
     /// If multiple ports are specified, `penguin` will listen on all of them.

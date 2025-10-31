@@ -11,6 +11,7 @@ use rusty_penguin_lib::arg;
 use rusty_penguin_lib::client;
 #[cfg(feature = "server")]
 use rusty_penguin_lib::server;
+#[cfg(feature = "server")]
 use std::sync::OnceLock;
 use thiserror::Error;
 use tracing::trace;
@@ -112,3 +113,5 @@ compile_error!(
 );
 #[cfg(all(feature = "tokio-console", feature = "remove-logging"))]
 compile_error!("tokio-console without trace-level logging is likely not desired");
+#[cfg(not(any(feature = "client", feature = "server")))]
+compile_error!("At least one of client and server must be enabled to build the binary");

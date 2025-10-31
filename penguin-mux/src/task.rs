@@ -367,7 +367,7 @@ impl<S: WebSocket> Task<S> {
     ///   - Send the data to the sender.
     ///   - If the receiver is closed or the port does not exist, send back a
     ///     `Reset` frame.
-    #[allow(clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines)]
     #[tracing::instrument(skip_all, fields(flow_id), level = "debug")]
     #[inline]
     async fn process_frame(&self, frame: Frame<'static>, ignore_bind: bool) -> Result<()> {
