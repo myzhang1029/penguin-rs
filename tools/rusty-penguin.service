@@ -7,6 +7,20 @@ Documentation=https://github.com/myzhang1029/penguin-rs
 [Service]
 Restart=on-failure
 EnvironmentFile=-/etc/default/rusty-penguin
+DynamicUser=true
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+ProtectClock=true
+ProtectHome=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectKernelTunables=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
+# Use these for TLS settings
+# LoadCredential=fullchain.pem:$PENGUIN_TLS_FULLCHAIN
+# LoadCredential=privkey.pem:$PENGUIN_TLS_PRIVKEY
+# ExecStart=/usr/bin/penguin server --host $PENGUIN_ADDR --port $PENGUIN_PORT $PENGUIN_ADDITIONAL_OPTS --port 443 --tls-cert ${CREDENTIALS_DIRECTORY}/fullchain.pem --tls-key ${CREDENTIALS_DIRECTORY}/privkey.pem
 ExecStart=/usr/bin/penguin server --host $PENGUIN_ADDR --port $PENGUIN_PORT $PENGUIN_ADDITIONAL_OPTS
 ExecReload=/bin/kill -USR1 $MAINPID
 
