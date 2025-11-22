@@ -39,8 +39,9 @@ async fn handshake_inner(
         .port_u16()
         .expect("URL port should be present (this is a bug)");
     // Server name for SNI
-    // To be overridden later if a custom hostname is provided
-    let mut domain = host;
+    // To be overridden later if a custom value is provided
+    // in either `--hostname` or `--tls-server-name`
+    let mut tls_server_name = host;
 
     // Use a request to allow additional headers
     let mut req: Request = args.server.0.dupe().into_client_request()?;
@@ -57,7 +58,10 @@ async fn handshake_inner(
     // Add potentially custom hostname
     if let Some(ref hostname) = args.hostname {
         req_headers.insert("host", hostname.dupe());
-        domain = hostname.to_str()?;
+        tls_server_name = hostname.to_str()?;
+    }
+    if let Some(tls_sni) = args.tls_server_name.as_deref() {
+        tls_server_name = tls_sni;
     }
     // Now add custom headers
     for header in &args.header {
@@ -68,7 +72,7 @@ async fn handshake_inner(
             tls_connect(
                 host,
                 port,
-                domain,
+                tls_server_name,
                 args.tls_cert.as_deref(),
                 args.tls_key.as_deref(),
                 args.tls_ca.as_deref(),

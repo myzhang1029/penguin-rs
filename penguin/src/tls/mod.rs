@@ -82,7 +82,7 @@ pub enum Error {
 pub async fn tls_connect(
     host: &str,
     port: u16,
-    domain: &str,
+    server_name: &str,
     tls_cert: Option<&str>,
     tls_key: Option<&str>,
     tls_ca: Option<&str>,
@@ -96,12 +96,12 @@ pub async fn tls_connect(
     #[cfg(feature = "nativetls")]
     let tls_stream = {
         let connector = tokio_native_tls::TlsConnector::from(config);
-        connector.connect(domain, tcp_stream).await?
+        connector.connect(server_name, tcp_stream).await?
     };
     #[cfg(feature = "__rustls")]
     let tls_stream = {
         let connector: tokio_rustls::TlsConnector = Arc::new(config).into();
-        let server_name = ::rustls::pki_types::ServerName::try_from(domain.to_string())?;
+        let server_name = ::rustls::pki_types::ServerName::try_from(server_name.to_string())?;
         let client_st = connector
             .connect(server_name, tcp_stream)
             .await

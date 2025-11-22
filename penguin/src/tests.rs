@@ -332,6 +332,7 @@ async fn test_it_works_tls_simple() {
         handshake_timeout: OptionalDuration::NONE,
         proxy: None,
         header: vec![],
+        tls_server_name: None,
         tls_ca: None,
         tls_cert: None,
         tls_key: None,

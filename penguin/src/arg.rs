@@ -188,9 +188,15 @@ pub struct ClientArgs {
     #[arg(short = 'H', long)]
     pub header: Vec<Header>,
     /// Optionally set the 'Host' header (defaults to the host
-    /// found in the server url).
+    /// found in the server url). If `--tls-server-name` is not set,
+    /// this value will also be used as the TLS Server Name.
     #[arg(long)]
     pub hostname: Option<HeaderValue>,
+    /// Optionally set the TLS Server Name for the SNI field.
+    /// Defaults to the value passed to `--hostname`, or the host
+    /// found in the server url.
+    #[arg(long)]
+    pub tls_server_name: Option<String>,
     /// An optional root certificate bundle used to verify the
     /// penguin server. Only valid when connecting to the server with
     /// "https" or "wss". By default, the operating system CAs will be used.
