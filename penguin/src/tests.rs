@@ -1,13 +1,15 @@
 use super::*;
+use crate::tls::make_tls_identity;
 use crate::{arg::ServerUrl, parse_remote::Remote};
 use penguin_mux::timing::OptionalDuration;
+use tracing::debug;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 #[allow(unused_imports)]
 use std::sync::{LazyLock, OnceLock};
 use std::{str::FromStr, time::Duration};
 #[cfg(not(all(feature = "nativetls", any(target_os = "macos", target_os = "windows"))))]
 use tempfile::TempDir;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -471,6 +473,157 @@ async fn test_tls_reload() {
         assert_eq!(peer_cert[0], *new_cert.der());
     }
     server_task.abort();
+}
+
+async fn check_http_host<T: AsyncRead + Unpin>(
+    stream: &mut T,
+    expected_host: &str,
+) {
+    let mut reader = tokio::io::BufReader::new(stream);
+    let mut buf = String::new();
+    while reader.read_line(&mut buf).await.unwrap() > 0 {
+        let line = buf.trim_end();
+        debug!("HTTP line: {line}");
+        if line.is_empty() {
+            break;
+        }
+        if line.to_lowercase().starts_with("host:") {
+            let host_value = line[5..].trim();
+            assert_eq!(host_value, expected_host);
+            return;
+        }
+        buf.clear();
+    }
+    panic!("Did not find Host header in HTTP request");
+}
+
+// `native_tls` on macOS and Windows doesn't support reading Ed25519 nor ECDSA-based certificates.
+#[tokio::test]
+#[cfg(not(all(feature = "nativetls", any(target_os = "macos", target_os = "windows"))))]
+async fn test_http_host_and_sni() {
+    static CLIENT_ARGS_PLAIN: OnceLock<arg::ClientArgs> = OnceLock::new();
+    static CLIENT_ARGS_HAS_HOSTNAME: OnceLock<arg::ClientArgs> = OnceLock::new();
+    static CLIENT_ARGS_HAS_SNI: OnceLock<arg::ClientArgs> = OnceLock::new();
+    static HANDLER_RESOURCES_1: OnceLock<crate::client::HandlerResources> = OnceLock::new();
+    static HANDLER_RESOURCES_2: OnceLock<crate::client::HandlerResources> = OnceLock::new();
+    static HANDLER_RESOURCES_3: OnceLock<crate::client::HandlerResources> = OnceLock::new();
+    setup_logging();
+
+    // Just make a normal tls listener without penguin server
+    let (cert_dir, _) = make_server_cert_ecdsa(None).await;
+    let cert_dir = cert_dir.unwrap();
+    let cert_path = format!("{}/cert.pem", cert_dir.path().display());
+    let key_path = format!("{}/privkey.pem", cert_dir.path().display());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let tls_cfg = make_tls_identity(&cert_path, &key_path, None)
+        .await
+        .unwrap()
+        .load_full();
+    #[cfg(feature = "__rustls")]
+    let acceptor = tokio_rustls::TlsAcceptor::from(tls_cfg);
+    #[cfg(feature = "nativetls")]
+    let acceptor = tls_cfg;
+
+    // The client will be in the task and the server will be the main task
+
+    let mut client_args = arg::ClientArgs {
+        server: ServerUrl::from_str(&format!("wss://{addr}/ws")).unwrap(),
+        remote: vec![Remote::from_str(&format!("0:127.0.0.1:0")).unwrap()],
+        max_retry_count: 1,
+        max_retry_interval: 1,
+        hostname: None,
+        tls_server_name: None,
+        tls_skip_verify: true,
+        ..Default::default()
+    };
+    CLIENT_ARGS_PLAIN.set(client_args.clone()).unwrap();
+    client_args.hostname = Some(http::HeaderValue::from_static("test-hostname"));
+    CLIENT_ARGS_HAS_HOSTNAME.set(client_args.clone()).unwrap();
+    // Set both hostname and tls_server_name to make sure they each work: i.e.
+    // tls_server_name correctly overrides hostname for the SNI part
+    client_args.tls_server_name = Some("test-sni".to_string());
+    CLIENT_ARGS_HAS_SNI.set(client_args.clone()).unwrap();
+
+    let (next_test_notify_tx, mut next_test_notify_rx) = tokio::sync::mpsc::channel(1);
+
+    let client_task = tokio::spawn(async move {
+        // First test
+        {
+            let (handler_resources, stream_command_rx, datagram_rx) =
+                crate::client::HandlerResources::create();
+            HANDLER_RESOURCES_1.set(handler_resources).unwrap();
+            let client_task = tokio::spawn(crate::client::client_main_inner(
+                CLIENT_ARGS_PLAIN.get().unwrap(),
+                HANDLER_RESOURCES_1.get().unwrap(),
+                stream_command_rx,
+                datagram_rx,
+            ));
+            next_test_notify_rx.recv().await;
+            client_task.abort();
+        }
+        // Second test
+        {
+            let (handler_resources, stream_command_rx, datagram_rx) =
+                crate::client::HandlerResources::create();
+            HANDLER_RESOURCES_2.set(handler_resources).unwrap();
+            let client_task = tokio::spawn(crate::client::client_main_inner(
+                CLIENT_ARGS_HAS_HOSTNAME.get().unwrap(),
+                HANDLER_RESOURCES_2.get().unwrap(),
+                stream_command_rx,
+                datagram_rx,
+            ));
+            next_test_notify_rx.recv().await;
+            client_task.abort();
+        }
+        // Third test
+        {
+            let (handler_resources, stream_command_rx, datagram_rx) =
+                crate::client::HandlerResources::create();
+            HANDLER_RESOURCES_3.set(handler_resources).unwrap();
+            let client_task = tokio::spawn(crate::client::client_main_inner(
+                CLIENT_ARGS_HAS_SNI.get().unwrap(),
+                HANDLER_RESOURCES_3.get().unwrap(),
+                stream_command_rx,
+                datagram_rx,
+            ));
+            next_test_notify_rx.recv().await;
+            client_task.abort();
+        }
+    });
+
+    // First test: expect both Host to be the socket address and SNI to be unset
+    let (stream, _) = listener.accept().await.unwrap();
+    let mut tls_stream = acceptor.accept(stream).await.unwrap();
+    #[cfg(feature = "__rustls")]
+    {
+    let sni = tls_stream.get_ref().1.server_name().map(|s| s.to_string());
+    assert!(sni.is_none());
+    }
+    // check the HTTP Host header
+    check_http_host(&mut tls_stream, &addr.to_string()).await;
+    next_test_notify_tx.send(()).await.unwrap();
+    // Second test: expect Host and SNI to be "test-hostname"
+    let (stream, _) = listener.accept().await.unwrap();
+    let mut tls_stream = acceptor.accept(stream).await.unwrap();
+    #[cfg(feature = "__rustls")]
+    {
+    let sni = tls_stream.get_ref().1.server_name().map(|s| s.to_string());
+    assert_eq!(sni, Some("test-hostname".to_string()));
+    }
+    check_http_host(&mut tls_stream, "test-hostname").await;
+    next_test_notify_tx.send(()).await.unwrap();
+    // Third test: expect Host to be "test-hostname" and SNI to be "test-sni"
+    let (stream, _) = listener.accept().await.unwrap();
+    let mut tls_stream = acceptor.accept(stream).await.unwrap();
+    #[cfg(feature = "__rustls")]
+    {
+    let sni = tls_stream.get_ref().1.server_name().map(|s| s.to_string());
+    assert_eq!(sni, Some("test-sni".to_string()));
+    }
+    check_http_host(&mut tls_stream, "test-hostname").await;
+    next_test_notify_tx.send(()).await.unwrap();
+    client_task.await.unwrap();
 }
 
 #[tokio::test]

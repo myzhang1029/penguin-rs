@@ -73,7 +73,7 @@ pub enum Commands {
 /// Penguin client arguments.
 #[expect(clippy::doc_markdown, clippy::pub_underscore_fields)]
 #[cfg(feature = "client")]
-#[derive(Args, Debug, Default)]
+#[derive(Args, Clone, Debug, Default)]
 pub struct ClientArgs {
     /// URL to the penguin server.
     pub server: ServerUrl,
@@ -188,13 +188,13 @@ pub struct ClientArgs {
     #[arg(short = 'H', long)]
     pub header: Vec<Header>,
     /// Optionally set the 'Host' header (defaults to the host
-    /// found in the server url). If `--tls-server-name` is not set,
+    /// found in the server url). If `tls-server-name` is not set,
     /// this value will also be used as the TLS Server Name.
     #[arg(long)]
     pub hostname: Option<HeaderValue>,
     /// Optionally set the TLS Server Name for the SNI field.
-    /// Defaults to the value passed to `--hostname`, or the host
-    /// found in the server url.
+    /// Defaults to the value passed to `hostname`, or the host
+    /// found in the server url if `hostname` is not set.
     #[arg(long)]
     pub tls_server_name: Option<String>,
     /// An optional root certificate bundle used to verify the
