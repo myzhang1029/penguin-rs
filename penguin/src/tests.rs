@@ -2,7 +2,6 @@ use super::*;
 use crate::tls::make_tls_identity;
 use crate::{arg::ServerUrl, parse_remote::Remote};
 use penguin_mux::timing::OptionalDuration;
-use tracing::debug;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 #[allow(unused_imports)]
 use std::sync::{LazyLock, OnceLock};
@@ -11,6 +10,7 @@ use std::{str::FromStr, time::Duration};
 use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
+use tracing::debug;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 pub fn setup_logging() {
@@ -475,10 +475,7 @@ async fn test_tls_reload() {
     server_task.abort();
 }
 
-async fn check_http_host<T: AsyncRead + Unpin>(
-    stream: &mut T,
-    expected_host: &str,
-) {
+async fn check_http_host<T: AsyncRead + Unpin>(stream: &mut T, expected_host: &str) {
     let mut reader = tokio::io::BufReader::new(stream);
     let mut buf = String::new();
     while reader.read_line(&mut buf).await.unwrap() > 0 {
@@ -597,8 +594,8 @@ async fn test_http_host_and_sni() {
     let mut tls_stream = acceptor.accept(stream).await.unwrap();
     #[cfg(feature = "__rustls")]
     {
-    let sni = tls_stream.get_ref().1.server_name().map(|s| s.to_string());
-    assert!(sni.is_none());
+        let sni = tls_stream.get_ref().1.server_name().map(|s| s.to_string());
+        assert!(sni.is_none());
     }
     // check the HTTP Host header
     check_http_host(&mut tls_stream, &addr.to_string()).await;
@@ -608,8 +605,8 @@ async fn test_http_host_and_sni() {
     let mut tls_stream = acceptor.accept(stream).await.unwrap();
     #[cfg(feature = "__rustls")]
     {
-    let sni = tls_stream.get_ref().1.server_name().map(|s| s.to_string());
-    assert_eq!(sni, Some("test-hostname".to_string()));
+        let sni = tls_stream.get_ref().1.server_name().map(|s| s.to_string());
+        assert_eq!(sni, Some("test-hostname".to_string()));
     }
     check_http_host(&mut tls_stream, "test-hostname").await;
     next_test_notify_tx.send(()).await.unwrap();
@@ -618,8 +615,8 @@ async fn test_http_host_and_sni() {
     let mut tls_stream = acceptor.accept(stream).await.unwrap();
     #[cfg(feature = "__rustls")]
     {
-    let sni = tls_stream.get_ref().1.server_name().map(|s| s.to_string());
-    assert_eq!(sni, Some("test-sni".to_string()));
+        let sni = tls_stream.get_ref().1.server_name().map(|s| s.to_string());
+        assert_eq!(sni, Some("test-sni".to_string()));
     }
     check_http_host(&mut tls_stream, "test-hostname").await;
     next_test_notify_tx.send(()).await.unwrap();
