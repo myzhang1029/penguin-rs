@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use crate::frame::{FinalizedFrame, Frame};
-use crate::loom::{Arc, AtomicBool, AtomicU32, AtomicWaker, Ordering};
-use bytes::{Buf, Bytes};
+use crate::loom::{Arc, AtomicBool, AtomicU32, AtomicWaker, Mutex, Ordering};
+use bytes::{Buf, Bytes, BytesMut};
 use std::io;
 use std::io::ErrorKind::BrokenPipe;
 use std::pin::Pin;
@@ -126,6 +126,198 @@ impl AsyncWrite for MuxStream {
     #[inline]
     fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         Poll::Ready(self.shutdown_inner())
+    }
+}
+
+#[derive(Debug)]
+struct SimpleDuplexStream {
+    pub buf_us: Arc<Mutex<BytesMut>>,
+    pub buf_other: Arc<Mutex<BytesMut>>,
+    pub us_dropped: Arc<AtomicBool>,
+    pub other_dropped: Arc<AtomicBool>,
+    pub us_read_waker: Arc<AtomicWaker>,
+    pub other_read_waker: Arc<AtomicWaker>,
+}
+
+impl SimpleDuplexStream {
+    #[inline]
+    fn new() -> (Self, Self) {
+        let buf1 = Arc::new(Mutex::new(BytesMut::new()));
+        let buf2 = Arc::new(Mutex::new(BytesMut::new()));
+        let left = Self {
+            buf_us: buf1.clone(),
+            buf_other: buf2.clone(),
+            us_dropped: Arc::new(AtomicBool::new(false)),
+            other_dropped: Arc::new(AtomicBool::new(false)),
+            us_read_waker: Arc::new(AtomicWaker::new()),
+            other_read_waker: Arc::new(AtomicWaker::new()),
+        };
+        let right = Self {
+            buf_us: buf2,
+            buf_other: buf1,
+            us_dropped: left.other_dropped.clone(),
+            other_dropped: left.us_dropped.clone(),
+            us_read_waker: left.other_read_waker.clone(),
+            other_read_waker: left.us_read_waker.clone(),
+        };
+        (left, right)
+    }
+}
+
+impl Drop for SimpleDuplexStream {
+    fn drop(&mut self) {
+        self.us_dropped.store(true, Ordering::SeqCst);
+        self.other_read_waker.wake();
+    }
+}
+
+impl AsyncRead for SimpleDuplexStream {
+    #[inline]
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let mut guard = self.buf_us.lock();
+        if guard.is_empty() {
+            if self.other_dropped.load(Ordering::SeqCst) {
+                // EOF
+                println!("read eof {:?}", &self as *const _);
+                return Poll::Ready(Ok(()));
+            }
+            // Register waker and return Pending
+            self.us_read_waker.register(cx.waker());
+            println!("read pending {:?}", &self as *const _);
+            return Poll::Pending;
+        }
+        let amt = std::cmp::min(guard.len(), buf.remaining());
+        buf.put_slice(&guard[..amt]);
+        guard.advance(amt);
+        println!("read {amt} bytes {:?}", &self as *const _);
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl AsyncWrite for SimpleDuplexStream {
+    #[inline]
+    fn poll_write(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        let mut guard = self.buf_other.lock();
+        guard.extend_from_slice(buf);
+        println!("wrote {} bytes {:?}", buf.len(), &self as *const _);
+        self.other_read_waker.wake();
+        Poll::Ready(Ok(buf.len()))
+    }
+
+    #[inline]
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        // Always flushed
+        Poll::Ready(Ok(()))
+    }
+
+    #[inline]
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.us_dropped.store(true, Ordering::SeqCst);
+        self.other_read_waker.wake();
+        println!("shutdown {:?}", &self as *const _);
+        Poll::Ready(Ok(()))
+    }
+}
+
+#[derive(Debug)]
+struct SimpleBufReader<R> {
+    pub(super) inner: R,
+    pub(super) buf: Box<[u8]>,
+    pub(super) pos: usize,
+    pub(super) cap: usize,
+}
+
+impl<R> SimpleBufReader<R> {
+    #[inline]
+    fn new(inner: R) -> Self {
+        let buffer = vec![0; 8192];
+        Self {
+            inner,
+            buf: buffer.into_boxed_slice(),
+            pos: 0,
+            cap: 0,
+        }
+    }
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for SimpleBufReader<R> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        // If we don't have any buffered data and we're doing a massive read
+        // (larger than our internal buffer), bypass our internal buffer
+        // entirely.
+        if self.pos == self.cap && buf.remaining() >= self.buf.len() {
+            let res = ready!(self.as_mut().poll_read(cx, buf));
+            self.pos = 0;
+            self.cap = 0;
+            return Poll::Ready(res);
+        }
+        let rem = ready!(self.as_mut().poll_fill_buf(cx))?;
+        let amt = std::cmp::min(rem.len(), buf.remaining());
+        buf.put_slice(&rem[..amt]);
+        self.consume(amt);
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl<R> AsyncBufRead for SimpleBufReader<R>
+where
+    R: AsyncRead + Unpin,
+{
+    fn poll_fill_buf(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<&[u8]>> {
+        // If we've reached the end of our internal buffer then we need to fetch
+        // some more data from the underlying reader.
+        // Branch using `>=` instead of the more correct `==`
+        // to tell the compiler that the pos..cap slice is always valid.
+        if self.pos >= self.cap {
+            debug_assert!(self.pos == self.cap);
+            let this = self.as_mut().get_mut();
+            let mut buf = tokio::io::ReadBuf::new(&mut this.buf);
+            println!("polling inner to fill buf");
+            ready!(Pin::new(&mut this.inner).poll_read(cx, &mut buf))?;
+            println!("filled buf");
+            this.cap = buf.filled().len();
+            this.pos = 0;
+        }
+        let pos = self.pos;
+        let cap = self.cap;
+        Poll::Ready(Ok(&self.get_mut().buf[pos..cap]))
+    }
+
+    fn consume(mut self: Pin<&mut Self>, amt: usize) {
+        self.pos = std::cmp::min(self.pos + amt, self.cap);
+    }
+}
+
+impl<RW: AsyncWrite + Unpin> AsyncWrite for SimpleBufReader<RW> {
+    #[inline]
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    #[inline]
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    #[inline]
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
     }
 }
 
@@ -272,11 +464,11 @@ impl MuxStream {
     /// This function is not cancel safe. Cancelling the future might cause
     /// data loss.
     #[inline]
-    pub fn into_copy_bidirectional<RW>(self, other: RW) -> CopyBidirectional<BufReader<RW>>
+    pub fn into_copy_bidirectional<RW>(self, other: RW) -> CopyBidirectional<SimpleBufReader<RW>>
     where
         RW: AsyncRead + AsyncWrite + Unpin,
     {
-        let other_bufreader = BufReader::new(other);
+        let other_bufreader = SimpleBufReader::new(other);
         self.into_copy_bidirectional_with_buf(other_bufreader)
     }
 
@@ -335,6 +527,7 @@ where
                 loop {
                     trace!("polling us");
                     let new_buf = ready!(Pin::new(&mut self.us).poll_fill_buf(cx))?;
+                    trace!("got {} bytes", new_buf.len());
                     if new_buf.is_empty() {
                         // Our side EOF
                         self.read_state = ReadState::ShuttingDown(read_amt);
@@ -375,8 +568,12 @@ where
                 loop {
                     let mut other = Pin::new(&mut self.other);
                     trace!("polling other");
-                    let new_buf = if let Poll::Ready(res) = other.as_mut().poll_fill_buf(cx) {
-                        res?
+                    println!("indeed polling other");
+                    let new_buf = if let Poll::Ready(res) = dbg!(other.as_mut().poll_fill_buf(cx)) {
+                        trace!("other returned {res:?}");
+                        let res = res?;
+                        trace!("got {} bytes", res.len());
+                        res
                     } else {
                         // Pending. Might want to flush away the data
                         trace!("flushing other");
@@ -415,6 +612,7 @@ where
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let r = self.poll_read_us(cx);
         let w = self.poll_write_us(cx);
+        println!("polled copy_bidirectional: read={:?}, write={:?}", r, w);
         Poll::Ready(Ok((ready!(r)?, ready!(w)?)))
     }
 }
@@ -677,7 +875,7 @@ mod tests {
                 let (rx_frame_tx, rx_frame_rx) = mpsc::channel(DEFAULT_RWND_THRESHOLD as usize);
                 let (tx_frame_tx, mut tx_frame_rx) = mpsc::unbounded_channel();
                 let (dropped_ports_tx, _) = mpsc::unbounded_channel();
-                let (other_stream, mut check_side) = tokio::io::duplex(1024);
+                let (other_stream, mut check_side) = SimpleDuplexStream::new();
 
                 let mux_stream = MuxStream {
                     frame_rx: rx_frame_rx,
@@ -706,21 +904,27 @@ mod tests {
                     let rs = Pin::new(&mut check_side).poll_read(&mut cx, &mut rbuf);
                     assert!(matches!(rs, Poll::Pending));
 
-                    // Send data to the MuxStream
+                    // Send data into the MuxStream to be piped to the DuplexStream side
                     rx_frame_tx.send(TX1.dupe()).await.unwrap();
+                    println!("Sent TX1");
                     let size = check_side.read(&mut buf).await.unwrap();
                     // Should be ready
                     assert_eq!(size, TX1.len());
                     assert_eq!(&buf[..size], TX1);
+                    println!("Received TX1");
 
-                    // Write to the AsyncWrite side
+                    // Write from the DuplexStream side
                     check_side.write_all(&RX1).await.unwrap();
+                    println!("Sent RX1");
                     // This side has buffering
                     check_side.flush().await.unwrap();
+                    println!("Flushed RX1");
 
                     // Verify data was sent to the remote peer
                     let frame = tx_frame_rx.recv().await.unwrap();
+                    println!("Received frame for RX1");
                     let frame = Frame::try_from(frame).unwrap();
+                    println!("Parsed frame for RX1");
                     assert_eq!(frame.id, 1);
                     if let crate::frame::Payload::Push(push) = frame.payload {
                         assert_eq!(push.as_ref(), RX1);
@@ -732,18 +936,24 @@ mod tests {
                     // data isn't lost in the process
                     rx_frame_tx.send(TX2.dupe()).await.unwrap();
                     drop(rx_frame_tx);
+                    println!("Sent TX2 and closed rx_frame_tx");
                     // Check that the data is not lost
                     let read = check_side.read(&mut buf).await.unwrap();
                     assert_eq!(read, TX2.len());
                     assert_eq!(&buf[..read], TX2);
+                    println!("Received TX2");
                     // Make sure this side is getting EOF
                     let m = check_side.read(&mut buf).await.unwrap();
                     assert_eq!(m, 0);
+                    println!("Received EOF on check_side read");
                     // Make sure that only this side is closed and not the other side
                     check_side.write_all(&RX2).await.unwrap();
+                    println!("Sent RX2");
                     check_side.flush().await.unwrap();
+                    println!("Flushed RX2");
                     // Check that this side is still open
                     let frame = tx_frame_rx.recv().await.unwrap();
+                    println!("Received frame for RX2");
                     let frame = Frame::try_from(frame).unwrap();
                     assert_eq!(frame.id, 1);
                     if let crate::frame::Payload::Push(push) = frame.payload {
@@ -751,9 +961,12 @@ mod tests {
                     } else {
                         panic!("Expected a `Push` frame");
                     }
+                    println!("Will send RX3 and shutdown");
                     // Again short data before we go away
                     check_side.write_all(&RX3).await.unwrap();
+                    println!("Sent RX3");
                     check_side.shutdown().await.unwrap();
+                    println!("Shutdown check_side");
                     // Check that the data is not lost
                     let frame = tx_frame_rx.recv().await.unwrap();
                     let frame = Frame::try_from(frame).unwrap();
@@ -779,6 +992,7 @@ mod tests {
             const TEST_ACK_THRESHOLD_U32: u32 = 5;
             assert_eq!(TEST_ACK_THRESHOLD, TEST_ACK_THRESHOLD_U32 as usize);
             setup_logging();
+            println!("1");
             loom::model(|| {
                 let (rx_frame_tx, rx_frame_rx) = mpsc::channel(TEST_ACK_THRESHOLD);
                 let (tx_frame_tx, mut tx_frame_rx) = mpsc::unbounded_channel();
@@ -799,10 +1013,12 @@ mod tests {
                     rwnd_threshold: TEST_ACK_THRESHOLD_U32,
                 };
 
+                println!("2");
+
                 block_on(async {
                     // First clog the congestion window
                     for i in 0..TEST_ACK_THRESHOLD {
-                        debug!("sending frame {i}");
+                        debug!("sending for congestion frame {i}");
                         rx_frame_tx
                             .send(Bytes::from_static(b"hello"))
                             .await
@@ -828,10 +1044,12 @@ mod tests {
                         panic!("Expected an `Acknowledge` frame");
                     }
                 });
+                println!("3");
                 // Now test with `copy_bidirectional`
                 let task = thread::spawn(move || {
                     block_on(mux_stream.into_copy_bidirectional(other_stream))
                 });
+                println!("4");
                 block_on(async {
                     for i in 0..2 * TEST_ACK_THRESHOLD {
                         debug!("sending frame {i}");
