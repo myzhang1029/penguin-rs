@@ -54,7 +54,7 @@ webpki-roots = { version = "1", optional = true }
 [dev-dependencies]
 divan = "0.1"
 rand = "0.9"
-rcgen = { version = "0.14", features = ["crypto", "pem"], default-features = false }
+rcgen = { version = "0.14", features = ["pem"], default-features = false }
 tempfile = "3"
 # Hack; https://stackoverflow.com/q/73015087
 rusty-penguin = { path = ".", default-features = false, features = ["dev-dependencies"] }
