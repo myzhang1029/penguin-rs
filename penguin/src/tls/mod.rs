@@ -39,9 +39,6 @@ pub use maybe_tls::MaybeTlsStream;
 #[expect(clippy::module_name_repetitions)]
 pub type TlsIdentity = Arc<ArcSwap<TlsIdentityInner>>;
 
-/// HTTP/2 ALPN protocols
-pub const TLS_ALPN: [&str; 2] = ["h2", "http/1.1"];
-
 /// Error type for TLS configuration
 #[derive(Error, Debug)]
 pub enum Error {
@@ -89,7 +86,7 @@ pub async fn tls_connect(
     tls_insecure: bool,
 ) -> Result<TlsStream<tokio::net::TcpStream>, Error> {
     let config =
-        make_client_config(tls_cert, tls_key, tls_ca, tls_insecure, Some(&TLS_ALPN)).await?;
+        make_client_config(tls_cert, tls_key, tls_ca, tls_insecure, Some(&["http/1.1"])).await?;
     let tcp_stream = tokio::net::TcpStream::connect((host, port))
         .await
         .map_err(Error::TcpConnect)?;

@@ -353,14 +353,11 @@ mod tests {
             None,
             Some(ca_path.to_str().unwrap()),
             true,
-            Some(&crate::tls::TLS_ALPN),
+            Some(&["http/1.1"]),
         )
         .await
         .unwrap();
-        assert_eq!(
-            config.alpn_protocols,
-            vec![b"h2".to_vec(), b"http/1.1".to_vec()]
-        );
+        assert_eq!(config.alpn_protocols, vec![b"http/1.1".to_vec()]);
     }
 
     #[tokio::test]
