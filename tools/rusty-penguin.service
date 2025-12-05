@@ -26,6 +26,8 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=true
 RestrictRealtime=true
 SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
 UMask=0077
 # Use these for TLS settings
 # LoadCredential=fullchain.pem:$PENGUIN_TLS_FULLCHAIN
