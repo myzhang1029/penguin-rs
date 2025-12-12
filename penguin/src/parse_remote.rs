@@ -63,6 +63,7 @@ pub enum RemoteSpec {
     Inet((String, u16)),
     /// Function as a SOCKS proxy
     Socks,
+    /// Configure the listen socket for Transparent Proxy
     Tproxy,
 }
 
@@ -75,26 +76,29 @@ pub enum Protocol {
     Udp,
 }
 
-/// Errors that can occur when parsing a remote.
+/// Errors that can occur when parsing a remote
 #[derive(Clone, Error, Debug, PartialEq, Eq)]
 pub enum Error {
-    /// Invalid remote specification
-    #[error("Invalid format")]
-    Format,
+    /// IPv6 address missing closing bracket
+    #[error("missing closing `]` in IPv6")]
+    BracketMismatch,
+    /// Unexpected character after an IPv6 address
+    #[error("found garbage following IPv6 (first offending character `{0}`)")]
+    GarbageAfterAddress(char),
+    #[error("invalid port or unexpected host `{0}`: {1:?}")]
+    Port(String, std::num::IntErrorKind),
     /// Invalid protocol
-    #[error("Invalid protocol")]
-    Protocol,
-    /// Invalid host or address
-    #[error("Invalid host")]
-    Host,
-    /// Invalid port
-    #[error("Invalid port")]
-    Port(#[from] std::num::ParseIntError),
-    /// UDP cannot be used with SOCKS
+    #[error("invalid protocol `{0}`")]
+    Protocol(String),
+    /// TProxy needs a socket to listen on
+    #[error("stdio cannot accept Transparent Proxy")]
+    StdioTproxy,
+    /// Too many segments
+    #[error("found more than four colon-separated segments")]
+    TooManySegments,
+    /// SOCKS listen endpoint cannot be UDP
     #[error("socks remote must be TCP")]
     UdpSocks,
-    #[error("stdio cannot work with Transparent Proxy")]
-    StdioTproxy,
 }
 
 impl Display for Protocol {
@@ -113,7 +117,7 @@ impl FromStr for Protocol {
         match s.to_lowercase().as_str() {
             "tcp" => Ok(Self::Tcp),
             "udp" => Ok(Self::Udp),
-            _ => Err(Error::Protocol),
+            other => Err(Error::Protocol(other.to_string())),
         }
     }
 }
@@ -123,21 +127,34 @@ impl FromStr for Protocol {
 fn tokenize_remote(s: &str) -> Result<Vec<&str>, Error> {
     let mut tokens = Vec::new();
     let mut stuff = s;
+    macro_rules! check_too_many_and_push {
+        ($token:expr) => {
+            if tokens.len() >= 4 {
+                // Check for this early to reduce work in the error case
+                return Err(Error::TooManySegments);
+            }
+            tokens.push($token);
+        };
+    }
     loop {
         // IPv6 address in brackets
         if stuff.starts_with('[') {
-            let end = stuff.find(']').ok_or(Error::Host)? + 1;
-            tokens.push(&stuff[..end]);
+            // `end` is a byte index on UTF-8 boundaries
+            let end = stuff.find(']').ok_or(Error::BracketMismatch)? + 1;
+            check_too_many_and_push!(&stuff[..end]);
             // Now stuff[end..] should start with ':', so we assert that and skip it.
-            if !stuff[end..].is_empty() && !stuff[end..].starts_with(':') {
-                return Err(Error::Format);
+            let following = stuff[end..].chars().next();
+            if let Some(ch) = following
+                && ch != ':'
+            {
+                return Err(Error::GarbageAfterAddress(ch));
             }
             stuff = &stuff[end + 1..];
         } else if let Some((token, rest)) = stuff.split_once(':') {
-            tokens.push(token);
+            check_too_many_and_push!(token);
             stuff = rest;
         } else {
-            tokens.push(stuff);
+            check_too_many_and_push!(stuff);
             return Ok(tokens);
         }
     }
@@ -177,6 +194,13 @@ impl FromStr for Remote {
     /// Parse a remote specification.
     #[expect(clippy::too_many_lines)]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        macro_rules! parse_port_or_bail {
+            ($port_str:expr) => {
+                $port_str
+                    .parse::<u16>()
+                    .map_err(|e| Error::Port($port_str.to_string(), *e.kind()))
+            };
+        }
         let (rest, proto) = match s.rsplit_once('/') {
             Some((rest, proto)) => (rest, proto.parse()?),
             None => (s, Protocol::Tcp),
@@ -195,8 +219,8 @@ impl FromStr for Remote {
                 protocol: proto,
             }),
             [port] => Ok(Self {
-                local_addr: LocalSpec::Inet((default_host!(unspec), port.parse()?)),
-                remote_addr: RemoteSpec::Inet((default_host!(local), port.parse()?)),
+                local_addr: LocalSpec::Inet((default_host!(unspec), parse_port_or_bail!(port)?)),
+                remote_addr: RemoteSpec::Inet((default_host!(local), parse_port_or_bail!(port)?)),
                 protocol: proto,
             }),
             // Two elements: either "socks" or "tproxy" and local port number, or remote host and port number.
@@ -207,23 +231,26 @@ impl FromStr for Remote {
             }),
             ["stdio", "tproxy"] => Err(Error::StdioTproxy),
             [port, "socks"] => Ok(Self {
-                local_addr: LocalSpec::Inet((default_host!(local), port.parse()?)),
+                local_addr: LocalSpec::Inet((default_host!(local), parse_port_or_bail!(port)?)),
                 remote_addr: RemoteSpec::Socks,
                 protocol: proto,
             }),
             [port, "tproxy"] => Ok(Self {
-                local_addr: LocalSpec::Inet((default_host!(local), port.parse()?)),
+                local_addr: LocalSpec::Inet((default_host!(local), parse_port_or_bail!(port)?)),
                 remote_addr: RemoteSpec::Tproxy,
                 protocol: proto,
             }),
             ["stdio", port] => Ok(Self {
                 local_addr: LocalSpec::Stdio,
-                remote_addr: RemoteSpec::Inet((default_host!(local), port.parse()?)),
+                remote_addr: RemoteSpec::Inet((default_host!(local), parse_port_or_bail!(port)?)),
                 protocol: proto,
             }),
             [host, port] => Ok(Self {
-                local_addr: LocalSpec::Inet((default_host!(unspec), port.parse()?)),
-                remote_addr: RemoteSpec::Inet((remove_brackets(host).to_string(), port.parse()?)),
+                local_addr: LocalSpec::Inet((default_host!(unspec), parse_port_or_bail!(port)?)),
+                remote_addr: RemoteSpec::Inet((
+                    remove_brackets(host).to_string(),
+                    parse_port_or_bail!(port)?,
+                )),
                 protocol: proto,
             }),
             // Three elements:
@@ -234,14 +261,14 @@ impl FromStr for Remote {
                 local_addr: LocalSpec::Stdio,
                 remote_addr: RemoteSpec::Inet((
                     remove_brackets(remote_host).to_string(),
-                    remote_port.parse()?,
+                    parse_port_or_bail!(remote_port)?,
                 )),
                 protocol: proto,
             }),
             [local_host, local_port, "socks"] => Ok(Self {
                 local_addr: LocalSpec::Inet((
                     remove_brackets(local_host).to_string(),
-                    local_port.parse()?,
+                    parse_port_or_bail!(local_port)?,
                 )),
                 remote_addr: RemoteSpec::Socks,
                 protocol: proto,
@@ -249,31 +276,41 @@ impl FromStr for Remote {
             [local_host, local_port, "tproxy"] => Ok(Self {
                 local_addr: LocalSpec::Inet((
                     remove_brackets(local_host).to_string(),
-                    local_port.parse()?,
+                    parse_port_or_bail!(local_port)?,
                 )),
                 remote_addr: RemoteSpec::Tproxy,
                 protocol: proto,
             }),
             [local_port, remote_host, remote_port] => Ok(Self {
-                local_addr: LocalSpec::Inet((default_host!(unspec), local_port.parse()?)),
+                local_addr: LocalSpec::Inet((
+                    default_host!(unspec),
+                    parse_port_or_bail!(local_port)?,
+                )),
                 remote_addr: RemoteSpec::Inet((
                     remove_brackets(remote_host).to_string(),
-                    remote_port.parse()?,
+                    parse_port_or_bail!(remote_port)?,
                 )),
                 protocol: proto,
             }),
             [local_host, local_port, remote_host, remote_port] => Ok(Self {
                 local_addr: LocalSpec::Inet((
                     remove_brackets(local_host).to_string(),
-                    local_port.parse()?,
+                    parse_port_or_bail!(local_port)?,
                 )),
                 remote_addr: RemoteSpec::Inet((
                     remove_brackets(remote_host).to_string(),
-                    remote_port.parse()?,
+                    parse_port_or_bail!(remote_port)?,
                 )),
                 protocol: proto,
             }),
-            _ => Err(Error::Format),
+            _ => {
+                // This should be unreachable since we check in `tokenize_remote`
+                debug_assert!(
+                    false,
+                    "`tokenize_remote` did not catch too many segments (this is a bug)"
+                );
+                Err(Error::TooManySegments)
+            }
         };
         // I love Rust's pattern matching
         // (this sentence is written by GitHub Copilot)
@@ -363,10 +400,10 @@ mod tests {
                 },
             ),
             (
-                "示例網站.com:80",
+                "テスト.net:80",
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(unspec), 80)),
-                    remote_addr: RemoteSpec::Inet((String::from("示例網站.com"), 80)),
+                    remote_addr: RemoteSpec::Inet((String::from("テスト.net"), 80)),
                     protocol: Protocol::Tcp,
                 },
             ),
@@ -499,14 +536,20 @@ mod tests {
                 },
             ),
             (
-                "localhost:5354:[2001:4860:4860:0:0:0:0:8888]:53/udp",
+                "localhost:5354:[2001:db8:4860:0:0:0:0:8888]:53/udp",
                 Remote {
                     local_addr: LocalSpec::Inet((String::from("localhost"), 5354)),
-                    remote_addr: RemoteSpec::Inet((
-                        String::from("2001:4860:4860:0:0:0:0:8888"),
-                        53,
-                    )),
+                    remote_addr: RemoteSpec::Inet((String::from("2001:db8:4860:0:0:0:0:8888"), 53)),
                     protocol: Protocol::Udp,
+                },
+            ),
+            (
+                // Make sure your editor supports mixed LTR and RTL before editing this line
+                "آزمایشی.com:123:δοκιμή.net:9999/tcp",
+                Remote {
+                    local_addr: LocalSpec::Inet((String::from("آزمایشی.com"), 123)),
+                    remote_addr: RemoteSpec::Inet((String::from("δοκιμή.net"), 9999)),
+                    protocol: Protocol::Tcp,
                 },
             ),
             (
@@ -550,15 +593,43 @@ mod tests {
             let reparsed = actual.to_string().parse::<Remote>().unwrap();
             assert_eq!(reparsed, *expected);
         }
-        "just_a_hostname".parse::<Remote>().unwrap_err();
-        "socks/udp".parse::<Remote>().unwrap_err();
-        assert!(matches!(
-            "socks/udp".parse::<Remote>().unwrap_err(),
-            Error::UdpSocks
-        ));
-        assert!(matches!(
-            "stdio:tproxy".parse::<Remote>().unwrap_err(),
-            Error::StdioTproxy
-        ));
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn test_parse_remote_bad() {
+        crate::tests::setup_logging();
+        let tests: &[(&str, Error)] = &[
+            (
+                "just_a_hostname",
+                Error::Port(
+                    String::from("just_a_hostname"),
+                    std::num::IntErrorKind::InvalidDigit,
+                ),
+            ),
+            (
+                "99999",
+                Error::Port(String::from("99999"), std::num::IntErrorKind::PosOverflow),
+            ),
+            ("::::", Error::TooManySegments),
+            (
+                "host:port",
+                Error::Port(String::from("port"), std::num::IntErrorKind::InvalidDigit),
+            ),
+            // More of just abusing Rust's UTF-8 support
+            ("[::1]إختبار:80", Error::GarbageAfterAddress('إ')),
+            ("[::1:80", Error::BracketMismatch),
+            (
+                "[::1]:99/nonsense",
+                Error::Protocol(String::from("nonsense")),
+            ),
+            ("socks/udp", Error::UdpSocks),
+            ("stdio:tproxy", Error::StdioTproxy),
+        ];
+        for (s, expected) in tests {
+            // Test that an incorrect format is rejected with the correct error
+            let actual = s.parse::<Remote>().unwrap_err();
+            assert_eq!(actual, *expected);
+        }
     }
 }
