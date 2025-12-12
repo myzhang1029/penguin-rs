@@ -79,8 +79,11 @@ pub enum Protocol {
 /// Errors that can occur when parsing a remote
 #[derive(Clone, Error, Debug, PartialEq, Eq)]
 pub enum Error {
+    /// IPv6 address empty bracket
+    #[error("missing address inside brackets")]
+    AddressEmpty,
     /// IPv6 address missing closing bracket
-    #[error("missing closing `]` in IPv6")]
+    #[error("missing closing `]`")]
     BracketMismatch,
     /// Unexpected character after an IPv6 address
     #[error("found garbage following IPv6 (first offending character `{0}`)")]
@@ -149,7 +152,7 @@ fn tokenize_remote(s: &str) -> Result<Vec<&str>, Error> {
             {
                 return Err(Error::GarbageAfterAddress(ch));
             }
-            stuff = &stuff[end + 1..];
+            stuff = stuff.get(end + 1..).ok_or(Error::AddressEmpty)?;
         } else if let Some((token, rest)) = stuff.split_once(':') {
             check_too_many_and_push!(token);
             stuff = rest;
