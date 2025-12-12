@@ -90,7 +90,7 @@ pub enum Error {
     /// Invalid protocol
     #[error("invalid protocol `{0}`")]
     Protocol(String),
-    /// TProxy needs a socket to listen on
+    /// `TProxy` needs a socket to listen on
     #[error("stdio cannot accept Transparent Proxy")]
     StdioTproxy,
     /// Too many segments
@@ -198,7 +198,7 @@ impl FromStr for Remote {
             ($port_str:expr) => {
                 $port_str
                     .parse::<u16>()
-                    .map_err(|e| Error::Port($port_str.to_string(), *e.kind()))
+                    .map_err(|e| Error::Port($port_str.to_string(), *e.kind()))?
             };
         }
         let (rest, proto) = match s.rsplit_once('/') {
@@ -208,121 +208,121 @@ impl FromStr for Remote {
         let tokens = tokenize_remote(rest)?;
         let result = match tokens[..] {
             // One element: either "socks", "tproxy" or a port number.
-            ["socks"] => Ok(Self {
+            ["socks"] => Self {
                 local_addr: LocalSpec::Inet((default_host!(local), SOCKS_DEFAULT_PORT)),
                 remote_addr: RemoteSpec::Socks,
                 protocol: proto,
-            }),
-            ["tproxy"] => Ok(Self {
+            },
+            ["tproxy"] => Self {
                 local_addr: LocalSpec::Inet((default_host!(local), TPROXY_DEFAULT_PORT)),
                 remote_addr: RemoteSpec::Tproxy,
                 protocol: proto,
-            }),
-            [port] => Ok(Self {
-                local_addr: LocalSpec::Inet((default_host!(unspec), parse_port_or_bail!(port)?)),
-                remote_addr: RemoteSpec::Inet((default_host!(local), parse_port_or_bail!(port)?)),
+            },
+            [port] => Self {
+                local_addr: LocalSpec::Inet((default_host!(unspec), parse_port_or_bail!(port))),
+                remote_addr: RemoteSpec::Inet((default_host!(local), parse_port_or_bail!(port))),
                 protocol: proto,
-            }),
+            },
             // Two elements: either "socks" or "tproxy" and local port number, or remote host and port number.
-            ["stdio", "socks"] => Ok(Self {
+            ["stdio", "socks"] => Self {
                 local_addr: LocalSpec::Stdio,
                 remote_addr: RemoteSpec::Socks,
                 protocol: proto,
-            }),
-            ["stdio", "tproxy"] => Err(Error::StdioTproxy),
-            [port, "socks"] => Ok(Self {
-                local_addr: LocalSpec::Inet((default_host!(local), parse_port_or_bail!(port)?)),
+            },
+            ["stdio", "tproxy"] => return Err(Error::StdioTproxy),
+            [port, "socks"] => Self {
+                local_addr: LocalSpec::Inet((default_host!(local), parse_port_or_bail!(port))),
                 remote_addr: RemoteSpec::Socks,
                 protocol: proto,
-            }),
-            [port, "tproxy"] => Ok(Self {
-                local_addr: LocalSpec::Inet((default_host!(local), parse_port_or_bail!(port)?)),
+            },
+            [port, "tproxy"] => Self {
+                local_addr: LocalSpec::Inet((default_host!(local), parse_port_or_bail!(port))),
                 remote_addr: RemoteSpec::Tproxy,
                 protocol: proto,
-            }),
-            ["stdio", port] => Ok(Self {
+            },
+            ["stdio", port] => Self {
                 local_addr: LocalSpec::Stdio,
-                remote_addr: RemoteSpec::Inet((default_host!(local), parse_port_or_bail!(port)?)),
+                remote_addr: RemoteSpec::Inet((default_host!(local), parse_port_or_bail!(port))),
                 protocol: proto,
-            }),
-            [host, port] => Ok(Self {
-                local_addr: LocalSpec::Inet((default_host!(unspec), parse_port_or_bail!(port)?)),
+            },
+            [host, port] => Self {
+                local_addr: LocalSpec::Inet((default_host!(unspec), parse_port_or_bail!(port))),
                 remote_addr: RemoteSpec::Inet((
                     remove_brackets(host).to_string(),
-                    parse_port_or_bail!(port)?,
+                    parse_port_or_bail!(port),
                 )),
                 protocol: proto,
-            }),
+            },
             // Three elements:
             // - "stdio", remote host, and port number,
             // - local host, local port number, and "socks", or
             // - local port number, remote host, and port number.
-            ["stdio", remote_host, remote_port] => Ok(Self {
+            ["stdio", remote_host, remote_port] => Self {
                 local_addr: LocalSpec::Stdio,
                 remote_addr: RemoteSpec::Inet((
                     remove_brackets(remote_host).to_string(),
-                    parse_port_or_bail!(remote_port)?,
+                    parse_port_or_bail!(remote_port),
                 )),
                 protocol: proto,
-            }),
-            [local_host, local_port, "socks"] => Ok(Self {
+            },
+            [local_host, local_port, "socks"] => Self {
                 local_addr: LocalSpec::Inet((
                     remove_brackets(local_host).to_string(),
-                    parse_port_or_bail!(local_port)?,
+                    parse_port_or_bail!(local_port),
                 )),
                 remote_addr: RemoteSpec::Socks,
                 protocol: proto,
-            }),
-            [local_host, local_port, "tproxy"] => Ok(Self {
+            },
+            [local_host, local_port, "tproxy"] => Self {
                 local_addr: LocalSpec::Inet((
                     remove_brackets(local_host).to_string(),
-                    parse_port_or_bail!(local_port)?,
+                    parse_port_or_bail!(local_port),
                 )),
                 remote_addr: RemoteSpec::Tproxy,
                 protocol: proto,
-            }),
-            [local_port, remote_host, remote_port] => Ok(Self {
+            },
+            [local_port, remote_host, remote_port] => Self {
                 local_addr: LocalSpec::Inet((
                     default_host!(unspec),
-                    parse_port_or_bail!(local_port)?,
+                    parse_port_or_bail!(local_port),
                 )),
                 remote_addr: RemoteSpec::Inet((
                     remove_brackets(remote_host).to_string(),
-                    parse_port_or_bail!(remote_port)?,
+                    parse_port_or_bail!(remote_port),
                 )),
                 protocol: proto,
-            }),
-            [local_host, local_port, remote_host, remote_port] => Ok(Self {
+            },
+            [local_host, local_port, remote_host, remote_port] => Self {
                 local_addr: LocalSpec::Inet((
                     remove_brackets(local_host).to_string(),
-                    parse_port_or_bail!(local_port)?,
+                    parse_port_or_bail!(local_port),
                 )),
                 remote_addr: RemoteSpec::Inet((
                     remove_brackets(remote_host).to_string(),
-                    parse_port_or_bail!(remote_port)?,
+                    parse_port_or_bail!(remote_port),
                 )),
                 protocol: proto,
-            }),
+            },
             _ => {
                 // This should be unreachable since we check in `tokenize_remote`
                 debug_assert!(
                     false,
                     "`tokenize_remote` did not catch too many segments (this is a bug)"
                 );
-                Err(Error::TooManySegments)
+                return Err(Error::TooManySegments);
             }
         };
-        // I love Rust's pattern matching
-        // (this sentence is written by GitHub Copilot)
-        if let Ok(Self {
-            remote_addr: RemoteSpec::Socks,
-            protocol: Protocol::Udp,
-            ..
-        }) = &result
-        {
+        if matches!(
+            result,
+            Self {
+                remote_addr: RemoteSpec::Socks,
+                protocol: Protocol::Udp,
+                ..
+            }
+        ) {
             Err(Error::UdpSocks)
         } else {
-            result
+            Ok(result)
         }
     }
 }
