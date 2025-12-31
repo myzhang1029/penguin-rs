@@ -489,9 +489,9 @@ pub enum HeaderError {
     /// Header name not valid/acceptable
     #[error("invalid header name: {0}")]
     Name(#[from] http::header::InvalidHeaderName),
-    /// Header not valid/acceptable
-    #[error("invalid header: {0}")]
-    Format(String),
+    /// Header missing delimiter `:`
+    #[error("missing delimiter colon in the specified header `{0}`")]
+    MissingDelimiter(String),
 }
 
 /// HTTP Header
@@ -509,7 +509,7 @@ impl FromStr for Header {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (name, value) = s
             .split_once(':')
-            .ok_or_else(|| Self::Err::Format(s.to_string()))?;
+            .ok_or_else(|| Self::Err::MissingDelimiter(s.to_string()))?;
         let name = HeaderName::from_str(name)?;
         let value = HeaderValue::from_str(value.trim())?;
         Ok(Self { name, value })

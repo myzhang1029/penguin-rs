@@ -18,16 +18,16 @@ use thiserror::Error;
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum Error {
     /// Frame is invalid or incomplete
-    #[error("Frame is invalid or incomplete")]
+    #[error("frame is invalid or incomplete")]
     FrameTooShort,
     /// Unsupported frame version decoded
-    #[error("Unsupported frame version: {0}")]
+    #[error("unsupported frame version `{0}`")]
     FrameVersion(u8),
     /// Invalid opcode in a frame
-    #[error("Invalid opcode: {0}")]
+    #[error("invalid opcode `{0}`")]
     InvalidOpCode(u8),
     /// Invalid type code in a `Bind` frame
-    #[error("Invalid `Bind` type: {0}")]
+    #[error("invalid `Bind` type `{0}`")]
     InvalidBindType(u8),
 }
 

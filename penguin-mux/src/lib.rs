@@ -53,44 +53,44 @@ pub use crate::stream::MuxStream;
 pub enum Error {
     /// Requester exited before receiving the stream
     /// (i.e. the `Receiver` was dropped before the task could send the stream).
-    #[error("Requester exited before receiving the stream")]
+    #[error("requester exited before receiving the stream")]
     SendStreamToClient,
     /// The multiplexor is closed.
-    #[error("Mux is already closed")]
+    #[error("mux is already closed")]
     Closed,
     /// The peer does not support the requested operation.
-    #[error("Peer does not support requested operation")]
+    #[error("peer does not support requested operation")]
     PeerUnsupportedOperation,
     /// This `Multiplexor` is not configured for this operation.
-    #[error("Unsupported operation")]
+    #[error("unsupported operation")]
     UnsupportedOperation,
     /// Peer rejected the flow ID selection.
-    #[error("Peer rejected flow ID selection")]
+    #[error("peer rejected flow ID selection")]
     FlowIdRejected,
     /// Keepalive timeout: no pong received within the allowed time.
-    #[error("No keepalive pong received within the allowed time")]
+    #[error("no keepalive `Pong` received within the allowed time")]
     KeepaliveTimeout,
 
     /// WebSocket errors
-    #[error("WebSocket Error: {0}")]
+    #[error("unspecified `WebSocket` error: {0}")]
     WebSocket(Box<dyn std::error::Error + Send>),
 
     // These are the ones that shouldn't normally happen
     /// A `Datagram` frame with a target host longer than 255 octets.
-    #[error("Datagram target host longer than 255 octets")]
+    #[error("datagram target host longer than 255 octets")]
     DatagramHostTooLong,
     /// Received an invalid frame.
-    #[error("Invalid frame: {0}")]
+    #[error("invalid frame: {0}")]
     InvalidFrame(#[from] frame::Error),
     /// The peer sent a `Text` message.
     /// "The client and server MUST NOT use other WebSocket data frame types"
-    #[error("Received `Text` message")]
+    #[error("received `Text` message")]
     TextMessage,
     /// A `Acknowledge` frame that does not match any pending [`Connect`](frame::OpCode::Connect) request.
-    #[error("Bogus `Acknowledge` frame")]
+    #[error("bogus `Acknowledge` frame")]
     ConnAckGone,
     /// An internal channel closed
-    #[error("Internal channel `{0}` closed")]
+    #[error("internal channel `{0}` closed unexpectedly")]
     ChannelClosed(&'static str),
 }
 

@@ -7,6 +7,7 @@ use instant_acme::{Account, AuthorizationStatus, Identifier, NewAccount, NewOrde
 use penguin_mux::{Dupe, timing::Backoff};
 use std::sync::OnceLock;
 use std::time::Duration;
+use thiserror::Error;
 use tracing::{debug, error, info};
 
 pub use challenge_helper::ChallengeHelper;
@@ -18,19 +19,19 @@ pub static ACME_CLIENT: OnceLock<Client> = OnceLock::new();
 const MAX_ORDER_RETRIES: u32 = 10;
 
 /// Error type for ACME operations
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
     InstantAcme(#[from] instant_acme::Error),
-    #[error("Failed to execute challenge helper command: {0}")]
-    ChallengeHelperExecution(#[from] std::io::Error),
-    #[error("Invalid authorization status: {0:?}")]
+    #[error("failed to execute challenge helper command: {0}")]
+    ChallengeHelperExecution(std::io::Error),
+    #[error("invalid authorization status: {0:?}")]
     AuthInvalid(AuthorizationStatus),
-    #[error("Invalid order status: {0:?}")]
+    #[error("invalid order status: {0:?}")]
     OrderInvalid(OrderStatus),
     #[error("ACME server does not support HTTP-01 challenge")]
     NoHttp01ChallengeSupport,
-    #[error("Certificate processing failed: {0}")]
+    #[error("TLS error while requesting certificate: {0}")]
     Tls(#[from] crate::tls::Error),
 }
 

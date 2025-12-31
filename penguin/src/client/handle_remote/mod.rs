@@ -39,19 +39,19 @@ pub enum FatalError {
     ClientIo(io::Error),
     /// Happens when the main loop exits and is thus unable to receive
     /// datagrams on the channel.
-    #[error("Cannot request stream from the main loop")]
+    #[error("cannot request stream from the main loop")]
     RequestStream,
     /// Happens when the main loop exits and is thus unable to receive
     /// datagrams on the channel.
-    #[error("Cannot send datagram to the main loop")]
+    #[error("cannot send datagram to the main loop")]
     SendDatagram,
     /// Happens when the main loop receives an unretryable error
     /// while waiting for a stream to be established.
-    #[error("Main loop exited without sending stream")]
+    #[error("main loop exited without sending stream")]
     MainLoopExitWithoutSendingStream,
     /// Happens when the user is trying to open a "tproxy" remote
     /// but the feature is not enabled.
-    #[error("Transparent Proxy not enabled")]
+    #[error("transparent Proxy not enabled")]
     TproxyNotEnabled,
 }
 

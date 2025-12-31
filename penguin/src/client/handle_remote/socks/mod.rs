@@ -13,32 +13,32 @@ use bytes::{Buf, Bytes};
 use penguin_mux::{Datagram, Dupe};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
+use thiserror::Error;
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncReadExt, AsyncWrite, BufReader};
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tracing::{debug, info, trace, warn};
 
-// Errors that can occur while handling a SOCKS request.
-#[derive(Debug, thiserror::Error)]
+// Errors that can occur while handling a SOCKS request
+#[derive(Debug, Error)]
 pub enum Error {
-    /// Error writing to the client that is
-    /// not our fault.
-    #[error(transparent)]
-    Write(#[from] std::io::Error),
-    #[error("Client with version={0} is not SOCKSv4 or SOCKSv5")]
+    /// IO error during payload data transfer
+    #[error("data transfer error: {0}")]
+    DataTransfer(std::io::Error),
+    #[error("client with version={0} is not SOCKSv4 or SOCKSv5")]
     SocksVersion(u8),
-    #[error("Unsupported SOCKS command: {0}")]
+    #[error("unsupported SOCKS command: {0}")]
     InvalidCommand(u8),
-    #[error("Invalid SOCKS address type: {0}")]
+    #[error("invalid SOCKS address type: {0}")]
     AddressType(u8),
-    #[error("Cannot {0} in SOCKS request: {1}")]
+    #[error("cannot {0} in SOCKS request: {1}")]
     ProcessSocksRequest(&'static str, std::io::Error),
-    #[error("Cannot parse SOCKS associate datagram")]
+    #[error("cannot parse SOCKS associate datagram")]
     ParseAssociate,
-    #[error("Client does not support NOAUTH")]
+    #[error("client does not support NOAUTH")]
     OtherAuth,
-    /// Fatal error that we should propagate to main.
+    /// Fatal error that we should propagate to main
     #[error(transparent)]
     Fatal(#[from] super::FatalError),
 }
@@ -203,7 +203,10 @@ where
         v4::write_response(stream, 0x5a).await?;
     }
     trace!("SOCKS starting copy");
-    channel.into_copy_bidirectional_with_buf(stream).await?;
+    channel
+        .into_copy_bidirectional_with_buf(stream)
+        .await
+        .map_err(Error::DataTransfer)?;
     Ok(())
 }
 
@@ -274,7 +277,10 @@ async fn handle_udp_relay_header(
     socket: &UdpSocket,
 ) -> Result<Option<(Bytes, u16, Bytes, IpAddr, u16)>, Error> {
     let mut buf = vec![0; config::MAX_UDP_PACKET_SIZE];
-    let (len, addr) = socket.recv_from(&mut buf).await?;
+    let (len, addr) = socket
+        .recv_from(&mut buf)
+        .await
+        .map_err(Error::DataTransfer)?;
     trace!("received {len} bytes from {addr}");
     buf.truncate(len);
     let mut buf = Bytes::from(buf);

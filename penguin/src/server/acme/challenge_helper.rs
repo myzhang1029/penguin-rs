@@ -62,7 +62,8 @@ impl ChallengeHelper {
             .arg(key_authorization)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .spawn()?;
+            .spawn()
+            .map_err(Error::ChallengeHelperExecution)?;
         Ok(cmd)
     }
 

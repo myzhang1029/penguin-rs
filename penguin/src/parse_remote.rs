@@ -100,7 +100,7 @@ pub enum Error {
     #[error("found more than four colon-separated segments")]
     TooManySegments,
     /// SOCKS listen endpoint cannot be UDP
-    #[error("socks remote must be TCP")]
+    #[error("SOCKS remote must be TCP")]
     UdpSocks,
 }
 

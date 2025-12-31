@@ -58,7 +58,7 @@ async fn handshake_inner(
     // Add potentially custom hostname
     if let Some(ref hostname) = args.hostname {
         req_headers.insert("host", hostname.dupe());
-        tls_server_name = hostname.to_str()?;
+        tls_server_name = hostname.to_str().map_err(super::Error::InvalidDomainName)?;
     }
     if let Some(tls_sni) = args.tls_server_name.as_deref() {
         tls_server_name = tls_sni;

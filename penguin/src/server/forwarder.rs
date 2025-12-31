@@ -11,12 +11,12 @@ use tokio::net::{TcpStream, UdpSocket, lookup_host};
 use tokio::sync::mpsc;
 use tracing::{debug, trace};
 
-/// Error type for the forwarder.
+/// Error type for the forwarder
 #[derive(Error, Debug)]
 pub(super) enum Error {
     #[error(transparent)]
     Io(#[from] std::io::Error),
-    #[error("Invalid host: {0}")]
+    #[error("invalid host: {0}")]
     Host(#[from] std::str::Utf8Error),
 }
 

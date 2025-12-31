@@ -34,14 +34,14 @@ type WebSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 #[derive(Debug, Error)]
 pub enum Error {
     /// Specified listening address is invalid
-    #[error("Invalid listening host: {0}")]
+    #[error("invalid listening host: {0}")]
     InvalidHost(#[from] std::net::AddrParseError),
     /// TLS errors
     #[error(transparent)]
     Tls(#[from] crate::tls::Error),
     /// Errors registering signal handlers
     #[cfg(unix)]
-    #[error("Cannot register signal handler: {0}")]
+    #[error("cannot register signal handler: {0}")]
     Signal(std::io::Error),
     /// HTTP server I/O errors
     #[error("HTTP server I/O error: {0}")]

@@ -52,8 +52,8 @@ fn make_sec_websocket_accept(key: &HeaderValue) -> HeaderValue {
     accept.parse().expect("Broken header value (this is a bug)")
 }
 
-/// Possible errors when processing requests.
-/// Any of these actually should never happen.
+/// Possible errors when processing requests
+/// None of these should ever actually happen.
 #[derive(Debug, Error)]
 pub(super) enum Error {
     #[error(transparent)]

@@ -43,29 +43,29 @@ pub type TlsIdentity = Arc<ArcSwap<TlsIdentityInner>>;
 #[derive(Error, Debug)]
 pub enum Error {
     /// IO errors when reading certificates, keys, or CA files
-    #[error("Error reading certificate, key, or CA: {0}")]
+    #[error("error reading certificate, key, or CA: {0}")]
     ReadCert(std::io::Error),
     /// IO errors when making connections
-    #[error("Error making a TCP connection: {0}")]
+    #[error("error making a TCP connection: {0}")]
     TcpConnect(std::io::Error),
     /// Errors from `rustls`
-    #[error("Rustls error: {0}")]
+    #[error("rustls error: {0}")]
     #[cfg(feature = "__rustls")]
     Rustls(#[from] ::rustls::Error),
     /// Could not determine the server name for SNI
     #[cfg(feature = "__rustls")]
-    #[error("Unable to determine server name for SNI")]
+    #[error("unable to determine server name for SNI")]
     DnsName(#[from] InvalidDnsNameError),
     /// Could not create a TLS verifier for `rustls`
-    #[error("Verifier error: {0}")]
+    #[error("verifier error: {0}")]
     #[cfg(feature = "__rustls")]
     Verifier(#[from] ::rustls::client::VerifierBuilderError),
     /// Failed to parse certificates
-    #[error("Failed to parse certificates: {0}")]
+    #[error("failed to parse certificates: {0}")]
     #[cfg(feature = "nativetls")]
     CertParse(#[from] tokio_native_tls::native_tls::Error),
     /// Unsupported private key type
-    #[error("Unsupported private key type")]
+    #[error("unsupported private key type")]
     #[cfg(feature = "__rustls")]
     PrivateKeyNotSupported,
 }

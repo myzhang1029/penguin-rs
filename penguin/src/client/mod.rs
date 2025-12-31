@@ -37,22 +37,22 @@ use std::collections::HashMap as IntMap;
 #[derive(Debug, Error)]
 pub enum Error {
     /// Exceeded the maximum retry count
-    #[error("Maximum retry count reached (last error: {0})")]
+    #[error("maximum retry count reached (last error: {0})")]
     MaxRetryCountReached(Box<Self>),
     /// Error parsing the remote specifications
-    #[error("Failed to parse remote: {0}")]
+    #[error("failed to parse remote: {0}")]
     ParseRemote(#[from] crate::parse_remote::Error),
     /// A listener exited unexpectedly
-    #[error("Remote handler exited: {0}")]
+    #[error("remote handler exited: {0}")]
     RemoteHandlerExited(#[from] handle_remote::FatalError),
     /// Given domain name is not encodable in UTF-8
-    #[error("Given domain name is not encodable in UTF-8")]
-    InvalidDomainName(#[from] http::header::ToStrError),
+    #[error("given domain name is not encodable in UTF-8")]
+    InvalidDomainName(http::header::ToStrError),
     /// Invalid URL or cannot connect
     #[error(transparent)]
     Tungstenite(#[from] tokio_tungstenite::tungstenite::Error),
     /// Error making a TLS connection
-    #[error("Error making a TCP connection: {0}")]
+    #[error("error making a TCP connection: {0}")]
     TcpConnect(std::io::Error),
     /// TLS error
     #[error(transparent)]
@@ -61,16 +61,16 @@ pub enum Error {
     #[error(transparent)]
     Mux(#[from] penguin_mux::Error),
     /// Initial WebSocket handshake timed out
-    #[error("Initial WebSocket handshake timed out")]
+    #[error("initial WebSocket handshake timed out")]
     HandshakeTimeout,
     /// User cancelled the initial WebSocket handshake
-    #[error("User cancelled initial WebSocket handshake")]
+    #[error("user cancelled initial WebSocket handshake")]
     HandshakeCancelled,
     /// A stream request timed out
-    #[error("Stream request timed out")]
+    #[error("stream request timed out")]
     StreamRequestTimeout,
     /// The peer disconnected normally but we were not expecting it
-    #[error("Server disconnected normally")]
+    #[error("server disconnected normally")]
     ServerDisconnected,
 }
 
