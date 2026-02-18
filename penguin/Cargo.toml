@@ -22,7 +22,7 @@ path = "src/lib.rs"
 arc-swap = "1"
 aws-lc-rs = { version = "1", optional = true }
 base64 = { version = "0.22", optional = true }
-bytes = "1"
+bytes = "^1, >=1.11.1"
 clap = { version = "4", features = ["cargo", "derive", "string"] }
 console-subscriber = { version = "0.5", features = ["parking_lot"], optional = true }
 futures-util = { version = "0.3", default-features = false }

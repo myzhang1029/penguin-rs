@@ -20,7 +20,7 @@ name = "penguin_mux"
 path = "src/lib.rs"
 
 [dependencies]
-bytes = "1"
+bytes = "^1, >=1.11.1"
 futures-util = { version = "0.3", default-features = false }
 http = "1"
 nohash-hasher = { version = "0.2", optional = true }
