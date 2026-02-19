@@ -226,7 +226,13 @@ mod tests {
         let new_order = NewOrder::new(&identifiers);
         let mut order = account.new_order(&new_order).await.unwrap();
         let mut authorizations = order.authorizations();
-        let mut first_auth = authorizations.next().await.unwrap().unwrap();
+        let mut first_auth = loop {
+            let auth = authorizations.next().await.expect("Ran out of valid authorizations");
+            match auth {
+                Ok(auth) => break auth,
+                Err(e) => error!("Invalid authorization with error: {e:?}"),
+            }
+        };
         let expected_key_auth = first_auth
             .challenge(ChallengeType::Http01)
             .unwrap()

@@ -2,6 +2,7 @@ use super::*;
 use crate::tls::make_tls_identity;
 use crate::{arg::ServerUrl, parse_remote::Remote};
 use penguin_mux::timing::OptionalDuration;
+#[allow(unused_imports)]
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 #[allow(unused_imports)]
 use std::sync::{LazyLock, OnceLock};
@@ -9,6 +10,7 @@ use std::{str::FromStr, time::Duration};
 #[cfg(not(all(feature = "nativetls", any(target_os = "macos", target_os = "windows"))))]
 use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt};
+#[allow(unused_imports)]
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tracing::debug;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
