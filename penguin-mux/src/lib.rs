@@ -52,23 +52,23 @@ pub use crate::stream::MuxStream;
 #[non_exhaustive]
 pub enum Error {
     /// Requester exited before receiving the stream
-    /// (i.e. the `Receiver` was dropped before the task could send the stream).
+    /// (i.e. the `Receiver` was dropped before the task could send the stream)
     #[error("requester exited before receiving the stream")]
     SendStreamToClient,
-    /// The multiplexor is closed.
+    /// The multiplexor is closed
     #[error("mux is already closed")]
     Closed,
-    /// The peer does not support the requested operation.
+    /// The peer does not support the requested operation
     #[error("peer does not support requested operation")]
     PeerUnsupportedOperation,
-    /// This `Multiplexor` is not configured for this operation.
+    /// This `Multiplexor` is not configured for this operation
     #[error("unsupported operation")]
     UnsupportedOperation,
-    /// Peer rejected the flow ID selection.
+    /// Peer rejected the flow ID selection
     #[error("peer rejected flow ID selection")]
     FlowIdRejected,
-    /// Keepalive timeout: no pong received within the allowed time.
-    #[error("no keepalive `Pong` received within the allowed time")]
+    /// Keepalive timeout: no pong received within the allowed time
+    #[error("`Pong` response not received before the configured timeout")]
     KeepaliveTimeout,
 
     /// WebSocket errors
@@ -76,17 +76,17 @@ pub enum Error {
     WebSocket(Box<dyn std::error::Error + Send>),
 
     // These are the ones that shouldn't normally happen
-    /// A `Datagram` frame with a target host longer than 255 octets.
+    /// A `Datagram` frame with a target host longer than 255 octets
     #[error("datagram target host longer than 255 octets")]
     DatagramHostTooLong,
-    /// Received an invalid frame.
+    /// Received an invalid frame
     #[error("invalid frame: {0}")]
     InvalidFrame(#[from] frame::Error),
-    /// The peer sent a `Text` message.
+    /// The peer sent a `Text` message
     /// "The client and server MUST NOT use other WebSocket data frame types"
     #[error("received `Text` message")]
     TextMessage,
-    /// A `Acknowledge` frame that does not match any pending [`Connect`](frame::OpCode::Connect) request.
+    /// A `Acknowledge` frame that does not match any pending [`Connect`](frame::OpCode::Connect) request
     #[error("bogus `Acknowledge` frame")]
     ConnAckGone,
     /// An internal channel closed
