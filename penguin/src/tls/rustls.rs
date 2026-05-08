@@ -134,7 +134,7 @@ async fn generate_rustls_rootcertstore(
         let client_ca: std::io::Result<Vec<CertificateDer<'_>>> =
             rustls_pemfile::certs(&mut client_ca.as_ref()).collect();
         let (_, ignored) =
-            roots.add_parsable_certificates(client_ca.map_err(Error::ReadCert)?.into_iter());
+            roots.add_parsable_certificates(client_ca.map_err(Error::ReadCert)?);
         debug!("ignored {ignored} certificates from {ca_path}");
     } else {
         #[cfg(feature = "rustls-native-roots")]
