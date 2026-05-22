@@ -1,3 +1,4 @@
+# vi: ft=systemd
 [Unit]
 Description=Penguin tunnel
 Wants=syslog.service local-fs.target network-online.target
