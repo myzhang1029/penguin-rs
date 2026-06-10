@@ -41,7 +41,7 @@ pub async fn make_server_config(
 ///
 /// # Errors
 /// - Returns [`Error::ReadCert`] if the resulting certificate is unreadable (should not happen).
-/// - Returns [`Error::PrivateKeyNotSupported`] if the type of private key is not supported.
+/// - Returns [`Error::UnsupportedFeature`] if the type of private key is not supported.
 #[cfg(feature = "acme")]
 pub async fn make_server_config_from_pem(
     certs: String,
@@ -52,7 +52,7 @@ pub async fn make_server_config_from_pem(
         rustls_pemfile::certs(&mut certs.as_bytes()).collect();
     let key = rustls_pemfile::private_key(&mut priv_key_pem.as_bytes())
         .map_err(Error::ReadCert)?
-        .ok_or(Error::PrivateKeyNotSupported)?;
+        .ok_or_else(|| Error::UnsupportedFeature("given private key", "unsupported type"))?;
     make_server_config_from_mem(certs.map_err(Error::ReadCert)?, key, client_ca_path).await
 }
 
@@ -133,8 +133,7 @@ async fn generate_rustls_rootcertstore(
         let client_ca = tokio::fs::read(ca_path).await.map_err(Error::ReadCert)?;
         let client_ca: std::io::Result<Vec<CertificateDer<'_>>> =
             rustls_pemfile::certs(&mut client_ca.as_ref()).collect();
-        let (_, ignored) =
-            roots.add_parsable_certificates(client_ca.map_err(Error::ReadCert)?);
+        let (_, ignored) = roots.add_parsable_certificates(client_ca.map_err(Error::ReadCert)?);
         debug!("ignored {ignored} certificates from {ca_path}");
     } else {
         #[cfg(feature = "rustls-native-roots")]
@@ -169,7 +168,10 @@ async fn try_load_certificate(
         let key = tokio::fs::read(key).await.map_err(Error::ReadCert)?;
         let Some(key) = rustls_pemfile::private_key(&mut key.as_ref()).map_err(Error::ReadCert)?
         else {
-            return Err(Error::PrivateKeyNotSupported);
+            return Err(Error::UnsupportedFeature(
+                "given private key",
+                "unsupported type",
+            ));
         };
         Ok(Some((certs.map_err(Error::ReadCert)?, key)))
     } else {

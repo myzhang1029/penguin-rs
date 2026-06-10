@@ -64,10 +64,9 @@ pub enum Error {
     #[error("failed to parse certificates: {0}")]
     #[cfg(feature = "nativetls")]
     CertParse(#[from] tokio_native_tls::native_tls::Error),
-    /// Unsupported private key type
-    #[error("unsupported private key type")]
-    #[cfg(feature = "__rustls")]
-    PrivateKeyNotSupported,
+    /// Unsupported feature
+    #[error("{0} is not supported: {1}")]
+    UnsupportedFeature(&'static str, &'static str),
 }
 
 /// Create a TCP connection and wrap it in a TLS stream

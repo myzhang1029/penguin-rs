@@ -36,9 +36,14 @@ pub async fn make_server_config_from_pem(
 
 fn make_server_config_from_mem(
     identity: Identity,
-    _client_ca_path: Option<&str>,
+    client_ca_path: Option<&str>,
 ) -> Result<TlsIdentityInner, Error> {
-    // TODO: support client CA (sfackler/rust-native-tls#161)
+    if client_ca_path.is_some() {
+        return Err(Error::UnsupportedFeature(
+            "client CA verification",
+            "requires rustls",
+        ));
+    }
     let raw_acceptor = TlsAcceptor::builder(identity).build()?;
     Ok(raw_acceptor.into())
 }
