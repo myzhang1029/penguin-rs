@@ -74,7 +74,7 @@ pub enum Error {
 /// # Errors
 /// - Returns [`Error::TcpConnect`] if the TCP connection fails.
 /// - Returns the appropriate TLS error from the TLS library used.
-#[cfg(feature = "client")]
+#[cfg(any(feature = "client", test))]
 pub async fn tls_connect(
     host: &str,
     port: u16,

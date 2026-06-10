@@ -613,6 +613,7 @@ mod tests {
         assert_eq!(header.value.to_str().unwrap(), "test");
     }
 
+    #[cfg(feature = "client")]
     #[test]
     fn test_client_args_minimal() {
         crate::tests::setup_logging();
@@ -640,6 +641,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "client")]
     #[test]
     fn test_client_args_full() {
         let args = PenguinCli::parse_from([
@@ -703,6 +705,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "server")]
     #[test]
     fn test_server_args_minimal() {
         let args = PenguinCli::parse_from(["penguin", "server"]);
@@ -722,6 +725,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "server")]
     #[test]
     fn test_server_args_just_host() {
         let args = PenguinCli::parse_from(["penguin", "server", "--host", "0.0.0.0"]);
@@ -739,6 +743,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "server")]
     #[test]
     fn test_server_args_just_port() {
         let args = PenguinCli::parse_from(["penguin", "server", "--port", "45"]);
@@ -756,6 +761,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "server")]
     #[test]
     fn test_server_args_port_cover_ahead() {
         let args = PenguinCli::parse_from([
@@ -860,6 +866,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "server")]
     #[test]
     fn test_server_args_full() {
         let args = PenguinCli::parse_from([

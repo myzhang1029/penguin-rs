@@ -25,6 +25,7 @@ pub fn setup_logging() {
     penguin_mux::deadlock_detection::try_spawn_deadlock_detection();
 }
 
+#[cfg(feature = "server")]
 fn make_server_args(host: &str, port: u16) -> arg::ServerArgs {
     arg::ServerArgs {
         host: vec![host.to_string()],
@@ -36,6 +37,7 @@ fn make_server_args(host: &str, port: u16) -> arg::ServerArgs {
     }
 }
 
+#[cfg(feature = "client")]
 fn make_client_args(servhost: &str, servport: u16, remotes: Vec<Remote>) -> arg::ClientArgs {
     arg::ClientArgs {
         server: ServerUrl::from_str(&format!("ws://{servhost}:{servport}/ws")).unwrap(),
@@ -74,6 +76,7 @@ async fn make_server_cert_ecdsa(dest: Option<&str>) -> (Option<TempDir>, rcgen::
     (dir, cert)
 }
 
+#[cfg(feature = "client")]
 #[tokio::test]
 async fn test_client_handshake_timeout() {
     static CLIENT_ARGS: OnceLock<arg::ClientArgs> = OnceLock::new();
@@ -110,6 +113,7 @@ async fn test_client_handshake_timeout() {
     );
 }
 
+#[cfg(feature = "client")]
 #[tokio::test]
 async fn test_client_handshake_timeout_will_retry() {
     static CLIENT_ARGS: OnceLock<arg::ClientArgs> = OnceLock::new();
@@ -149,6 +153,7 @@ async fn test_client_handshake_timeout_will_retry() {
     assert!(elapsed.as_secs() > 2);
 }
 
+#[cfg(all(feature = "client", feature = "server"))]
 #[tokio::test]
 async fn test_it_works() {
     static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
@@ -196,6 +201,7 @@ async fn test_it_works() {
     client_task.abort();
 }
 
+#[cfg(feature = "server")]
 #[tokio::test]
 async fn test_server_timeout() {
     static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
@@ -221,6 +227,7 @@ async fn test_server_timeout() {
     server_task.abort();
 }
 
+#[cfg(all(feature = "client", feature = "server"))]
 #[tokio::test]
 async fn test_server_timeout_does_not_interrupt_ws() {
     static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
@@ -271,6 +278,7 @@ async fn test_server_timeout_does_not_interrupt_ws() {
     client_task.abort();
 }
 
+#[cfg(all(feature = "client", feature = "server"))]
 #[tokio::test]
 async fn test_it_works_v6() {
     static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
@@ -321,6 +329,7 @@ async fn test_it_works_v6() {
 
 // `native_tls` on macOS and Windows doesn't support reading Ed25519 nor ECDSA-based certificates.
 #[tokio::test]
+#[cfg(all(feature = "client", feature = "server"))]
 #[cfg(not(all(feature = "nativetls", any(target_os = "macos", target_os = "windows"))))]
 async fn test_it_works_tls_simple() {
     static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
@@ -393,6 +402,7 @@ async fn test_it_works_tls_simple() {
 // `native_tls` on macOS and Windows doesn't support reading Ed25519 nor ECDSA-based certificates.
 #[tokio::test]
 #[cfg(unix)]
+#[cfg(feature = "server")]
 #[cfg(not(all(feature = "nativetls", any(target_os = "macos", target_os = "windows"))))]
 async fn test_tls_reload() {
     static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
@@ -498,6 +508,7 @@ async fn check_http_host<T: AsyncRead + Unpin>(stream: &mut T, expected_host: &s
 
 // `native_tls` on macOS and Windows doesn't support reading Ed25519 nor ECDSA-based certificates.
 #[tokio::test]
+#[cfg(feature = "client")]
 #[cfg(not(all(feature = "nativetls", any(target_os = "macos", target_os = "windows"))))]
 async fn test_http_host_and_sni() {
     static CLIENT_ARGS_PLAIN: OnceLock<arg::ClientArgs> = OnceLock::new();
@@ -625,6 +636,7 @@ async fn test_http_host_and_sni() {
     client_task.await.unwrap();
 }
 
+#[cfg(all(feature = "client", feature = "server"))]
 #[tokio::test]
 async fn test_socks5_connect_reliability_v4() {
     static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
@@ -695,6 +707,7 @@ async fn test_socks5_connect_reliability_v4() {
     client_task.abort();
 }
 
+#[cfg(all(feature = "client", feature = "server"))]
 #[tokio::test]
 async fn test_socks5_connect_reliability_v6() {
     // "v6" means that the target server is IPv6, but the client here is IPv4 here to test their interaction.
@@ -766,6 +779,7 @@ async fn test_socks5_connect_reliability_v6() {
 }
 
 #[tokio::test]
+#[cfg(all(feature = "client", feature = "server"))]
 #[cfg(feature = "tests-udp")]
 async fn test_socks5_udp_v4v4() {
     static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
@@ -1228,6 +1242,7 @@ async fn test_socks5_udp_client_prune() {
     client_task.abort();
 }
 
+#[cfg(all(feature = "client", feature = "server"))]
 #[tokio::test]
 async fn test_socks4_works() {
     static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
@@ -1379,6 +1394,7 @@ async fn test_it_works_dns_v6() {
     client_task.abort();
 }
 
+#[cfg(all(feature = "client", feature = "server"))]
 #[tokio::test]
 async fn test_tproxy_something_happens() {
     static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
