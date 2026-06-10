@@ -145,20 +145,22 @@ fn tokenize_remote(s: &str) -> Result<Vec<&str>, Error> {
     loop {
         // IPv6 address in brackets
         if stuff.starts_with('[') {
-            // `str::find` gives us the index of `']'`, and since it is single-byte,
+            // `str::find` gives us the index of ']', and since it is single-byte,
             // `end+1` is also a byte index on UTF-8 boundaries and thus safe for slicing.
             let end = stuff.find(']').ok_or(Error::BracketMismatch)?;
             // Excluding the brackets here
             check_and_push!(&stuff[1..end]);
-            // Now stuff[end+1..] should start with ':', so we assert that and skip it.
-            let following = stuff[end + 1..].chars().next();
-            if let Some(ch) = following
-                && ch != ':'
-            {
-                return Err(Error::GarbageAfterAddress(ch));
+            // Now stuff[end+1..] should start with ':', so we check that
+            match stuff[end + 1..].chars().next() {
+                // Good. skip the ':' and continue processing the rest
+                Some(':') => stuff = &stuff[end + 2..],
+                Some(ch) => return Err(Error::GarbageAfterAddress(ch)),
+                // If the string ends at the ']', then we are done
+                // Note that such a case is (currently) not a valid remote
+                // but we handle that later in `Remote::from_str` so this tokenizer
+                // remains neutral in case some future format needs this construction
+                None => return Ok(tokens),
             }
-            // Now skip the ':', too and continue processing the rest
-            stuff = stuff.get(end + 2..).ok_or(Error::EmptySegment)?;
         } else if let Some((token, rest)) = stuff.split_once(':') {
             check_and_push!(token);
             stuff = rest;
@@ -611,7 +613,18 @@ mod tests {
             (":9000:example.com:22", Error::EmptySegment),
             ("0.0.0.0:80::80/udp", Error::EmptySegment),
             ("[::]:80:[]:80", Error::EmptySegment),
-            //("[]:80", Error::EmptySegment),
+            ("[]:80", Error::EmptySegment),
+            (
+                "example.com",
+                Error::Port(
+                    String::from("example.com"),
+                    std::num::IntErrorKind::InvalidDigit,
+                ),
+            ),
+            (
+                "[::1]",
+                Error::Port(String::from("::1"), std::num::IntErrorKind::InvalidDigit),
+            ),
             (
                 "just_a_hostname",
                 Error::Port(
