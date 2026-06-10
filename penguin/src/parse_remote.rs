@@ -79,9 +79,9 @@ pub enum Protocol {
 /// Errors that can occur when parsing a remote
 #[derive(Clone, Error, Debug, PartialEq, Eq)]
 pub enum Error {
-    /// IPv6 address empty bracket
-    #[error("missing address inside brackets")]
-    AddressEmpty,
+    /// Given an empty string where a valid value should be
+    #[error("empty address or port")]
+    EmptySegment,
     /// IPv6 address missing closing bracket
     #[error("missing closing `]`")]
     BracketMismatch,
@@ -130,11 +130,14 @@ impl FromStr for Protocol {
 fn tokenize_remote(s: &str) -> Result<Vec<&str>, Error> {
     let mut tokens = Vec::new();
     let mut stuff = s;
-    macro_rules! check_too_many_and_push {
+    macro_rules! check_and_push {
         ($token:expr) => {
             if tokens.len() >= 4 {
                 // Check for this early to reduce work in the error case
                 return Err(Error::TooManySegments);
+            }
+            if $token.is_empty() {
+                return Err(Error::EmptySegment);
             }
             tokens.push($token);
         };
@@ -142,22 +145,25 @@ fn tokenize_remote(s: &str) -> Result<Vec<&str>, Error> {
     loop {
         // IPv6 address in brackets
         if stuff.starts_with('[') {
-            // `end` is a byte index on UTF-8 boundaries
-            let end = stuff.find(']').ok_or(Error::BracketMismatch)? + 1;
-            check_too_many_and_push!(&stuff[..end]);
-            // Now stuff[end..] should start with ':', so we assert that and skip it.
-            let following = stuff[end..].chars().next();
+            // `str::find` gives us the index of `']'`, and since it is single-byte,
+            // `end+1` is also a byte index on UTF-8 boundaries and thus safe for slicing.
+            let end = stuff.find(']').ok_or(Error::BracketMismatch)?;
+            // Excluding the brackets here
+            check_and_push!(&stuff[1..end]);
+            // Now stuff[end+1..] should start with ':', so we assert that and skip it.
+            let following = stuff[end + 1..].chars().next();
             if let Some(ch) = following
                 && ch != ':'
             {
                 return Err(Error::GarbageAfterAddress(ch));
             }
-            stuff = stuff.get(end + 1..).ok_or(Error::AddressEmpty)?;
+            // Now skip the ':', too and continue processing the rest
+            stuff = stuff.get(end + 2..).ok_or(Error::EmptySegment)?;
         } else if let Some((token, rest)) = stuff.split_once(':') {
-            check_too_many_and_push!(token);
+            check_and_push!(token);
             stuff = rest;
         } else {
-            check_too_many_and_push!(stuff);
+            check_and_push!(stuff);
             return Ok(tokens);
         }
     }
@@ -250,10 +256,7 @@ impl FromStr for Remote {
             },
             [host, port] => Self {
                 local_addr: LocalSpec::Inet((default_host!(unspec), parse_port_or_bail!(port))),
-                remote_addr: RemoteSpec::Inet((
-                    remove_brackets(host).to_string(),
-                    parse_port_or_bail!(port),
-                )),
+                remote_addr: RemoteSpec::Inet((host.to_string(), parse_port_or_bail!(port))),
                 protocol: proto,
             },
             // Three elements:
@@ -263,14 +266,14 @@ impl FromStr for Remote {
             ["stdio", remote_host, remote_port] => Self {
                 local_addr: LocalSpec::Stdio,
                 remote_addr: RemoteSpec::Inet((
-                    remove_brackets(remote_host).to_string(),
+                    remote_host.to_string(),
                     parse_port_or_bail!(remote_port),
                 )),
                 protocol: proto,
             },
             [local_host, local_port, "socks"] => Self {
                 local_addr: LocalSpec::Inet((
-                    remove_brackets(local_host).to_string(),
+                    local_host.to_string(),
                     parse_port_or_bail!(local_port),
                 )),
                 remote_addr: RemoteSpec::Socks,
@@ -278,7 +281,7 @@ impl FromStr for Remote {
             },
             [local_host, local_port, "tproxy"] => Self {
                 local_addr: LocalSpec::Inet((
-                    remove_brackets(local_host).to_string(),
+                    local_host.to_string(),
                     parse_port_or_bail!(local_port),
                 )),
                 remote_addr: RemoteSpec::Tproxy,
@@ -290,18 +293,18 @@ impl FromStr for Remote {
                     parse_port_or_bail!(local_port),
                 )),
                 remote_addr: RemoteSpec::Inet((
-                    remove_brackets(remote_host).to_string(),
+                    remote_host.to_string(),
                     parse_port_or_bail!(remote_port),
                 )),
                 protocol: proto,
             },
             [local_host, local_port, remote_host, remote_port] => Self {
                 local_addr: LocalSpec::Inet((
-                    remove_brackets(local_host).to_string(),
+                    local_host.to_string(),
                     parse_port_or_bail!(local_port),
                 )),
                 remote_addr: RemoteSpec::Inet((
-                    remove_brackets(remote_host).to_string(),
+                    remote_host.to_string(),
                     parse_port_or_bail!(remote_port),
                 )),
                 protocol: proto,
@@ -603,6 +606,12 @@ mod tests {
     fn test_parse_remote_bad() {
         crate::tests::setup_logging();
         let tests: &[(&str, Error)] = &[
+            ("", Error::EmptySegment),
+            (":80", Error::EmptySegment),
+            (":9000:example.com:22", Error::EmptySegment),
+            ("0.0.0.0:80::80/udp", Error::EmptySegment),
+            ("[::]:80:[]:80", Error::EmptySegment),
+            //("[]:80", Error::EmptySegment),
             (
                 "just_a_hostname",
                 Error::Port(
@@ -614,7 +623,7 @@ mod tests {
                 "99999",
                 Error::Port(String::from("99999"), std::num::IntErrorKind::PosOverflow),
             ),
-            ("::::", Error::TooManySegments),
+            ("1:2:3:4:5", Error::TooManySegments),
             (
                 "host:port",
                 Error::Port(String::from("port"), std::num::IntErrorKind::InvalidDigit),
