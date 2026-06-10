@@ -32,6 +32,8 @@ pub(crate) use default_host;
 
 /// Default SOCKS port
 pub const SOCKS_DEFAULT_PORT: u16 = 1080;
+/// Default HTTP proxy port
+pub const HTTP_DEFAULT_PORT: u16 = 8080;
 /// Default TPROXY port
 pub const TPROXY_DEFAULT_PORT: u16 = 1234;
 
@@ -56,15 +58,34 @@ pub enum LocalSpec {
     Stdio,
 }
 
-/// The remote side can be either IP+port or "socks"
+/// The remote side can be either IP+port, "socks", "http", or "tproxy"
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub enum RemoteSpec {
     /// An IP socket
     Inet((String, u16)),
     /// Function as a SOCKS proxy
     Socks,
+    /// Function as a HTTP proxy
+    Http,
     /// Configure the listen socket for Transparent Proxy
     Tproxy,
+}
+
+impl Display for RemoteSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Inet((host, port)) => {
+                if host.contains(':') {
+                    write!(f, "[{host}]:{port}")
+                } else {
+                    write!(f, "{host}:{port}")
+                }
+            }
+            Self::Socks => f.write_str("socks"),
+            Self::Http => f.write_str("http"),
+            Self::Tproxy => f.write_str("tproxy"),
+        }
+    }
 }
 
 /// Protocol can be either "tcp" or "udp".
@@ -99,9 +120,9 @@ pub enum Error {
     /// Too many segments
     #[error("found more than four colon-separated segments")]
     TooManySegments,
-    /// SOCKS listen endpoint cannot be UDP
-    #[error("SOCKS remote must be TCP")]
-    UdpSocks,
+    /// Some protocols require TCP
+    #[error("protocol `{0}` does not support UDP")]
+    UnsupportedUdp(RemoteSpec),
 }
 
 impl Display for Protocol {
@@ -183,17 +204,8 @@ impl Display for Remote {
             }
             LocalSpec::Stdio => f.write_str("stdio")?,
         }
-        match &self.remote_addr {
-            RemoteSpec::Inet((host, port)) => {
-                if host.contains(':') {
-                    write!(f, ":[{host}]:{port}")?;
-                } else {
-                    write!(f, ":{host}:{port}")?;
-                }
-            }
-            RemoteSpec::Socks => f.write_str(":socks")?,
-            RemoteSpec::Tproxy => f.write_str(":tproxy")?,
-        }
+        f.write_str(":")?;
+        self.remote_addr.fmt(f)?;
         write!(f, "/{}", self.protocol)?;
         Ok(())
     }
@@ -212,16 +224,32 @@ impl FromStr for Remote {
                     .map_err(|e| Error::Port($port_str.to_string(), *e.kind()))?
             };
         }
+        macro_rules! parse_remote_special {
+            ($special_name:expr) => {
+                match $special_name {
+                    "socks" => RemoteSpec::Socks,
+                    "http" => RemoteSpec::Http,
+                    "tproxy" => RemoteSpec::Tproxy,
+                    // The caller must ensure this
+                    _ => unreachable!(),
+                }
+            };
+        }
         let (rest, proto) = match s.rsplit_once('/') {
             Some((rest, proto)) => (rest, proto.parse()?),
             None => (s, Protocol::Tcp),
         };
         let tokens = tokenize_remote(rest)?;
         let result = match tokens[..] {
-            // One element: either "socks", "tproxy" or a port number.
+            // One element: either "socks", "http", "tproxy" or a port number.
             ["socks"] => Self {
                 local_addr: LocalSpec::Inet((default_host!(local), SOCKS_DEFAULT_PORT)),
                 remote_addr: RemoteSpec::Socks,
+                protocol: proto,
+            },
+            ["http"] => Self {
+                local_addr: LocalSpec::Inet((default_host!(local), HTTP_DEFAULT_PORT)),
+                remote_addr: RemoteSpec::Http,
                 protocol: proto,
             },
             ["tproxy"] => Self {
@@ -234,21 +262,17 @@ impl FromStr for Remote {
                 remote_addr: RemoteSpec::Inet((default_host!(local), parse_port_or_bail!(port))),
                 protocol: proto,
             },
-            // Two elements: either "socks" or "tproxy" and local port number, or remote host and port number.
-            ["stdio", "socks"] => Self {
+            // Two elements: either "socks", "http", or "tproxy" and local port number,
+            // or remote host and port number.
+            ["stdio", "socks" | "http"] => Self {
                 local_addr: LocalSpec::Stdio,
-                remote_addr: RemoteSpec::Socks,
+                remote_addr: parse_remote_special!(tokens[1]),
                 protocol: proto,
             },
             ["stdio", "tproxy"] => return Err(Error::StdioTproxy),
-            [port, "socks"] => Self {
+            [port, "socks" | "http" | "tproxy"] => Self {
                 local_addr: LocalSpec::Inet((default_host!(local), parse_port_or_bail!(port))),
-                remote_addr: RemoteSpec::Socks,
-                protocol: proto,
-            },
-            [port, "tproxy"] => Self {
-                local_addr: LocalSpec::Inet((default_host!(local), parse_port_or_bail!(port))),
-                remote_addr: RemoteSpec::Tproxy,
+                remote_addr: parse_remote_special!(tokens[1]),
                 protocol: proto,
             },
             ["stdio", port] => Self {
@@ -263,7 +287,7 @@ impl FromStr for Remote {
             },
             // Three elements:
             // - "stdio", remote host, and port number,
-            // - local host, local port number, and "socks", or
+            // - local host, local port number, and (either "socks", "http", or "tproxy"), or
             // - local port number, remote host, and port number.
             ["stdio", remote_host, remote_port] => Self {
                 local_addr: LocalSpec::Stdio,
@@ -273,20 +297,12 @@ impl FromStr for Remote {
                 )),
                 protocol: proto,
             },
-            [local_host, local_port, "socks"] => Self {
+            [local_host, local_port, "socks" | "http" | "tproxy"] => Self {
                 local_addr: LocalSpec::Inet((
                     local_host.to_string(),
                     parse_port_or_bail!(local_port),
                 )),
-                remote_addr: RemoteSpec::Socks,
-                protocol: proto,
-            },
-            [local_host, local_port, "tproxy"] => Self {
-                local_addr: LocalSpec::Inet((
-                    local_host.to_string(),
-                    parse_port_or_bail!(local_port),
-                )),
-                remote_addr: RemoteSpec::Tproxy,
+                remote_addr: parse_remote_special!(tokens[2]),
                 protocol: proto,
             },
             [local_port, remote_host, remote_port] => Self {
@@ -323,12 +339,12 @@ impl FromStr for Remote {
         if matches!(
             result,
             Self {
-                remote_addr: RemoteSpec::Socks,
+                remote_addr: RemoteSpec::Socks | RemoteSpec::Http,
                 protocol: Protocol::Udp,
                 ..
             }
         ) {
-            Err(Error::UdpSocks)
+            Err(Error::UnsupportedUdp(result.remote_addr))
         } else {
             Ok(result)
         }
@@ -448,9 +464,25 @@ mod tests {
                 },
             ),
             (
-                "9050:socks",
+                "http",
                 Remote {
-                    local_addr: LocalSpec::Inet((default_host!(local), 9050)),
+                    local_addr: LocalSpec::Inet((default_host!(local), HTTP_DEFAULT_PORT)),
+                    remote_addr: RemoteSpec::Http,
+                    protocol: Protocol::Tcp,
+                },
+            ),
+            (
+                "8888:http",
+                Remote {
+                    local_addr: LocalSpec::Inet((default_host!(local), 8888)),
+                    remote_addr: RemoteSpec::Http,
+                    protocol: Protocol::Tcp,
+                },
+            ),
+            (
+                "[2001:db8::1]:3081:socks",
+                Remote {
+                    local_addr: LocalSpec::Inet((String::from("2001:db8::1"), 3081)),
                     remote_addr: RemoteSpec::Socks,
                     protocol: Protocol::Tcp,
                 },
@@ -648,7 +680,8 @@ mod tests {
                 "[::1]:99/nonsense",
                 Error::Protocol(String::from("nonsense")),
             ),
-            ("socks/udp", Error::UdpSocks),
+            ("socks/udp", Error::UnsupportedUdp(RemoteSpec::Socks)),
+            ("http/udp", Error::UnsupportedUdp(RemoteSpec::Http)),
             ("stdio:tproxy", Error::StdioTproxy),
         ];
         for (s, expected) in tests {

@@ -80,6 +80,16 @@ pub(super) async fn handle_remote(
             // The parser guarantees that the protocol is TCP
             handle_socks(lhost, *lport, handler_resources).await
         }
+        (LocalSpec::Stdio, RemoteSpec::Http, _) => {
+            // The parser guarantees that the protocol is TCP
+            // TODO: implement handle_http_stdio
+            handle_socks_stdio(handler_resources).await
+        }
+        (LocalSpec::Inet((lhost, lport)), RemoteSpec::Http, _) => {
+            // The parser guarantees that the protocol is TCP
+            // TODO: implement handle_http
+            handle_socks(lhost, *lport, handler_resources).await
+        }
         (LocalSpec::Stdio, RemoteSpec::Socks, _) => {
             // The parser guarantees that the protocol is TCP
             handle_socks_stdio(handler_resources).await
