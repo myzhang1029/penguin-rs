@@ -6,6 +6,7 @@ use super::super::MaybeRetryableError;
 use super::FatalError;
 use crate::client::{HandlerResources, MuxStream, StreamCommand};
 use bytes::Bytes;
+use tokio::io as tio;
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info, warn};
@@ -87,7 +88,7 @@ pub(super) async fn handle_tcp_stdio(
     rport: u16,
     handler_resources: &HandlerResources,
 ) -> Result<(), FatalError> {
-    let mut stdio = super::Stdio::new();
+    let mut stdio = tio::join(tio::stdin(), tio::stdout());
     let rhost = rhost.as_bytes();
     // We want `loop` to be able to continue after a connection failure
     loop {

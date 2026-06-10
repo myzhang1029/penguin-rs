@@ -21,10 +21,7 @@ use crate::client::HandlerResources;
 use crate::parse_remote::{LocalSpec, RemoteSpec};
 use crate::parse_remote::{Protocol, Remote};
 use std::io;
-use std::pin::Pin;
-use std::task::{Context, Poll};
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tproxy::{handle_tproxy_tcp, handle_tproxy_udp};
 use tracing::debug;
 
@@ -96,50 +93,6 @@ pub(super) async fn handle_remote(
         (LocalSpec::Stdio, RemoteSpec::Tproxy, _) => {
             unreachable!("`clap` should have rejected this combination (this is a bug)")
         }
-    }
-}
-
-/// Merged `stdin` and `stdout` into a single stream
-#[derive(Debug)]
-pub struct Stdio {
-    stdin: tokio::io::Stdin,
-    stdout: tokio::io::Stdout,
-}
-
-impl Stdio {
-    pub fn new() -> Self {
-        Self {
-            stdin: tokio::io::stdin(),
-            stdout: tokio::io::stdout(),
-        }
-    }
-}
-
-impl AsyncRead for Stdio {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.stdin).poll_read(cx, buf)
-    }
-}
-
-impl AsyncWrite for Stdio {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.stdout).poll_write(cx, buf)
-    }
-
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.stdout).poll_flush(cx)
-    }
-
-    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.stdout).poll_shutdown(cx)
     }
 }
 
