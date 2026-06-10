@@ -8,12 +8,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
+mod http;
 pub(super) mod socks;
 mod tcp;
 #[cfg(feature = "tproxy")]
 mod tproxy;
 mod udp;
 
+use self::http::{handle_http, handle_http_stdio};
 use self::socks::{handle_socks, handle_socks_stdio};
 use self::tcp::{handle_tcp, handle_tcp_stdio};
 use self::udp::{handle_udp, handle_udp_stdio};
@@ -82,13 +84,11 @@ pub(super) async fn handle_remote(
         }
         (LocalSpec::Stdio, RemoteSpec::Http, _) => {
             // The parser guarantees that the protocol is TCP
-            // TODO: implement handle_http_stdio
-            handle_socks_stdio(handler_resources).await
+            handle_http_stdio(handler_resources).await
         }
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Http, _) => {
             // The parser guarantees that the protocol is TCP
-            // TODO: implement handle_http
-            handle_socks(lhost, *lport, handler_resources).await
+            handle_http(lhost, *lport, handler_resources).await
         }
         (LocalSpec::Stdio, RemoteSpec::Socks, _) => {
             // The parser guarantees that the protocol is TCP
