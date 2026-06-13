@@ -116,8 +116,10 @@ penguin-binary = ["server", "client"]
 acme = ["server", "dep:instant-acme", "tokio/process"]
 
 ## Client-specific features
-# Enable transparent proxy support in the client
+# Enable transparent proxy remote support
 tproxy = ["dep:socket2"]
+# Enable HTTP proxy remote support
+http-proxy = []
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(dhat)', 'cfg(fuzzing)', 'cfg(loom)'] }

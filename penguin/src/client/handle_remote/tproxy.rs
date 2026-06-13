@@ -185,7 +185,7 @@ pub(super) async fn handle_tproxy_udp(
 ) -> Result<(), FatalError> {
     // Required `IP_RECVORIGDSTADDR` or `IPV6_RECVORIGDSTADDR` socket options are not
     // in `socket2` yet.
-    Err(FatalError::TproxyNotEnabled)
+    todo!("Implement UDP transparent proxy support");
 }
 
 // There are not many meaningful ways to test Transparent Proxy.

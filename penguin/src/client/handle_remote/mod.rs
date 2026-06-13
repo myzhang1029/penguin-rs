@@ -8,6 +8,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
+#[cfg(feature = "http-proxy")]
 mod http;
 pub(super) mod socks;
 mod tcp;
@@ -48,10 +49,10 @@ pub enum FatalError {
     /// while waiting for a stream to be established.
     #[error("main loop exited without sending stream")]
     MainLoopExitWithoutSendingStream,
-    /// Happens when the user is trying to open a "tproxy" remote
-    /// but the feature is not enabled.
-    #[error("transparent Proxy not enabled")]
-    TproxyNotEnabled,
+    /// Happens when the user is trying to open a remote with features
+    /// turned off at compile time.
+    #[error("feature `{0}` is not enabled")]
+    NotEnabled(&'static str),
 }
 
 /// Construct a TCP remote based on the description. These are simple because
@@ -114,13 +115,30 @@ mod tproxy {
         _lport: u16,
         _handler_resources: &HandlerResources,
     ) -> Result<(), FatalError> {
-        Err(FatalError::TproxyNotEnabled)
+        Err(FatalError::NotEnabled("tproxy"))
     }
     pub(super) async fn handle_tproxy_udp(
         _lhost: &str,
         _lport: u16,
         _handler_resources: &HandlerResources,
     ) -> Result<(), FatalError> {
-        Err(FatalError::TproxyNotEnabled)
+        Err(FatalError::NotEnabled("tproxy"))
+    }
+}
+
+#[cfg(not(feature = "http-proxy"))]
+mod http {
+    use super::{FatalError, HandlerResources};
+    pub(super) async fn handle_http(
+        _lhost: &str,
+        _lport: u16,
+        _handler_resources: &HandlerResources,
+    ) -> Result<(), FatalError> {
+        Err(FatalError::NotEnabled("http-proxy"))
+    }
+    pub(super) async fn handle_http_stdio(
+        _handler_resources: &HandlerResources,
+    ) -> Result<(), FatalError> {
+        Err(FatalError::NotEnabled("http-proxy"))
     }
 }
