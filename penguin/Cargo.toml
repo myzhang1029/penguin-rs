@@ -64,6 +64,8 @@ dhat = { version = "0.3" }
 
 [features]
 default = ["rustls-native-roots", "tests-real-internet4", "tests-udp", "penguin-binary", "acme", "ring", "tproxy"]
+
+## TLS options
 # Note that it does not make sense to use more than one TLS implementations
 # at the same time, but there must be at least one if `penguin-binary` is
 # enabled.
@@ -74,6 +76,10 @@ nativetls = ["dep:tokio-native-tls", "dep:hyper-tls"]
 # Use ring or aws-lc-rs (supported on fewer platforms)
 ring = ["instant-acme/ring", "rustls/ring", "tokio-rustls/ring", "hyper-rustls/ring"]
 aws-lc-rs = ["dep:aws-lc-rs", "instant-acme/aws-lc-rs", "rustls/aws-lc-rs", "tokio-rustls/aws-lc-rs", "hyper-rustls/aws-lc-rs"]
+
+# Export key logs to a file specified via env SSLKEYLOGFILE
+rustls-keylog = ["__rustls"]
+
 # Dependencies for testing
 dev-dependencies = ["tracing-subscriber/env-filter", "tokio/process"]
 # Allow some tests that require real internet connection
@@ -83,22 +89,18 @@ tests-real-internet6 = []
 tests-udp = []
 # Test the ACME client with a local ACME server at https://localhost:14000/dir
 tests-acme-has-pebble = ["acme"]
+
 # Set the default localhost or unspecified address to IPv6
 default-is-ipv6 = []
-# Export key logs to a file specified via env SSLKEYLOGFILE
-rustls-keylog = ["__rustls"]
 # Enabling this causes `penguin` to listen for `tokio-console` connections
 tokio-console = ["dep:console-subscriber", "tokio/tracing"]
 # Statically remove some logging code. This breaks `tokio-console`
 remove-logging = ["tracing/max_level_trace", "tracing/release_max_level_debug", "log/max_level_trace", "log/release_max_level_debug"]
 # `parking_lot`'s deadlock detection in a separate thread
 deadlock-detection = ["parking_lot/deadlock_detection", "penguin-mux/deadlock-detection"]
-# obtaining certificate automatically using ACME protocol
-acme = ["server", "dep:instant-acme", "tokio/process"]
 # Use nohash-hasher for flow_id hashmaps
 nohash = ["dep:nohash-hasher", "penguin-mux/nohash"]
-# Enable transparent proxy support in the client
-tproxy = ["dep:socket2"]
+
 # `penguin` binary -- server
 server = ["dep:base64", "dep:sha1", "dep:http-body-util", "dep:hyper", "dep:hyper-util"]
 # `penguin` binary -- client
@@ -108,6 +110,14 @@ client = ["tokio/io-std"]
 # Only building the client or server binary is supported on a best-effort basis.
 # The tests require both parts.
 penguin-binary = ["server", "client"]
+
+## Server-specific features
+# obtaining certificate automatically using ACME protocol
+acme = ["server", "dep:instant-acme", "tokio/process"]
+
+## Client-specific features
+# Enable transparent proxy support in the client
+tproxy = ["dep:socket2"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(dhat)', 'cfg(fuzzing)', 'cfg(loom)'] }
