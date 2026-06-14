@@ -1,6 +1,6 @@
-use super::*;
-use crate::tls::make_tls_identity;
-use crate::{arg::ServerUrl, parse_remote::Remote};
+use crate::{arg, config};
+use crate::{arg::ServerUrl, parse_remote::Remote, tls::make_tls_identity};
+use ::http::HeaderValue;
 use penguin_mux::timing::OptionalDuration;
 #[allow(unused_imports)]
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -46,7 +46,7 @@ fn make_client_args(servhost: &str, servport: u16, remotes: Vec<Remote>) -> arg:
         max_retry_count: 10,
         max_retry_interval: 10,
         tls_skip_verify: false,
-        hostname: Some(http::HeaderValue::from_static("localhost")),
+        hostname: Some(HeaderValue::from_static("localhost")),
         channel_timeout: OptionalDuration::from_secs(10),
         ..Default::default()
     }
@@ -350,7 +350,7 @@ async fn test_it_works_tls_simple() {
         tls_cert: None,
         tls_key: None,
         tls_skip_verify: true,
-        hostname: Some(http::HeaderValue::from_static("localhost")),
+        hostname: Some(HeaderValue::from_static("localhost")),
         channel_timeout: OptionalDuration::from_secs(10),
         _pid: false,
         _fingerprint: None,
@@ -548,7 +548,7 @@ async fn test_http_host_and_sni() {
         ..Default::default()
     };
     CLIENT_ARGS_PLAIN.set(client_args.clone()).unwrap();
-    client_args.hostname = Some(http::HeaderValue::from_static("test-hostname"));
+    client_args.hostname = Some(HeaderValue::from_static("test-hostname"));
     CLIENT_ARGS_HAS_HOSTNAME.set(client_args.clone()).unwrap();
     // Set both hostname and tls_server_name to make sure they each work: i.e.
     // tls_server_name correctly overrides hostname for the SNI part
