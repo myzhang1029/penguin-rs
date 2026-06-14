@@ -393,7 +393,6 @@ mod tests {
     use std::convert::Infallible;
     use std::net::SocketAddr;
     use std::str::FromStr;
-    use std::sync::LazyLock;
     use tokio::net::TcpListener;
     use tokio::task::JoinHandle;
 
@@ -662,6 +661,7 @@ mod tests {
     #[cfg(any(feature = "tests-real-internet4", feature = "tests-real-internet6"))]
     #[tokio::test]
     async fn test_backend_tls() {
+        use std::sync::LazyLock;
         static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
         static BACKEND: LazyLock<BackendUrl> =
             LazyLock::new(|| BackendUrl::from_str("https://www.google.com").unwrap());

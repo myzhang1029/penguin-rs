@@ -519,6 +519,7 @@ impl FromStr for Header {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "client")]
     use crate::parse_remote::{LocalSpec, Protocol, RemoteSpec};
 
     #[test]
@@ -614,6 +615,7 @@ mod tests {
     }
 
     #[cfg(feature = "client")]
+    #[cfg_attr(not(feature = "server"), expect(irrefutable_let_patterns))]
     #[test]
     fn test_client_args_minimal() {
         crate::tests::setup_logging();
@@ -642,6 +644,7 @@ mod tests {
     }
 
     #[cfg(feature = "client")]
+    #[cfg_attr(not(feature = "server"), expect(irrefutable_let_patterns))]
     #[test]
     fn test_client_args_full() {
         let args = PenguinCli::parse_from([
@@ -701,13 +704,17 @@ mod tests {
             assert_eq!(proxy.path_and_query.unwrap(), "/");
             assert_eq!(proxy.authority.as_ref().unwrap().host(), "localhost");
             assert_eq!(proxy.authority.as_ref().unwrap().port_u16().unwrap(), 1080);
-            assert_eq!(proxy.authority.unwrap(), Authority::from_static("abc:123@localhost:1080"));
+            assert_eq!(
+                proxy.authority.unwrap(),
+                Authority::from_static("abc:123@localhost:1080")
+            );
             assert_eq!(args.header, [Header::from_str("X-Test:test").unwrap()]);
             assert_eq!(args.hostname, Some(HeaderValue::from_static("example.com")));
         }
     }
 
     #[cfg(feature = "server")]
+    #[cfg_attr(not(feature = "client"), expect(irrefutable_let_patterns))]
     #[test]
     fn test_server_args_minimal() {
         let args = PenguinCli::parse_from(["penguin", "server"]);
@@ -728,6 +735,7 @@ mod tests {
     }
 
     #[cfg(feature = "server")]
+    #[cfg_attr(not(feature = "client"), expect(irrefutable_let_patterns))]
     #[test]
     fn test_server_args_just_host() {
         let args = PenguinCli::parse_from(["penguin", "server", "--host", "0.0.0.0"]);
@@ -746,6 +754,7 @@ mod tests {
     }
 
     #[cfg(feature = "server")]
+    #[cfg_attr(not(feature = "client"), expect(irrefutable_let_patterns))]
     #[test]
     fn test_server_args_just_port() {
         let args = PenguinCli::parse_from(["penguin", "server", "--port", "45"]);
@@ -764,6 +773,7 @@ mod tests {
     }
 
     #[cfg(feature = "server")]
+    #[cfg_attr(not(feature = "client"), expect(irrefutable_let_patterns))]
     #[test]
     fn test_server_args_port_cover_ahead() {
         let args = PenguinCli::parse_from([
@@ -869,6 +879,7 @@ mod tests {
     }
 
     #[cfg(feature = "server")]
+    #[cfg_attr(not(feature = "client"), expect(irrefutable_let_patterns))]
     #[test]
     fn test_server_args_full() {
         let args = PenguinCli::parse_from([

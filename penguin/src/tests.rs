@@ -1,16 +1,15 @@
+#![allow(unused_imports)]
+
 use crate::{arg, config};
 use crate::{arg::ServerUrl, parse_remote::Remote, tls::make_tls_identity};
 use ::http::HeaderValue;
 use penguin_mux::timing::OptionalDuration;
-#[allow(unused_imports)]
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-#[allow(unused_imports)]
 use std::sync::{LazyLock, OnceLock};
 use std::{str::FromStr, time::Duration};
 #[cfg(not(all(feature = "nativetls", any(target_os = "macos", target_os = "windows"))))]
 use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt};
-#[allow(unused_imports)]
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tracing::debug;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
@@ -1484,7 +1483,9 @@ async fn test_it_works_dns_v6() {
 #[cfg(all(feature = "client", feature = "server"))]
 #[tokio::test]
 async fn test_tproxy_something_happens() {
+    #[cfg(feature = "tproxy")]
     static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
+    #[cfg(feature = "tproxy")]
     static SERVER_ARGS: LazyLock<arg::ServerArgs> =
         LazyLock::new(|| make_server_args("[::1]", 28362));
     static CLIENT_ARGS: LazyLock<arg::ClientArgs> = LazyLock::new(|| {

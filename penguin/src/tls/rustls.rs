@@ -298,7 +298,7 @@ mod tests {
             loaded_key.secret_der(),
             custom_crt.signing_key.serialize_der(),
         );
-        let cert_params = rcgen::CertificateParams::new(vec!["example.com".into()]).unwrap();
+        let cert_params = CertificateParams::new(vec!["example.com".into()]).unwrap();
         let keypair = rcgen::KeyPair::generate_for(&rcgen::PKCS_ED25519).unwrap();
         let custom_crt = cert_params.self_signed(&keypair).unwrap();
         let crt = custom_crt.pem();

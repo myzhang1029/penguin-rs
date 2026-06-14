@@ -27,7 +27,7 @@ macro_rules! default_host {
 }
 
 // Export this macro for use in tests
-#[cfg(test)]
+#[cfg(all(test, feature = "client"))]
 pub(crate) use default_host;
 
 /// Default SOCKS port
