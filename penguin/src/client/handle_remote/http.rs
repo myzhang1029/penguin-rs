@@ -9,6 +9,7 @@ use crate::{client::HandlerResources, http::IncomingOrFullBody};
 use bytes::Bytes;
 use http::{Method, Request, Response, StatusCode};
 use hyper::{body::Incoming, service::service_fn};
+use hyper_util::client::legacy::Client as HyperClient;
 use hyper_util::{
     rt::{TokioExecutor, TokioIo},
     server::conn::auto,
@@ -27,7 +28,7 @@ fn make_static_body(status: StatusCode, content: &'static [u8]) -> Response<Inco
 async fn do_proxy_request(
     req: Request<Incoming>,
     handler_resources: &HandlerResources,
-) -> Result<Response<IncomingOrFullBody>, hyper::Error> {
+) -> Result<Response<IncomingOrFullBody>, FatalError> {
     // This fails only if main has exited
     let Ok(stream_command_tx_permit) = handler_resources.stream_command_tx.reserve().await else {
         return Ok(make_static_body(
@@ -67,8 +68,24 @@ async fn do_proxy_request(
         });
         Ok(make_static_body(StatusCode::OK, b""))
     } else {
-        debug!("{} request for {target}", req.method());
-        todo!()
+        let method = req.method().clone();
+        debug!("{method} request for {target}");
+        let client = HyperClient::builder(TokioExecutor::new())
+            .build(crate::tls::make_hyper_connector().map_err(FatalError::ClientIo)?);
+        match client
+            .request(req.map(IncomingOrFullBody::Incoming))
+            .await
+            .map(|res| res.map(IncomingOrFullBody::Incoming))
+        {
+            Ok(res) => return Ok(res),
+            Err(e) => {
+                warn!("Error while proxying {method} request: {e}");
+                return Ok(make_static_body(
+                    StatusCode::BAD_GATEWAY,
+                    b"Failed to proxy request to target",
+                ));
+            }
+        }
     }
 }
 
