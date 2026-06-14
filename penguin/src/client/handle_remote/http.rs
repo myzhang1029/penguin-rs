@@ -1,21 +1,22 @@
 //! Support for HTTP proxy servers
-//! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
-
-use std::{convert::Infallible, net::SocketAddr};
+//
+// SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::{
     FatalError,
     tcp::{open_tcp_listener, request_tcp_channel},
 };
-use crate::{client::HandlerResources, http::IncomingOrFullBody};
+use crate::client::HandlerResources;
+use crate::http::{body::IncomingOrFullBody, proxy};
 use bytes::Bytes;
-use http::{HeaderMap, HeaderValue, Method, Request, Response, StatusCode, uri::Scheme};
+use http::{Method, Request, Response, StatusCode, uri::Scheme};
 use hyper::client::conn::http1;
 use hyper::{body::Incoming, service::service_fn};
 use hyper_util::{
     rt::{TokioExecutor, TokioIo},
     server::conn::auto,
 };
+use std::{convert::Infallible, net::SocketAddr};
 use tokio::io::{self as tio, AsyncRead, AsyncWrite};
 use tracing::{debug, trace, warn};
 
@@ -30,7 +31,6 @@ fn make_static_body(status: StatusCode, content: &'static [u8]) -> Response<Inco
 async fn do_proxy_request(
     mut req: Request<Incoming>,
     client_addr: Option<SocketAddr>,
-    our_addr: Option<&str>,
     handler_resources: &HandlerResources,
 ) -> Result<Response<IncomingOrFullBody>, Infallible> {
     // This fails only if main has exited
@@ -41,7 +41,7 @@ async fn do_proxy_request(
         ));
     };
 
-    add_proxy_headers(req.headers_mut(), client_addr, our_addr);
+    proxy::add_headers(req.headers_mut(), client_addr);
     let Some(target) = req.uri().authority() else {
         return Ok(make_static_body(
             StatusCode::BAD_REQUEST,
@@ -111,43 +111,9 @@ async fn do_proxy_request(
     }
 }
 
-fn add_proxy_headers(
-    headers: &mut HeaderMap,
-    client_addr: Option<SocketAddr>,
-    our_ip: Option<&str>,
-) {
-    let Some(our_ip) = our_ip else {
-        return;
-    };
-    let Some(client_addr) = client_addr else {
-        return;
-    };
-    let client_ip = client_addr.ip().to_string();
-    let x_forwarded_for = if headers.contains_key("x-forwarded-for") {
-        let mut values: Vec<&str> = headers
-            .get_all("x-forwarded-for")
-            .iter()
-            .flat_map(|hdr| hdr.to_str().unwrap_or("").split(','))
-            .map(str::trim)
-            .collect();
-        values.push(our_ip);
-        values.join(", ")
-    } else {
-        format!("{client_ip}, {our_ip}")
-    };
-    if let Ok(value) = HeaderValue::from_str(&client_ip) {
-        headers.append("x-real-ip", value);
-    }
-    if let Ok(value) = HeaderValue::from_str(&x_forwarded_for) {
-        headers.append("x-forwarded-for", value);
-    }
-    headers.append("x-forwarded-proto", HeaderValue::from_static("http"));
-}
-
 async fn http_proxy_on_stream<S>(
     stream: S,
     client_addr: Option<SocketAddr>,
-    our_addr: Option<&'static str>,
     handler_resources: &'static HandlerResources,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>
 where
@@ -155,8 +121,7 @@ where
 {
     let hyper_io = TokioIo::new(stream);
     let exec = auto::Builder::new(TokioExecutor::new());
-    let service =
-        service_fn(move |req| do_proxy_request(req, client_addr, our_addr, handler_resources));
+    let service = service_fn(move |req| do_proxy_request(req, client_addr, handler_resources));
     exec.serve_connection_with_upgrades(hyper_io, service).await
 }
 
@@ -174,9 +139,7 @@ pub(super) async fn handle_http(
         let (stream, peer_addr) = listener.accept().await.map_err(FatalError::ClientIo)?;
         debug!("Accepted HTTP proxy connection from {peer_addr}");
         tokio::spawn(async move {
-            if let Err(e) =
-                http_proxy_on_stream(stream, Some(peer_addr), Some(lhost), handler_resources).await
-            {
+            if let Err(e) = http_proxy_on_stream(stream, Some(peer_addr), handler_resources).await {
                 warn!("HTTP proxy forwarded from {peer_addr} failed: {e}");
             }
         });
@@ -189,7 +152,7 @@ pub(super) async fn handle_http_stdio(
 ) -> Result<(), super::FatalError> {
     loop {
         let stdio = tio::join(tio::stdin(), tio::stdout());
-        if let Err(e) = http_proxy_on_stream(stdio, None, None, handler_resources).await {
+        if let Err(e) = http_proxy_on_stream(stdio, None, handler_resources).await {
             warn!("HTTP proxy forwarded from stdio failed: {e}");
             break Ok(());
         }

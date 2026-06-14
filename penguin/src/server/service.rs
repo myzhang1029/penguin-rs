@@ -4,7 +4,7 @@
 
 use super::websocket::handle_websocket;
 use crate::arg::BackendUrl;
-use crate::http::IncomingOrFullBody;
+use crate::http::body::IncomingOrFullBody;
 use crate::server::io_with_timeout;
 use crate::tls::{HyperConnector, MaybeTlsStream};
 use base64::Engine;
