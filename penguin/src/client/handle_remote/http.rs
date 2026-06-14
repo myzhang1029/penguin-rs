@@ -198,20 +198,15 @@ pub(super) async fn handle_http_stdio(
 
 #[cfg(test)]
 mod tests {
-    use http_body_util::BodyExt;
-
     use super::*;
+    use http_body_util::BodyExt;
 
     #[tokio::test]
     async fn test_make_static_body() {
         let content = b"Hello, world!";
         let response = make_static_body(StatusCode::OK, content);
         assert_eq!(response.status(), StatusCode::OK);
-        if let IncomingOrFullBody::Full(body) = response.into_body() {
-            let bytes: Bytes = body.collect().await.unwrap().to_bytes();
-            assert_eq!(bytes, Bytes::from_static(content));
-        } else {
-            panic!("Expected a full body");
-        }
+        let bytes: Bytes = response.collect().await.unwrap().to_bytes();
+        assert_eq!(bytes, Bytes::from_static(content));
     }
 }
