@@ -636,6 +636,86 @@ async fn test_http_host_and_sni() {
     client_task.await.unwrap();
 }
 
+#[cfg(all(feature = "client", feature = "server", feature = "http-proxy"))]
+#[tokio::test]
+async fn test_http_proxy() {
+    static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
+    static SERVER_ARGS: LazyLock<arg::ServerArgs> =
+        LazyLock::new(|| make_server_args("127.0.0.1", 22441));
+    static CLIENT_ARGS: LazyLock<arg::ClientArgs> = LazyLock::new(|| {
+        make_client_args(
+            "127.0.0.1",
+            22441,
+            vec![Remote::from_str("127.0.0.1:17535:http").unwrap()],
+        )
+    });
+    static HANDLER_RESOURCES: OnceLock<crate::client::HandlerResources> = OnceLock::new();
+    setup_logging();
+
+    let (handler_resources, stream_command_rx, datagram_rx) =
+        crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let client_task = tokio::spawn(crate::client::client_main_inner(
+        &CLIENT_ARGS,
+        HANDLER_RESOURCES.get().unwrap(),
+        stream_command_rx,
+        datagram_rx,
+    ));
+    let server_task = tokio::spawn(crate::server::server_main(
+        &SERVER_ARGS,
+        &BACKEND_SUPPORTS_HTTP2,
+    ));
+    let target_server_task = tokio::spawn(async move {
+        let listener = TcpListener::bind("127.0.0.1:19539").await.unwrap();
+        for _ in 0..64 {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 16];
+             stream.read_exact(&mut buf).await.unwrap();
+            assert_eq!(&buf[..4], b"GET ");
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nGood")
+                .await
+                .unwrap();
+        }
+    });
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // It would be nice to use `loom`
+    for _ in 0..32 {
+        let mut proxy = TcpStream::connect("127.0.0.1:17535").await.unwrap();
+        proxy
+            .write_all(b"GET http://127.0.0.1:19539 HTTP/1.1\r\n\r\n")
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let mut buf = vec![0u8; 1024];
+        let n = proxy.read(&mut buf).await.unwrap();
+        let buf = &buf[..n];
+        assert_eq!(&buf[..15], b"HTTP/1.1 200 OK");
+        let str_resp = str::from_utf8(buf).unwrap().trim_end();
+        assert_eq!(&str_resp[str_resp.len() - 4..], "Good");
+
+        let mut proxy = TcpStream::connect("127.0.0.1:17535").await.unwrap();
+        proxy
+            .write_all(b"CONNECT 127.0.0.1:19539 HTTP/1.1\r\n\r\n")
+            .await
+            .unwrap();
+        proxy.write_all(b"GET / HTTP/1.1\r\n\r\n").await.unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let mut buf = vec![0u8; 1024];
+        let n = proxy.read(&mut buf).await.unwrap();
+        let buf = &buf[..n];
+        assert_eq!(&buf[..15], b"HTTP/1.1 200 OK");
+        let str_resp = str::from_utf8(buf).unwrap().trim_end();
+        assert_eq!(&str_resp[str_resp.len() - 4..], "Good");
+    }
+
+    target_server_task.await.unwrap();
+    server_task.abort();
+    client_task.abort();
+}
+
 #[cfg(all(feature = "client", feature = "server"))]
 #[tokio::test]
 async fn test_socks5_connect_reliability_v4() {

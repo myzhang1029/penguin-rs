@@ -1,4 +1,4 @@
-//! HTTP body types for `hyper`` interaction
+//! HTTP body types for `hyper` interaction
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 use bytes::Bytes;
