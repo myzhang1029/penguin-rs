@@ -119,7 +119,7 @@ acme = ["server", "dep:instant-acme", "tokio/process"]
 # Enable transparent proxy remote support
 tproxy = ["dep:socket2"]
 # Enable HTTP proxy remote support
-http-proxy = ["hyper/client"]
+http-proxy = ["dep:http-body-util", "hyper/client", "dep:hyper-util"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(dhat)', 'cfg(fuzzing)', 'cfg(loom)'] }
