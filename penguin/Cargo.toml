@@ -63,7 +63,7 @@ rusty-penguin = { path = ".", default-features = false, features = ["dev-depende
 dhat = { version = "0.3" }
 
 [features]
-default = ["rustls-native-roots", "tests-real-internet4", "tests-udp", "penguin-binary", "acme", "ring", "tproxy"]
+default = ["rustls-native-roots", "tests-real-internet4", "tests-udp", "penguin-binary", "acme", "ring", "tproxy", "http-proxy"]
 
 ## TLS options
 # Note that it does not make sense to use more than one TLS implementations

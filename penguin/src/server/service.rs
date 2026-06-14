@@ -4,14 +4,14 @@
 
 use super::websocket::handle_websocket;
 use crate::arg::BackendUrl;
+use crate::http::IncomingOrFullBody;
 use crate::server::io_with_timeout;
 use crate::tls::{HyperConnector, MaybeTlsStream};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64_STANDARD_ENGINE;
 use bytes::Bytes;
 use http::{HeaderValue, Method, Request, Response, StatusCode, Uri, header};
-use http_body_util::{BodyExt, Full as FullBody};
-use hyper::body::Incoming;
+use http_body_util::BodyExt;
 use hyper::service::Service;
 use hyper::upgrade::OnUpgrade;
 use hyper_util::client::legacy::{Client as HyperClient, Error as HyperClientError};
@@ -62,38 +62,6 @@ pub(super) enum Error {
     Client(#[from] HyperClientError),
     #[error(transparent)]
     Body(#[from] hyper::Error),
-}
-
-/// Wrapper enum for hyper body types
-#[derive(Debug)]
-pub enum IncomingOrFullBody {
-    /// `hyper::body::Incoming` body
-    Incoming(Incoming),
-    /// Full body in memory
-    Full(FullBody<Bytes>),
-}
-
-impl IncomingOrFullBody {
-    /// Create a new `Full` body from bytes
-    fn new_full(bytes: Bytes) -> Self {
-        Self::Full(FullBody::new(bytes))
-    }
-}
-
-impl hyper::body::Body for IncomingOrFullBody {
-    type Data = Bytes;
-    type Error = hyper::Error;
-    fn poll_frame(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>> {
-        match self.get_mut() {
-            Self::Incoming(body) => Pin::new(body).poll_frame(cx),
-            Self::Full(body) => Pin::new(body)
-                .poll_frame(cx)
-                .map(|res| res.map(|res| res.map_err(|e| match e {}))),
-        }
-    }
 }
 
 /// Required state for each request.
@@ -420,6 +388,7 @@ impl Service<Request<http_body_util::Empty<Bytes>>> for State {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hyper::body::Incoming;
     use hyper::service::service_fn;
     use std::convert::Infallible;
     use std::net::SocketAddr;
