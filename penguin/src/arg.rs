@@ -181,7 +181,7 @@ pub struct ClientArgs {
     /// For example, http://admin:password@my-server.com:8081
     ///         or: socks://admin:password@my-server.com:1080
     #[arg(short = 'x', long)]
-    pub proxy: Option<String>,
+    pub proxy: Option<Uri>,
     /// Set a custom header in the form "HeaderName: HeaderContent".
     /// Can be used multiple times.
     /// (e.g --header "Foo: Bar" --header "Hello: World")
@@ -696,10 +696,12 @@ mod tests {
             assert_eq!(args.max_retry_count, 400);
             assert_eq!(args.max_retry_interval, 1000);
             assert_eq!(args.handshake_timeout, OptionalDuration::from_secs(5));
-            assert_eq!(
-                args.proxy,
-                Some("socks5://abc:123@localhost:1080".to_string())
-            );
+            let proxy = args.proxy.unwrap().into_parts();
+            assert_eq!(proxy.scheme.unwrap(), Scheme::from_str("socks5").unwrap());
+            assert_eq!(proxy.path_and_query.unwrap(), "/");
+            assert_eq!(proxy.authority.as_ref().unwrap().host(), "localhost");
+            assert_eq!(proxy.authority.as_ref().unwrap().port_u16().unwrap(), 1080);
+            assert_eq!(proxy.authority.unwrap(), Authority::from_static("abc:123@localhost:1080"));
             assert_eq!(args.header, [Header::from_str("X-Test:test").unwrap()]);
             assert_eq!(args.hostname, Some(HeaderValue::from_static("example.com")));
         }
