@@ -93,7 +93,7 @@ async fn do_proxy_request(
         trace!("HTTP handshake successful for {target}");
 
         tokio::spawn(async move {
-            if let Err(e) = dbg!(conn).await {
+            if let Err(e) = conn.await {
                 warn!("HTTP connection error: {e}");
             }
         });
