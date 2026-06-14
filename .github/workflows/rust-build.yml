@@ -43,10 +43,20 @@ jobs:
         cargo check --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-udp,penguin-binary,acme,tungstenite,tproxy --no-default-features
         cargo run --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-udp,penguin-binary,acme,tungstenite,tproxy --no-default-features -- --help
 
+    - name: Check server only
+      run: |
+        cargo check --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-udp,server --no-default-features
+        cargo run --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-udp,server --no-default-features -- --help
+
     - name: Check client only
       run: |
-        cargo check --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-udp,client,tproxy --no-default-features
-        cargo run --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-udp,client,tproxy --no-default-features -- --help
+        cargo check --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-udp,client --no-default-features
+        cargo run --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-udp,client --no-default-features -- --help
+
+    - name: Check client with tproxy and http-proxy
+      run: |
+        cargo check --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-udp,client,tproxy,http-proxy --no-default-features
+        cargo run --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-udp,client,tproxy,http-proxy --no-default-features -- --help
 
     - name: Check with most features on, using ring
       run: |
