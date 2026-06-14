@@ -406,6 +406,7 @@ async fn test_it_works_tls_simple() {
 #[cfg(not(all(feature = "nativetls", any(target_os = "macos", target_os = "windows"))))]
 async fn test_tls_reload() {
     static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
+
     use crate::tls::tls_connect;
 
     static SERVER_ARGS: OnceLock<arg::ServerArgs> = OnceLock::new();
@@ -425,7 +426,10 @@ async fn test_tls_reload() {
     ));
     tokio::time::sleep(Duration::from_secs(2)).await;
     // Connect to the server and read the certificate
-    let stream = tls_connect("127.0.0.1", 20353, "localhost", None, None, None, true)
+    let tcp_stream = tokio::net::TcpStream::connect(("127.0.0.1", 20353))
+        .await
+        .unwrap();
+    let stream = tls_connect(tcp_stream, "localhost", None, None, None, true)
         .await
         .unwrap();
     #[cfg(feature = "nativetls")]
@@ -462,7 +466,10 @@ async fn test_tls_reload() {
     assert!(cmd.success(), "Failed to send SIGUSR1 to self");
     // Check that the server has reloaded the certificate
     tokio::time::sleep(Duration::from_secs(1)).await;
-    let stream = tls_connect("127.0.0.1", 20353, "localhost", None, None, None, true)
+    let tcp_stream = tokio::net::TcpStream::connect(("127.0.0.1", 20353))
+        .await
+        .unwrap();
+    let stream = tls_connect(tcp_stream, "localhost", None, None, None, true)
         .await
         .unwrap();
     #[cfg(feature = "nativetls")]
@@ -670,7 +677,7 @@ async fn test_http_proxy() {
         for _ in 0..64 {
             let (mut stream, _) = listener.accept().await.unwrap();
             let mut buf = vec![0u8; 16];
-             stream.read_exact(&mut buf).await.unwrap();
+            stream.read_exact(&mut buf).await.unwrap();
             assert_eq!(&buf[..4], b"GET ");
             stream
                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nGood")

@@ -310,11 +310,6 @@ pub async fn client_main_inner(
     mut stream_command_rx: mpsc::Receiver<StreamCommand>,
     mut datagram_rx: mpsc::Receiver<Datagram>,
 ) -> Result<(), Error> {
-    // TODO: Temporary, remove when implemented
-    // Blocked on `snapview/tungstenite-rs#177`
-    if args.proxy.is_some() {
-        warn!("Proxy not implemented yet");
-    }
     let mut jobs = JoinSet::new();
     // Spawn listeners. See `handle_remote.rs` for the implementation considerations.
     for remote in &args.remote {

@@ -67,11 +67,19 @@ async fn handshake_inner(
     for header in &args.header {
         req_headers.insert(&header.name, header.value.dupe());
     }
+
+    let tcp_stream = tokio::net::TcpStream::connect((host, port))
+        .await
+        .map_err(super::Error::TcpConnect)?;
+
+    // TODO: Connect via proxy
+    if args.proxy.is_some() {
+        warn!("Proxy not implemented yet");
+    }
     let stream = if is_tls {
         MaybeTlsStream::Tls(
             tls_connect(
-                host,
-                port,
+                tcp_stream,
                 tls_server_name,
                 args.tls_cert.as_deref(),
                 args.tls_key.as_deref(),
@@ -83,11 +91,7 @@ async fn handshake_inner(
     } else {
         // No TLS
         warn!("Using insecure WebSocket connection");
-        MaybeTlsStream::Plain(
-            TcpStream::connect((host, port))
-                .await
-                .map_err(super::Error::TcpConnect)?,
-        )
+        MaybeTlsStream::Plain(tcp_stream)
     };
     let (ws_stream, _response) = client_async(req, stream).await?;
     debug!("WebSocket handshake succeeded");

@@ -17,6 +17,8 @@ use ::rustls::pki_types::InvalidDnsNameError;
 use arc_swap::ArcSwap;
 use std::sync::Arc;
 use thiserror::Error;
+#[cfg(any(feature = "client", test))]
+use tokio::io::{AsyncRead, AsyncWrite};
 
 #[cfg(all(feature = "__rustls", feature = "server"))]
 pub use self::rustls::{HyperConnector, make_hyper_connector};
@@ -75,31 +77,30 @@ pub enum Error {
 /// - Returns [`Error::TcpConnect`] if the TCP connection fails.
 /// - Returns the appropriate TLS error from the TLS library used.
 #[cfg(any(feature = "client", test))]
-pub async fn tls_connect(
-    host: &str,
-    port: u16,
+pub async fn tls_connect<IO>(
+    underlying_io: IO,
     server_name: &str,
     tls_cert: Option<&str>,
     tls_key: Option<&str>,
     tls_ca: Option<&str>,
     tls_insecure: bool,
-) -> Result<TlsStream<tokio::net::TcpStream>, Error> {
+) -> Result<TlsStream<IO>, Error>
+where
+    IO: AsyncRead + AsyncWrite + Unpin,
+{
     let config =
         make_client_config(tls_cert, tls_key, tls_ca, tls_insecure, Some(&["http/1.1"])).await?;
-    let tcp_stream = tokio::net::TcpStream::connect((host, port))
-        .await
-        .map_err(Error::TcpConnect)?;
     #[cfg(feature = "nativetls")]
     let tls_stream = {
         let connector = tokio_native_tls::TlsConnector::from(config);
-        connector.connect(server_name, tcp_stream).await?
+        connector.connect(server_name, underlying_io).await?
     };
     #[cfg(feature = "__rustls")]
     let tls_stream = {
         let connector: tokio_rustls::TlsConnector = Arc::new(config).into();
         let server_name = ::rustls::pki_types::ServerName::try_from(server_name.to_string())?;
         let client_st = connector
-            .connect(server_name, tcp_stream)
+            .connect(server_name, underlying_io)
             .await
             .map_err(Error::TcpConnect)?;
         TlsStream::Client(client_st)
