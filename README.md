@@ -43,7 +43,7 @@ some functionalities:
   when used with HTTPS/WSS.
 
 - There is no user/password authentication because we do not have SSH. Instead,
-  use PSK authentication.
+  use PSK authentication or mutual TLS.
 
 - There is no server keep-alive because client keep-alive is enough.
 
@@ -104,11 +104,14 @@ Executable features:
 - `client`: build the client (default)
 - `server`: build the server (default)
 - `penguin-binary`: shorthand for both `server` and `client` (default)
+
 - `rustls-native-roots`: use `rustls` with system CA (default)
 - `rustls-webpki-roots`: use `rustls` with bundled webpki CA
 - `nativetls`: use `native-tls`
 - `ring`: use `ring` as the crypto provider for `rustls`
 - `aws-lc-rs`: use `aws-lc-rs` as the crypto provider for `rustls`
+
+- `rustls-keylog`: (caution) export TLS session data to the file specified in the environmental variable `SSLKEYLOGFILE`
 
 - `default-is-ipv6`: use `::`/`::1` instead of `0.0.0.0`/`127.0.0.1` when an IP address is omitted in the client command line
 
@@ -117,13 +120,15 @@ Executable features:
 - `deadlock-detection`: spawn a background thread running `parking_lot`'s deadlock detection
 - `acme`: (requires `server`) enable the built-in ACME client (default)
 Will also make the binary use `rustls` even if `nativetls` is enabled due to internal dependencies.
-- `rustls-keylog`: (caution) export TLS session data to the file specified in the environmental variable `SSLKEYLOGFILE`
+- `tproxy`: enable `:tproxy` (transparent proxy) remote types in the client (default)
+- `http`: enable `:http` (http proxy) remote types in the client (default)
 
 Testing features:
 - `tests-real-internet4`: run tests that require IPv4 access to the internet
 - `tests-real-internet6`: run tests that require IPv4 access to the internet
 - `tests-udp`: run tests that expect UDP traffic to work reliably. They may be flaky depending on the network environment.
 - `tests-acme-has-pebble`: test the ACME client with a local ACME server at `https://localhost:14000/dir`
+- Note that when testing with `nativetls`, it is still necessary to enable one of `rcgen/ring` or `rcgen/aws_lc_rs`.
 
 ## Contribution
 All contributions are welcome. Please make sure you
