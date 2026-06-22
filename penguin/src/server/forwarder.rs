@@ -5,9 +5,10 @@
 
 use crate::config;
 use penguin_mux::{Datagram, Dupe, MuxStream};
+use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use thiserror::Error;
-use tokio::net::{TcpSocket, UdpSocket, lookup_host};
+use tokio::net::{TcpSocket, ToSocketAddrs, UdpSocket, lookup_host};
 use tokio::sync::mpsc;
 use tracing::{debug, trace};
 
@@ -15,92 +16,75 @@ use tracing::{debug, trace};
 #[derive(Error, Debug)]
 pub(super) enum Error {
     #[error(transparent)]
-    Io(#[from] std::io::Error),
+    Io(#[from] io::Error),
     #[error("invalid host: {0}")]
     Host(#[from] std::str::Utf8Error),
+}
+
+#[inline]
+async fn resolve_and_try<F, R, T>(host: T, f: F) -> io::Result<R>
+where
+    F: AsyncFn(SocketAddr) -> io::Result<R>,
+    T: ToSocketAddrs,
+{
+    let mut last_err = None;
+    let sock_addrs = lookup_host(host).await?;
+    for sock_addr in sock_addrs {
+        match f(sock_addr).await {
+            Ok(r) => return Ok(r),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    Err(last_err.unwrap_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "could not resolve to any address",
+        )
+    }))
 }
 
 /// Bind a UDP socket with the same address family as the given target,
 /// and return the bound socket and the matched target address.
 /// Note that we don't connect or send the socket here.
-async fn bind_udp_for_target(
-    target: (&str, u16),
+#[tracing::instrument(skip(target), level = "trace")]
+#[inline]
+async fn bind_udp_for_target<T: ToSocketAddrs>(
+    target: T,
     outgoing_from_v4: Ipv4Addr,
     outgoing_from_v6: Ipv6Addr,
-) -> Result<(UdpSocket, SocketAddr), Error> {
-    let targets = lookup_host(target).await?;
-    let mut last_err = None;
-    for target in targets {
-        let socket = match if target.is_ipv4() {
-            UdpSocket::bind((outgoing_from_v4, 0)).await
+) -> io::Result<(UdpSocket, SocketAddr)> {
+    resolve_and_try(target, async move |sock_addr: SocketAddr| {
+        let socket = if sock_addr.is_ipv4() {
+            UdpSocket::bind((outgoing_from_v4, 0)).await?
         } else {
-            UdpSocket::bind((outgoing_from_v6, 0)).await
-        } {
-            Ok(socket) => socket,
-            Err(e) => {
-                last_err = Some(e);
-                continue;
-            }
+            UdpSocket::bind((outgoing_from_v6, 0)).await?
         };
-        // `expect`: at this point `listener` should be bound. Otherwise, it's a bug.
-        let local_addr = socket
-            .local_addr()
-            .expect("Failed to get local address of UDP socket (this is a bug)");
-        debug!("bound to {local_addr}");
-        return Ok((socket, target));
-    }
-    Err(last_err
-        .unwrap_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "could not resolve to any address",
-            )
-        })
-        .into())
+        Ok((socket, sock_addr))
+    })
+    .await
 }
-// XXX: refactor these two functions
-async fn bind_tcp_for_target(
-    target: (&str, u16),
+
+/// Similar to `bind_udp_for_target`, but for TCP sockets. It returns a `TcpSocket`
+/// instead of a connected `TcpStream`.
+#[tracing::instrument(skip(target), level = "trace")]
+#[inline]
+async fn bind_tcp_for_target<T: ToSocketAddrs>(
+    target: T,
     outgoing_from_v4: Ipv4Addr,
     outgoing_from_v6: Ipv6Addr,
-) -> Result<(TcpSocket, SocketAddr), Error> {
-    let targets = lookup_host(target).await?;
-    let mut last_err = None;
-    for target in targets {
-        let socket = match if target.is_ipv4() {
-            TcpSocket::new_v4()
+) -> io::Result<(TcpSocket, SocketAddr)> {
+    resolve_and_try(target, async move |sock_addr: SocketAddr| {
+        let socket;
+        if sock_addr.is_ipv4() {
+            socket = TcpSocket::new_v4()?;
+            socket.bind((outgoing_from_v4, 0).into())?;
         } else {
-            TcpSocket::new_v6()
-        } {
-            Ok(socket) => socket,
-            Err(e) => {
-                last_err = Some(e);
-                continue;
-            }
-        };
-        if let Err(e) = if target.is_ipv4() {
-            socket.bind((outgoing_from_v4, 0).into())
-        } else {
-            socket.bind((outgoing_from_v6, 0).into())
-        } {
-            last_err = Some(e);
-            continue;
+            socket = TcpSocket::new_v6()?;
+            socket.bind((outgoing_from_v6, 0).into())?;
         }
-        // `expect`: at this point `listener` should be bound. Otherwise, it's a bug.
-        let local_addr = socket
-            .local_addr()
-            .expect("Failed to get local address of TCP socket (this is a bug)");
-        debug!("bound to {local_addr}");
-        return Ok((socket, target));
-    }
-    Err(last_err
-        .unwrap_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "could not resolve to any address",
-            )
-        })
-        .into())
+        Ok((socket, sock_addr))
+    })
+    .await
 }
 
 /// Sit on a random port, send a UDP datagram to the given target,
@@ -123,6 +107,11 @@ pub(super) async fn udp_forward_on(
     let rhost_str = std::str::from_utf8(&rhost)?;
     let (socket, target) =
         bind_udp_for_target((rhost_str, rport), outgoing_from_v4, outgoing_from_v6).await?;
+    // `expect`: at this point `listener` should be bound. Otherwise, it's a bug.
+    let local_addr = socket
+        .local_addr()
+        .expect("Failed to get local address of UDP socket (this is a bug)");
+    debug!("bound to {local_addr}");
     socket.send_to(&data, target).await?;
     trace!("sent UDP packet to {target}");
     loop {
@@ -194,9 +183,14 @@ pub(super) async fn tcp_forwarder_on_channel(
     let rhost = std::str::from_utf8(&channel.dest_host)?;
     let rport = channel.dest_port;
     trace!("attempting TCP connect to {rhost} port={rport}");
-    let (tcpsock, target) =
+    let (socket, target) =
         bind_tcp_for_target((rhost, rport), outgoing_from_v4, outgoing_from_v6).await?;
-    let mut rstream = tcpsock.connect(target).await?;
+    // `expect`: at this point `listener` should be bound. Otherwise, it's a bug.
+    let local_addr = socket
+        .local_addr()
+        .expect("Failed to get local address of TCP socket (this is a bug)");
+    debug!("bound to {local_addr}");
+    let mut rstream = socket.connect(target).await?;
     // Here `rstream` should be connected. Pass the error (unlikely) otherwise
     debug!("TCP forwarding to {}", rstream.peer_addr()?);
     channel.into_copy_bidirectional(&mut rstream).await?;
