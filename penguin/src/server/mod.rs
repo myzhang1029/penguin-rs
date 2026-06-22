@@ -187,7 +187,7 @@ fn arg_to_sockaddrs(arg: &ServerArgs) -> Result<Vec<SocketAddr>, Error> {
         .iter()
         .zip(ports)
         .map(|(host, port)| {
-            let host = crate::parse_remote::remove_brackets(host);
+            let host = crate::arg::remove_brackets(host);
             let sockaddr: SocketAddr = (host.parse::<std::net::IpAddr>()?, *port).into();
             Ok(sockaddr)
         })

@@ -9,6 +9,8 @@ mod bind_addr;
 #[cfg(feature = "client")]
 mod header;
 #[cfg(feature = "client")]
+mod remote_spec;
+#[cfg(feature = "client")]
 mod server_url;
 
 #[cfg(feature = "server")]
@@ -17,9 +19,15 @@ pub use self::{
     bind_addr::{BindIpv4, BindIpv6},
 };
 #[cfg(feature = "client")]
-pub use self::{header::Header, server_url::ServerUrl};
-#[cfg(feature = "client")]
-use crate::parse_remote::Remote;
+pub use self::{
+    header::Header,
+    remote_spec::{LocalSpec, Protocol, Remote, RemoteSpec},
+    server_url::ServerUrl,
+};
+// Export this macro for use in tests
+#[cfg(all(test, feature = "client"))]
+pub(crate) use self::remote_spec::default_host;
+
 #[cfg(feature = "acme")]
 use crate::server::ChallengeHelper;
 use clap::{ArgAction, Args, Parser, Subcommand};
@@ -362,11 +370,19 @@ pub struct ServerArgs {
     pub _key: Option<String>,
 }
 
+/// Remove brackets from possbly an IPv6 address
+#[must_use]
+pub fn remove_brackets(s: &str) -> &str {
+    if s.starts_with('[') && s.ends_with(']') {
+        &s[1..s.len() - 1]
+    } else {
+        s
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(feature = "client")]
-    use crate::parse_remote::{LocalSpec, Protocol, RemoteSpec};
     use std::str::FromStr;
 
     #[cfg(feature = "client")]
@@ -387,11 +403,8 @@ mod tests {
             assert_eq!(
                 args.remote,
                 [Remote {
-                    local_addr: LocalSpec::Inet((crate::parse_remote::default_host!(unspec), 1234)),
-                    remote_addr: RemoteSpec::Inet((
-                        crate::parse_remote::default_host!(local),
-                        1234
-                    )),
+                    local_addr: LocalSpec::Inet((crate::arg::default_host!(unspec), 1234)),
+                    remote_addr: RemoteSpec::Inet((crate::arg::default_host!(local), 1234)),
                     protocol: Protocol::Tcp,
                 }]
             );

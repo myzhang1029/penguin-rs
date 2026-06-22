@@ -39,9 +39,6 @@ pub enum Error {
     /// Exceeded the maximum retry count
     #[error("maximum retry count reached (last error: {0})")]
     MaxRetryCountReached(Box<Self>),
-    /// Error parsing the remote specifications
-    #[error("failed to parse remote: {0}")]
-    ParseRemote(#[from] crate::parse_remote::Error),
     /// A listener exited unexpectedly
     #[error("remote handler exited: {0}")]
     RemoteHandlerExited(#[from] handle_remote::FatalError),

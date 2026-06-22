@@ -1,7 +1,10 @@
 #![allow(unused_imports)]
 
 use crate::{arg, config};
-use crate::{arg::ServerUrl, parse_remote::Remote, tls::make_tls_identity};
+use crate::{
+    arg::{Remote, ServerUrl},
+    tls::make_tls_identity,
+};
 use ::http::HeaderValue;
 use penguin_mux::timing::OptionalDuration;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -1519,7 +1522,7 @@ async fn test_tproxy_something_happens() {
             &BACKEND_SUPPORTS_HTTP2,
         ));
         tokio::time::sleep(Duration::from_secs(2)).await;
-        let mut stream = TcpStream::connect((crate::parse_remote::default_host!(local), 20445))
+        let mut stream = TcpStream::connect((crate::arg::default_host!(local), 20445))
             .await
             .unwrap();
         // Should immediately EOF

@@ -32,7 +32,7 @@ async fn handshake_inner(
         .host()
         .expect("URL host should be present (this is a bug)");
     // `Tcp*` functions expect IPv6 addresses to not be wrapped in square brackets
-    let host = crate::parse_remote::remove_brackets(host);
+    let host = crate::arg::remove_brackets(host);
     let port = args
         .server
         .0

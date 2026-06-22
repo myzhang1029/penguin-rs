@@ -14,7 +14,6 @@ pub mod client;
 pub mod config;
 #[cfg(any(feature = "server", feature = "http-proxy"))]
 pub mod http;
-pub mod parse_remote;
 #[cfg(feature = "server")]
 pub mod server;
 #[cfg(test)]
