@@ -14,10 +14,16 @@ use tracing::{debug, error, trace, warn};
 use nohash_hasher::IntMap;
 #[cfg(not(feature = "nohash"))]
 use std::collections::HashMap as IntMap;
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 /// Multiplex the `WebSocket` connection and handle the forwarding requests.
 #[tracing::instrument(skip(ws_stream), level = "debug")]
-pub async fn handle_websocket(ws_stream: WebSocket, reverse: bool) {
+pub async fn handle_websocket(
+    ws_stream: WebSocket,
+    reverse: bool,
+    outgoing_from_v4: Ipv4Addr,
+    outgoing_from_v6: Ipv6Addr,
+) {
     let options = penguin_mux::config::Options::new().bind_buffer_size(if reverse {
         config::BIND_BUFFER_SIZE
     } else {
@@ -47,7 +53,7 @@ pub async fn handle_websocket(ws_stream: WebSocket, reverse: bool) {
             }
             // Check if the multiplexor has received a new stream request
             Ok(result) = mux.accept_stream_channel() => {
-                jobs.spawn(tcp_forwarder_on_channel(result));
+                jobs.spawn(tcp_forwarder_on_channel(result, outgoing_from_v4, outgoing_from_v6));
             }
             // Check if the multiplexor has received a UDP datagram
             Ok(datagram_frame) = mux.get_datagram() => {
@@ -71,7 +77,7 @@ pub async fn handle_websocket(ws_stream: WebSocket, reverse: bool) {
                 } else {
                     let (sender, receiver) = mpsc::channel::<Datagram>(config::INCOMING_DATAGRAM_BUFFER_SIZE);
                     udp_clients.insert(flow_id, sender);
-                    jobs.spawn(udp_forward_on(datagram_frame, receiver, datagram_send_tx.dupe()));
+                    jobs.spawn(udp_forward_on(datagram_frame, receiver, datagram_send_tx.dupe(), outgoing_from_v4, outgoing_from_v6));
                 }
             }
             // Check if any of the listeners have sent a UDP datagram

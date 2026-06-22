@@ -5,9 +5,9 @@
 
 use crate::config;
 use penguin_mux::{Datagram, Dupe, MuxStream};
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use thiserror::Error;
-use tokio::net::{TcpStream, UdpSocket, lookup_host};
+use tokio::net::{TcpSocket, UdpSocket, lookup_host};
 use tokio::sync::mpsc;
 use tracing::{debug, trace};
 
@@ -23,14 +23,18 @@ pub(super) enum Error {
 /// Bind a UDP socket with the same address family as the given target,
 /// and return the bound socket and the matched target address.
 /// Note that we don't connect or send the socket here.
-async fn bind_for_target(target: (&str, u16)) -> Result<(UdpSocket, SocketAddr), Error> {
+async fn bind_udp_for_target(
+    target: (&str, u16),
+    outgoing_from_v4: Ipv4Addr,
+    outgoing_from_v6: Ipv6Addr,
+) -> Result<(UdpSocket, SocketAddr), Error> {
     let targets = lookup_host(target).await?;
     let mut last_err = None;
     for target in targets {
         let socket = match if target.is_ipv4() {
-            UdpSocket::bind(("0.0.0.0", 0)).await
+            UdpSocket::bind((outgoing_from_v4, 0)).await
         } else {
-            UdpSocket::bind(("::", 0)).await
+            UdpSocket::bind((outgoing_from_v6, 0)).await
         } {
             Ok(socket) => socket,
             Err(e) => {
@@ -54,6 +58,50 @@ async fn bind_for_target(target: (&str, u16)) -> Result<(UdpSocket, SocketAddr),
         })
         .into())
 }
+// XXX: refactor these two functions
+async fn bind_tcp_for_target(
+    target: (&str, u16),
+    outgoing_from_v4: Ipv4Addr,
+    outgoing_from_v6: Ipv6Addr,
+) -> Result<(TcpSocket, SocketAddr), Error> {
+    let targets = lookup_host(target).await?;
+    let mut last_err = None;
+    for target in targets {
+        let socket = match if target.is_ipv4() {
+            TcpSocket::new_v4()
+        } else {
+            TcpSocket::new_v6()
+        } {
+            Ok(socket) => socket,
+            Err(e) => {
+                last_err = Some(e);
+                continue;
+            }
+        };
+        if let Err(e) = if target.is_ipv4() {
+            socket.bind((outgoing_from_v4, 0).into())
+        } else {
+            socket.bind((outgoing_from_v6, 0).into())
+        } {
+            last_err = Some(e);
+            continue;
+        }
+        // `expect`: at this point `listener` should be bound. Otherwise, it's a bug.
+        let local_addr = socket
+            .local_addr()
+            .expect("Failed to get local address of TCP socket (this is a bug)");
+        debug!("bound to {local_addr}");
+        return Ok((socket, target));
+    }
+    Err(last_err
+        .unwrap_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "could not resolve to any address",
+            )
+        })
+        .into())
+}
 
 /// Sit on a random port, send a UDP datagram to the given target,
 /// and wait for a response in the following `UDP_PRUNE_TIMEOUT` seconds.
@@ -62,6 +110,8 @@ pub(super) async fn udp_forward_on(
     first_datagram_frame: Datagram,
     mut datagram_rx: mpsc::Receiver<Datagram>,
     datagram_tx: mpsc::Sender<Datagram>,
+    outgoing_from_v4: Ipv4Addr,
+    outgoing_from_v6: Ipv6Addr,
 ) -> Result<(), Error> {
     trace!("got datagram frame: {first_datagram_frame:?}");
     let Datagram {
@@ -71,7 +121,8 @@ pub(super) async fn udp_forward_on(
         data,
     } = first_datagram_frame;
     let rhost_str = std::str::from_utf8(&rhost)?;
-    let (socket, target) = bind_for_target((rhost_str, rport)).await?;
+    let (socket, target) =
+        bind_udp_for_target((rhost_str, rport), outgoing_from_v4, outgoing_from_v6).await?;
     socket.send_to(&data, target).await?;
     trace!("sent UDP packet to {target}");
     loop {
@@ -135,11 +186,17 @@ pub(super) async fn udp_forward_on(
 /// It carries the errors from the underlying TCP or channel IO functions.
 #[tracing::instrument(skip_all, level = "debug")]
 #[inline]
-pub(super) async fn tcp_forwarder_on_channel(channel: MuxStream) -> Result<(), Error> {
+pub(super) async fn tcp_forwarder_on_channel(
+    channel: MuxStream,
+    outgoing_from_v4: Ipv4Addr,
+    outgoing_from_v6: Ipv6Addr,
+) -> Result<(), Error> {
     let rhost = std::str::from_utf8(&channel.dest_host)?;
     let rport = channel.dest_port;
     trace!("attempting TCP connect to {rhost} port={rport}");
-    let mut rstream = TcpStream::connect((rhost, rport)).await?;
+    let (tcpsock, target) =
+        bind_tcp_for_target((rhost, rport), outgoing_from_v4, outgoing_from_v6).await?;
+    let mut rstream = tcpsock.connect(target).await?;
     // Here `rstream` should be connected. Pass the error (unlikely) otherwise
     debug!("TCP forwarding to {}", rstream.peer_addr()?);
     channel.into_copy_bidirectional(&mut rstream).await?;
@@ -157,9 +214,13 @@ mod tests {
         crate::tests::setup_logging();
         let target_sock = UdpSocket::bind(("127.0.0.1", 0)).await.unwrap();
         let target_addr = target_sock.local_addr().unwrap();
-        let (socket, target) = bind_for_target(("127.0.0.1", target_addr.port()))
-            .await
-            .unwrap();
+        let (socket, target) = bind_udp_for_target(
+            ("127.0.0.1", target_addr.port()),
+            Ipv4Addr::UNSPECIFIED,
+            Ipv6Addr::UNSPECIFIED,
+        )
+        .await
+        .unwrap();
         assert_eq!(target, target_addr);
         socket.send_to(b"hello", target).await.unwrap();
         let mut buf = vec![0; 5];
@@ -177,7 +238,13 @@ mod tests {
         crate::tests::setup_logging();
         let target_sock = UdpSocket::bind(("::1", 0)).await.unwrap();
         let target_addr = target_sock.local_addr().unwrap();
-        let (socket, target) = bind_for_target(("::1", target_addr.port())).await.unwrap();
+        let (socket, target) = bind_udp_for_target(
+            ("::1", target_addr.port()),
+            Ipv4Addr::UNSPECIFIED,
+            Ipv6Addr::UNSPECIFIED,
+        )
+        .await
+        .unwrap();
         assert_eq!(target, target_addr);
         socket.send_to(b"hello", target).await.unwrap();
         let mut buf = vec![0; 5];
@@ -204,7 +271,13 @@ mod tests {
             data: Bytes::from_static(b"hello"),
         };
         drop(send_tx);
-        let forwarder = tokio::spawn(udp_forward_on(datagram_frame, send_rx, recv_tx));
+        let forwarder = tokio::spawn(udp_forward_on(
+            datagram_frame,
+            send_rx,
+            recv_tx,
+            Ipv4Addr::UNSPECIFIED,
+            Ipv6Addr::UNSPECIFIED,
+        ));
         let mut buf = vec![0; 5];
         let (len, addr) = target_sock.recv_from(&mut buf).await.unwrap();
         assert_eq!(len, 5);
@@ -235,7 +308,13 @@ mod tests {
             data: Bytes::from_static(b"hello"),
         };
         drop(send_tx);
-        let forwarder = tokio::spawn(udp_forward_on(datagram_frame, send_rx, recv_tx));
+        let forwarder = tokio::spawn(udp_forward_on(
+            datagram_frame,
+            send_rx,
+            recv_tx,
+            Ipv4Addr::UNSPECIFIED,
+            Ipv6Addr::UNSPECIFIED,
+        ));
         let mut buf = vec![0; 5];
         let (len, addr) = target_sock.recv_from(&mut buf).await.unwrap();
         assert_eq!(len, 5);

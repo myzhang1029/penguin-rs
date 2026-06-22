@@ -19,6 +19,7 @@ use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::upgrade::{Parts, downcast};
 use penguin_mux::{Dupe, PROTOCOL_VERSION, timing::OptionalDuration};
 use sha1::{Digest, Sha1};
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::pin::Pin;
 use std::sync::OnceLock;
 use thiserror::Error;
@@ -77,6 +78,10 @@ pub(super) struct State {
     obfs: bool,
     /// Whether we accept reverse binding
     reverse: bool,
+    /// Bind outgoing IPv4 sockets to this IP address.
+    outgoing_from_v4: Ipv4Addr,
+    /// Bind outgoing IPv6 sockets to this IP address.
+    outgoing_from_v6: Ipv6Addr,
     /// Backend client
     client: HyperClient<HyperConnector, IncomingOrFullBody>,
     /// Whether the backend supports HTTP/2
@@ -96,6 +101,8 @@ impl Dupe for State {
             not_found_resp: self.not_found_resp,
             obfs: self.obfs,
             reverse: self.reverse,
+            outgoing_from_v4: self.outgoing_from_v4,
+            outgoing_from_v6: self.outgoing_from_v6,
             // `hyper` client is designed to be cheaply cloned.
             client: self.client.clone(),
             http2_support: self.http2_support,
@@ -115,6 +122,8 @@ impl State {
         not_found_resp: &'static str,
         obfs: bool,
         reverse: bool,
+        outgoing_from_v4: Ipv4Addr,
+        outgoing_from_v6: Ipv6Addr,
         tls_timeout: OptionalDuration,
         http_timeout: OptionalDuration,
     ) -> std::io::Result<Self> {
@@ -126,6 +135,8 @@ impl State {
             not_found_resp,
             obfs,
             reverse,
+            outgoing_from_v4,
+            outgoing_from_v6,
             client,
             http2_support,
             tls_timeout,
@@ -260,6 +271,8 @@ impl State {
         self,
         mut req: Request<IncomingOrFullBody>,
         reverse: bool,
+        outgoing_from_v4: Ipv4Addr,
+        outgoing_from_v6: Ipv6Addr,
     ) -> Result<Response<IncomingOrFullBody>, Error> {
         let on_upgrade = req.extensions_mut().remove::<OnUpgrade>();
         let headers = req.headers();
@@ -316,7 +329,7 @@ impl State {
                         None,
                     )
                     .await;
-                    handle_websocket(ws, reverse).await;
+                    handle_websocket(ws, reverse, outgoing_from_v4, outgoing_from_v6).await;
                 }
                 Err(err) => {
                     error!("Failed to upgrade to WebSocket: {err}");
@@ -358,7 +371,12 @@ impl Service<Request<IncomingOrFullBody>> for State {
         }
         // If `/ws`, handle WebSocket
         if req.uri().path() == "/ws" {
-            return Box::pin(self.dupe().ws_handler(req, self.reverse));
+            return Box::pin(self.dupe().ws_handler(
+                req,
+                self.reverse,
+                self.outgoing_from_v4,
+                self.outgoing_from_v6,
+            ));
         }
         // Else, proxy to backend or return 404
         Box::pin(self.dupe().backend_or_404_handler(req))
@@ -461,6 +479,8 @@ mod tests {
             "not found in the test",
             false,
             false,
+            Ipv4Addr::UNSPECIFIED,
+            Ipv6Addr::UNSPECIFIED,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         )
@@ -482,6 +502,8 @@ mod tests {
             "not found in the test",
             true,
             false,
+            Ipv4Addr::UNSPECIFIED,
+            Ipv6Addr::UNSPECIFIED,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         )
@@ -503,6 +525,8 @@ mod tests {
             "not found in the test",
             false,
             false,
+            Ipv4Addr::UNSPECIFIED,
+            Ipv6Addr::UNSPECIFIED,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         )
@@ -524,6 +548,8 @@ mod tests {
             "not found in the test",
             true,
             false,
+            Ipv4Addr::UNSPECIFIED,
+            Ipv6Addr::UNSPECIFIED,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         )
@@ -556,6 +582,8 @@ mod tests {
             "not found in the test",
             false,
             false,
+            Ipv4Addr::UNSPECIFIED,
+            Ipv6Addr::UNSPECIFIED,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         )
@@ -574,6 +602,8 @@ mod tests {
             "not found in the test",
             false,
             false,
+            Ipv4Addr::UNSPECIFIED,
+            Ipv6Addr::UNSPECIFIED,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         )
@@ -604,6 +634,8 @@ mod tests {
             "not found in the test",
             false,
             false,
+            Ipv4Addr::UNSPECIFIED,
+            Ipv6Addr::UNSPECIFIED,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         )
@@ -636,6 +668,8 @@ mod tests {
             "not found in the test",
             false,
             false,
+            Ipv4Addr::UNSPECIFIED,
+            Ipv6Addr::UNSPECIFIED,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         )
@@ -674,6 +708,8 @@ mod tests {
             "not found in the test",
             false,
             false,
+            Ipv4Addr::UNSPECIFIED,
+            Ipv6Addr::UNSPECIFIED,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         )
@@ -694,6 +730,8 @@ mod tests {
             "not found in the test",
             false,
             false,
+            Ipv4Addr::UNSPECIFIED,
+            Ipv6Addr::UNSPECIFIED,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         )
@@ -721,6 +759,8 @@ mod tests {
             "not found in the test",
             false,
             false,
+            Ipv4Addr::UNSPECIFIED,
+            Ipv6Addr::UNSPECIFIED,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         )
@@ -755,6 +795,8 @@ mod tests {
             "not found in the test",
             false,
             false,
+            Ipv4Addr::UNSPECIFIED,
+            Ipv6Addr::UNSPECIFIED,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         )
@@ -787,6 +829,8 @@ mod tests {
             "not found in the test",
             false,
             false,
+            Ipv4Addr::UNSPECIFIED,
+            Ipv6Addr::UNSPECIFIED,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         )
@@ -823,6 +867,8 @@ mod tests {
             "not found in the test",
             false,
             false,
+            Ipv4Addr::UNSPECIFIED,
+            Ipv6Addr::UNSPECIFIED,
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         )

@@ -103,6 +103,8 @@ pub async fn server_main(
         &args.not_found_resp,
         args.obfs,
         args.reverse,
+        args.outgoing_from_v4.0,
+        args.outgoing_from_v6.0,
         args.timeout,
         args.timeout,
     )?;

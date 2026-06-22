@@ -12,6 +12,9 @@ use http::{HeaderValue, Uri, header::HeaderName};
 #[cfg(feature = "acme")]
 use instant_acme::LetsEncrypt;
 use penguin_mux::timing::OptionalDuration;
+use std::fmt::Display;
+#[cfg(feature = "server")]
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::{fmt::Debug, ops::Deref, str::FromStr, sync::OnceLock};
 use thiserror::Error;
 
@@ -272,6 +275,12 @@ pub struct ServerArgs {
     /// normal remotes.
     #[arg(long = "reverse")]
     pub reverse: bool,
+    /// Bind outgoing IPv4 sockets to this IP address.
+    #[arg(long, default_value_t)]
+    pub outgoing_from_v4: BindIpv4,
+    /// Bind outgoing IPv6 sockets to this IP address.
+    #[arg(long, default_value_t)]
+    pub outgoing_from_v6: BindIpv6,
     /// Enables TLS and provides optional path to a PEM-encoded
     /// TLS private key. When this flag is set, you must also set --tls-cert,
     /// and you cannot set --tls-domain.
@@ -340,6 +349,54 @@ pub struct ServerArgs {
     /// For compatibility with `chisel` only. This option is a no-op.
     #[arg(long = "key")]
     pub _key: Option<String>,
+}
+
+/// An IPv4 address to bind to
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BindIpv4(pub Ipv4Addr);
+
+impl Default for BindIpv4 {
+    fn default() -> Self {
+        Self(Ipv4Addr::UNSPECIFIED)
+    }
+}
+
+impl FromStr for BindIpv4 {
+    type Err = std::net::AddrParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ipv4Addr::from_str(s).map(Self)
+    }
+}
+
+impl Display for BindIpv4 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(&self.0, f)
+    }
+}
+
+/// An IPv6 address to bind to
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BindIpv6(pub Ipv6Addr);
+
+impl Default for BindIpv6 {
+    fn default() -> Self {
+        Self(Ipv6Addr::UNSPECIFIED)
+    }
+}
+
+impl FromStr for BindIpv6 {
+    type Err = std::net::AddrParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ipv6Addr::from_str(s).map(Self)
+    }
+}
+
+impl Display for BindIpv6 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(&self.0, f)
+    }
 }
 
 /// Server URL parsing errors
