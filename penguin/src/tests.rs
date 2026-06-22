@@ -329,8 +329,9 @@ async fn test_it_works_v6() {
     client_task.abort();
 }
 
-// This test relies on Linux allowing the program to bind in the entire 127.0.0.0/8
+// This test relies on the OS allowing the program to bind in the entire 127.0.0.0/8
 #[cfg(all(feature = "client", feature = "server"))]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[tokio::test]
 async fn test_setting_outgoing_ip_works() {
     const OUTGOING_IP: Ipv4Addr = Ipv4Addr::new(127, 0, 0, 19);
