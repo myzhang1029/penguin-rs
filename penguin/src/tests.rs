@@ -329,6 +329,58 @@ async fn test_it_works_v6() {
     client_task.abort();
 }
 
+// This test relies on Linux allowing the program to bind in the entire 127.0.0.0/8
+#[cfg(all(feature = "client", feature = "server"))]
+#[tokio::test]
+async fn test_setting_outgoing_ip_works() {
+    const OUTGOING_IP: Ipv4Addr = Ipv4Addr::new(127, 0, 0, 19);
+    static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
+    static SERVER_ARGS: LazyLock<arg::ServerArgs> = LazyLock::new(|| {
+        let mut args = make_server_args("127.0.0.1", 31403);
+        args.outgoing_from_v4 = crate::arg::BindIpv4(OUTGOING_IP);
+        args
+    });
+    static CLIENT_ARGS: LazyLock<arg::ClientArgs> = LazyLock::new(|| {
+        make_client_args(
+            "127.0.0.1",
+            31403,
+            vec![Remote::from_str("127.0.0.1:23299:127.0.0.1:32712").unwrap()],
+        )
+    });
+    static HANDLER_RESOURCES: OnceLock<crate::client::HandlerResources> = OnceLock::new();
+    setup_logging();
+
+    let second_task = tokio::spawn(async move {
+        let listener = TcpListener::bind("127.0.0.1:32712").await.unwrap();
+        let (stream, _) =
+            tokio::time::timeout(tokio::time::Duration::from_secs(5), listener.accept())
+                .await
+                .unwrap()
+                .unwrap();
+        let peer_addr = stream.peer_addr().unwrap();
+        assert_eq!(peer_addr.ip(), OUTGOING_IP);
+    });
+    let (handler_resources, stream_command_rx, datagram_rx) =
+        crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let client_task = tokio::spawn(crate::client::client_main_inner(
+        &CLIENT_ARGS,
+        HANDLER_RESOURCES.get().unwrap(),
+        stream_command_rx,
+        datagram_rx,
+    ));
+    let server_task = tokio::spawn(crate::server::server_main(
+        &SERVER_ARGS,
+        &BACKEND_SUPPORTS_HTTP2,
+    ));
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let mut sock = TcpStream::connect("127.0.0.1:23299").await.unwrap();
+    sock.shutdown().await.unwrap();
+    second_task.await.unwrap();
+    server_task.abort();
+    client_task.abort();
+}
+
 // `native_tls` on macOS and Windows doesn't support reading Ed25519 nor ECDSA-based certificates.
 #[tokio::test]
 #[cfg(all(feature = "client", feature = "server"))]
