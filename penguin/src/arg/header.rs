@@ -4,11 +4,10 @@
 
 use http::header::{HeaderName, HeaderValue};
 use std::str::FromStr;
-use thiserror::Error;
 
 /// HTTP Header parsing errors
-#[derive(Debug, Error)]
-pub enum HeaderError {
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
     /// Header value not valid/acceptable
     #[error("invalid header value or hostname: {0}")]
     Value(#[from] http::header::InvalidHeaderValue),
@@ -30,7 +29,7 @@ pub struct Header {
 }
 
 impl FromStr for Header {
-    type Err = HeaderError;
+    type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (name, value) = s

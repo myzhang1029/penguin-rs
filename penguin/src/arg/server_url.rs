@@ -8,11 +8,10 @@ use http::{
 };
 use std::ops::Deref;
 use std::str::FromStr;
-use thiserror::Error;
 
 /// Server URL parsing errors
-#[derive(Debug, Error)]
-pub enum ServerUrlError {
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
     /// Failed to parse the input string as a URL
     #[error("failed to parse server URL: {0}")]
     UrlParse(#[from] http::uri::InvalidUri),
@@ -32,7 +31,7 @@ pub enum ServerUrlError {
 pub struct ServerUrl(pub Uri);
 
 impl FromStr for ServerUrl {
-    type Err = ServerUrlError;
+    type Err = Error;
 
     /// Sanitize the URL for WebSocket
     fn from_str(url: &str) -> Result<Self, Self::Err> {
@@ -58,10 +57,10 @@ impl FromStr for ServerUrl {
         let (new_scheme, default_port) = match old_scheme.as_ref() {
             "http" | "ws" => Ok(("ws", 80)),
             "https" | "wss" => Ok(("wss", 443)),
-            _ => Err(ServerUrlError::IncorrectScheme(old_scheme)),
+            _ => Err(Error::IncorrectScheme(old_scheme)),
         }?;
         // If the URL has no port, we set it here to simplify the logic later
-        let authority = url_parts.authority.ok_or(ServerUrlError::MissingHost)?;
+        let authority = url_parts.authority.ok_or(Error::MissingHost)?;
         let authority = if authority.port_u16().is_none() {
             // If no port is specified, we set the default port for the scheme
             // A bare IPv6 address without brackets will not be accepted by `Uri::from_str`

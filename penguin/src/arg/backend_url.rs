@@ -1,10 +1,9 @@
 use http::uri::{Authority, PathAndQuery, Scheme, Uri};
 use std::str::FromStr;
-use thiserror::Error;
 
 /// Backend URL parsing errors
-#[derive(Debug, Error)]
-pub enum BackendUrlError {
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
     /// Failed to parse the input string as a URL
     #[error("failed to parse backend URL: {0}")]
     UrlParse(#[from] http::uri::InvalidUri),
@@ -28,7 +27,7 @@ pub struct BackendUrl {
 }
 
 impl FromStr for BackendUrl {
-    type Err = BackendUrlError;
+    type Err = Error;
 
     /// Sanitize the backend URL
     fn from_str(url: &str) -> Result<Self, Self::Err> {
@@ -38,13 +37,11 @@ impl FromStr for BackendUrl {
         let url_parts = Uri::from_str(url)?.into_parts();
         let scheme = url_parts.scheme.unwrap_or(Scheme::HTTP);
         if scheme != Scheme::HTTP && scheme != Scheme::HTTPS {
-            return Err(BackendUrlError::InvalidScheme(scheme));
+            return Err(Error::InvalidScheme(scheme));
         }
         Ok(Self {
             scheme,
-            authority: url_parts
-                .authority
-                .ok_or(BackendUrlError::MissingAuthority)?,
+            authority: url_parts.authority.ok_or(Error::MissingAuthority)?,
             path: url_parts
                 .path_and_query
                 .unwrap_or_else(|| PathAndQuery::from_static("/")),
