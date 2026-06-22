@@ -2,21 +2,32 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
+#[cfg(feature = "server")]
+mod backend_url;
+#[cfg(feature = "server")]
+mod bind_addr;
+#[cfg(feature = "client")]
+mod header;
+#[cfg(feature = "client")]
+mod server_url;
+
+#[cfg(feature = "server")]
+pub use self::{
+    backend_url::BackendUrl,
+    bind_addr::{BindIpv4, BindIpv6},
+};
+#[cfg(feature = "client")]
+pub use self::{header::Header, server_url::ServerUrl};
 #[cfg(feature = "client")]
 use crate::parse_remote::Remote;
 #[cfg(feature = "acme")]
 use crate::server::ChallengeHelper;
 use clap::{ArgAction, Args, Parser, Subcommand};
-use http::uri::{Authority, PathAndQuery, Scheme};
-use http::{HeaderValue, Uri, header::HeaderName};
+use http::{HeaderValue, Uri};
 #[cfg(feature = "acme")]
 use instant_acme::LetsEncrypt;
 use penguin_mux::timing::OptionalDuration;
-use std::fmt::Display;
-#[cfg(feature = "server")]
-use std::net::{Ipv4Addr, Ipv6Addr};
-use std::{fmt::Debug, ops::Deref, str::FromStr, sync::OnceLock};
-use thiserror::Error;
+use std::{fmt::Debug, sync::OnceLock};
 
 /// Command line arguments (main application)
 #[derive(Parser, Debug)]
@@ -351,325 +362,12 @@ pub struct ServerArgs {
     pub _key: Option<String>,
 }
 
-/// An IPv4 address to bind to
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct BindIpv4(pub Ipv4Addr);
-
-impl Default for BindIpv4 {
-    fn default() -> Self {
-        Self(Ipv4Addr::UNSPECIFIED)
-    }
-}
-
-impl FromStr for BindIpv4 {
-    type Err = std::net::AddrParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ipv4Addr::from_str(s).map(Self)
-    }
-}
-
-impl Display for BindIpv4 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Display::fmt(&self.0, f)
-    }
-}
-
-/// An IPv6 address to bind to
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct BindIpv6(pub Ipv6Addr);
-
-impl Default for BindIpv6 {
-    fn default() -> Self {
-        Self(Ipv6Addr::UNSPECIFIED)
-    }
-}
-
-impl FromStr for BindIpv6 {
-    type Err = std::net::AddrParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ipv6Addr::from_str(s).map(Self)
-    }
-}
-
-impl Display for BindIpv6 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Display::fmt(&self.0, f)
-    }
-}
-
-/// Server URL parsing errors
-#[derive(Debug, Error)]
-pub enum ServerUrlError {
-    /// Failed to parse the input string as a URL
-    #[error("failed to parse server URL: {0}")]
-    UrlParse(#[from] http::uri::InvalidUri),
-    /// Scheme not one of `ws`, `wss`, `http`, or `https`
-    #[error("incorrect scheme in server URL: {0}")]
-    IncorrectScheme(Scheme),
-    /// Missing host
-    #[error("missing host in server URL")]
-    MissingHost,
-    /// Failed to build an URL
-    #[error("cannot build server URL: {0}")]
-    BuildUrl(#[from] http::Error),
-}
-
-/// Server URL
-#[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
-pub struct ServerUrl(pub Uri);
-
-impl FromStr for ServerUrl {
-    type Err = ServerUrlError;
-
-    /// Sanitize the URL for WebSocket
-    fn from_str(url: &str) -> Result<Self, Self::Err> {
-        let url_parts = match Uri::from_str(url) {
-            Ok(url) => url.into_parts(),
-            Err(e) => {
-                // Try harder to provide a default scheme if none is provided
-                // `Uri`'s parser will not accept a URL without a scheme
-                // unless it only contains authority
-                if !url.starts_with("http://")
-                    && !url.starts_with("https://")
-                    && !url.starts_with("ws://")
-                    && !url.starts_with("wss://")
-                {
-                    let url = format!("ws://{url}");
-                    Uri::from_str(&url)?.into_parts()
-                } else {
-                    return Err(e.into());
-                }
-            }
-        };
-        let old_scheme = url_parts.scheme.unwrap_or(http::uri::Scheme::HTTP);
-        let (new_scheme, default_port) = match old_scheme.as_ref() {
-            "http" | "ws" => Ok(("ws", 80)),
-            "https" | "wss" => Ok(("wss", 443)),
-            _ => Err(ServerUrlError::IncorrectScheme(old_scheme)),
-        }?;
-        // If the URL has no port, we set it here to simplify the logic later
-        let authority = url_parts.authority.ok_or(ServerUrlError::MissingHost)?;
-        let authority = if authority.port_u16().is_none() {
-            // If no port is specified, we set the default port for the scheme
-            // A bare IPv6 address without brackets will not be accepted by `Uri::from_str`
-            // anyway, so we can safely concatenate the port to the original authority
-            Authority::from_str(&format!("{authority}:{default_port}"))?
-        } else {
-            authority
-        };
-        // Convert to a `Uri`.
-        let url = Uri::builder()
-            .scheme(new_scheme)
-            .authority(authority)
-            .path_and_query(
-                url_parts
-                    .path_and_query
-                    .unwrap_or_else(|| PathAndQuery::from_static("/")),
-            )
-            .build()?;
-        Ok(Self(url))
-    }
-}
-
-impl Deref for ServerUrl {
-    type Target = Uri;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-/// Backend URL parsing errors
-#[derive(Debug, Error)]
-pub enum BackendUrlError {
-    /// Failed to parse the input string as a URL
-    #[error("failed to parse backend URL: {0}")]
-    UrlParse(#[from] http::uri::InvalidUri),
-    /// Missing authority in the URL
-    #[error("missing authority in backend URL")]
-    MissingAuthority,
-    /// Scheme not one of `http` or `https`
-    #[error("invalid backend scheme: {0}")]
-    InvalidScheme(Scheme),
-}
-
-/// Backend URL
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BackendUrl {
-    /// URL Scheme, either `http` or `https`
-    pub scheme: Scheme,
-    /// URL Authority
-    pub authority: Authority,
-    /// URL Path and Query
-    pub path: PathAndQuery,
-}
-
-impl FromStr for BackendUrl {
-    type Err = BackendUrlError;
-
-    /// Sanitize the backend URL
-    fn from_str(url: &str) -> Result<Self, Self::Err> {
-        // We don't try as hard to parse the URL as we do for the server URL
-        // because the backend URL is on the server side, so we don't need to
-        // be as forgiving.
-        let url_parts = Uri::from_str(url)?.into_parts();
-        let scheme = url_parts.scheme.unwrap_or(Scheme::HTTP);
-        if scheme != Scheme::HTTP && scheme != Scheme::HTTPS {
-            return Err(BackendUrlError::InvalidScheme(scheme));
-        }
-        Ok(Self {
-            scheme,
-            authority: url_parts
-                .authority
-                .ok_or(BackendUrlError::MissingAuthority)?,
-            path: url_parts
-                .path_and_query
-                .unwrap_or_else(|| PathAndQuery::from_static("/")),
-        })
-    }
-}
-
-impl std::fmt::Display for BackendUrl {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}://{}{}", self.scheme, self.authority, self.path)
-    }
-}
-
-/// HTTP Header parsing errors
-#[derive(Debug, Error)]
-pub enum HeaderError {
-    /// Header value not valid/acceptable
-    #[error("invalid header value or hostname: {0}")]
-    Value(#[from] http::header::InvalidHeaderValue),
-    /// Header name not valid/acceptable
-    #[error("invalid header name: {0}")]
-    Name(#[from] http::header::InvalidHeaderName),
-    /// Header missing delimiter `:`
-    #[error("missing delimiter colon in the specified header `{0}`")]
-    MissingDelimiter(String),
-}
-
-/// HTTP Header
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Header {
-    /// Header name
-    pub name: HeaderName,
-    /// Header value
-    pub value: HeaderValue,
-}
-
-impl FromStr for Header {
-    type Err = HeaderError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (name, value) = s
-            .split_once(':')
-            .ok_or_else(|| Self::Err::MissingDelimiter(s.to_string()))?;
-        let name = HeaderName::from_str(name)?;
-        let value = HeaderValue::from_str(value.trim())?;
-        Ok(Self { name, value })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     #[cfg(feature = "client")]
     use crate::parse_remote::{LocalSpec, Protocol, RemoteSpec};
-
-    #[test]
-    fn test_serverurl_fromstr() {
-        crate::tests::setup_logging();
-        assert_eq!(
-            ServerUrl::from_str("example.com").unwrap().to_string(),
-            "ws://example.com:80/"
-        );
-        assert_eq!(
-            ServerUrl::from_str("wss://example.com")
-                .unwrap()
-                .to_string(),
-            "wss://example.com:443/"
-        );
-        assert_eq!(
-            ServerUrl::from_str("ws://example.com").unwrap().to_string(),
-            "ws://example.com:80/"
-        );
-        assert_eq!(
-            ServerUrl::from_str("https://example.com")
-                .unwrap()
-                .to_string(),
-            "wss://example.com:443/"
-        );
-        assert_eq!(
-            ServerUrl::from_str("http://example.com")
-                .unwrap()
-                .to_string(),
-            "ws://example.com:80/"
-        );
-        assert_eq!(
-            ServerUrl::from_str("https://example.com:8080/foo")
-                .unwrap()
-                .to_string(),
-            "wss://example.com:8080/foo"
-        );
-        ServerUrl::from_str("ftp://example.com").unwrap_err();
-    }
-
-    #[test]
-    fn test_backendurl_fromstr() {
-        crate::tests::setup_logging();
-        assert_eq!(
-            BackendUrl::from_str("https://example.com")
-                .unwrap()
-                .to_string(),
-            "https://example.com/"
-        );
-        assert_eq!(
-            BackendUrl::from_str("http://example.com")
-                .unwrap()
-                .to_string(),
-            "http://example.com/"
-        );
-        assert_eq!(
-            BackendUrl::from_str("https://example.com/foo").unwrap(),
-            BackendUrl {
-                scheme: Scheme::HTTPS,
-                authority: Authority::from_static("example.com"),
-                path: PathAndQuery::from_static("/foo"),
-            }
-        );
-        assert_eq!(
-            BackendUrl::from_str("http://example.com/foo?bar")
-                .unwrap()
-                .to_string(),
-            "http://example.com/foo?bar"
-        );
-        BackendUrl::from_str("ftp://example.com").unwrap_err();
-        BackendUrl::from_str("http://").unwrap_err();
-    }
-
-    #[test]
-    fn test_header_parser() {
-        crate::tests::setup_logging();
-        let header = Header::from_str("X-Test: test").unwrap();
-        assert_eq!(header.name.as_str().to_lowercase(), "X-Test".to_lowercase());
-        header.value.to_str().unwrap();
-        assert_eq!(header.value.to_str().unwrap(), "test");
-        Header::from_str("X-Test").unwrap_err();
-        // HTTP forbids empty header values, but we allow it
-        //assert!(Header::from_str("X-Test:").is_err());
-        Header::from_str(": test").unwrap_err();
-        let header = Header::from_str("X-Test: test: test").unwrap();
-        assert_eq!(header.name.as_str().to_lowercase(), "X-Test".to_lowercase());
-        header.value.to_str().unwrap();
-        assert_eq!(header.value.to_str().unwrap(), "test: test");
-        let header = Header::from_str("X-Test:test").unwrap();
-        assert_eq!(header.name.as_str().to_lowercase(), "X-Test".to_lowercase());
-        header.value.to_str().unwrap();
-        assert_eq!(header.value.to_str().unwrap(), "test");
-    }
+    use std::str::FromStr;
 
     #[cfg(feature = "client")]
     #[cfg_attr(not(feature = "server"), expect(irrefutable_let_patterns))]
@@ -757,13 +455,16 @@ mod tests {
             assert_eq!(args.max_retry_interval, 1000);
             assert_eq!(args.handshake_timeout, OptionalDuration::from_secs(5));
             let proxy = args.proxy.unwrap().into_parts();
-            assert_eq!(proxy.scheme.unwrap(), Scheme::from_str("socks5").unwrap());
+            assert_eq!(
+                proxy.scheme.unwrap(),
+                http::uri::Scheme::from_str("socks5").unwrap()
+            );
             assert_eq!(proxy.path_and_query.unwrap(), "/");
             assert_eq!(proxy.authority.as_ref().unwrap().host(), "localhost");
             assert_eq!(proxy.authority.as_ref().unwrap().port_u16().unwrap(), 1080);
             assert_eq!(
                 proxy.authority.unwrap(),
-                Authority::from_static("abc:123@localhost:1080")
+                http::uri::Authority::from_static("abc:123@localhost:1080")
             );
             assert_eq!(args.header, [Header::from_str("X-Test:test").unwrap()]);
             assert_eq!(args.hostname, Some(HeaderValue::from_static("example.com")));
