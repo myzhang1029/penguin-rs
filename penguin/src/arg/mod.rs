@@ -31,7 +31,9 @@ pub(crate) use self::remote_spec::default_host;
 #[cfg(feature = "acme")]
 use crate::server::ChallengeHelper;
 use clap::{ArgAction, Args, Parser, Subcommand};
-use http::{HeaderValue, Uri};
+use http::HeaderValue;
+#[cfg(feature = "client")]
+use http::Uri;
 #[cfg(feature = "acme")]
 use instant_acme::LetsEncrypt;
 use penguin_mux::timing::OptionalDuration;

@@ -37,21 +37,14 @@ impl FromStr for ServerUrl {
     fn from_str(url: &str) -> Result<Self, Self::Err> {
         let url_parts = match Uri::from_str(url) {
             Ok(url) => url.into_parts(),
-            Err(e) => {
+            Err(_) if !url.contains("://") => {
                 // Try harder to provide a default scheme if none is provided
                 // `Uri`'s parser will not accept a URL without a scheme
                 // unless it only contains authority
-                if !url.starts_with("http://")
-                    && !url.starts_with("https://")
-                    && !url.starts_with("ws://")
-                    && !url.starts_with("wss://")
-                {
-                    let url = format!("ws://{url}");
-                    Uri::from_str(&url)?.into_parts()
-                } else {
-                    return Err(e.into());
-                }
+                let url = format!("ws://{url}");
+                Uri::from_str(&url)?.into_parts()
             }
+            Err(e) => return Err(e.into()),
         };
         let old_scheme = url_parts.scheme.unwrap_or(http::uri::Scheme::HTTP);
         let (new_scheme, default_port) = match old_scheme.as_ref() {
@@ -132,5 +125,7 @@ mod tests {
             "wss://example.com:8080/foo"
         );
         ServerUrl::from_str("ftp://example.com").unwrap_err();
+        ServerUrl::from_str("http://").unwrap_err();
+        ServerUrl::from_str("://example.com").unwrap_err();
     }
 }
