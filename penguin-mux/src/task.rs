@@ -275,7 +275,7 @@ impl<S: WebSocket> Task<S> {
     ) -> Result<()> {
         debug!("closing all connections");
         // We first make sure the streams can no longer send
-        for (_, stream_data) in self.flows.write().iter() {
+        for stream_data in self.flows.write().values() {
             if let FlowSlot::Established(stream_data) = stream_data {
                 stream_data.disallow_write();
             }
@@ -677,7 +677,7 @@ impl<S: WebSocket> Task<S> {
                 // No need to send an empty `Bytes`. Dropping `sender`
                 // already makes sure the user receives `EOF`.
                 if let Some(sender) = stream_data.disallow_read() {
-                    debug_assert!(sender.strong_count() == 1);
+                    debug_assert_eq!(sender.strong_count(), 1);
                 }
                 // Ignore the error if the user already dropped the stream
                 debug!("freed connection");
