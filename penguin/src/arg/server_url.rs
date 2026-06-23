@@ -6,7 +6,6 @@ use http::{
     Uri,
     uri::{Authority, PathAndQuery, Scheme},
 };
-use std::ops::Deref;
 use std::str::FromStr;
 
 /// Server URL parsing errors
@@ -27,7 +26,7 @@ pub enum Error {
 }
 
 /// Server URL
-#[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, derive_more::Display, Default, derive_more::Deref, Clone, PartialEq, Eq, Hash)]
 pub struct ServerUrl(pub Uri);
 
 impl FromStr for ServerUrl {
@@ -73,14 +72,6 @@ impl FromStr for ServerUrl {
             )
             .build()?;
         Ok(Self(url))
-    }
-}
-
-impl Deref for ServerUrl {
-    type Target = Uri;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
     }
 }
 

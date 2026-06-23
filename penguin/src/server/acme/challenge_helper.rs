@@ -1,6 +1,6 @@
 use super::Error;
 use instant_acme::{AuthorizationHandle, ChallengeType};
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::path::PathBuf;
 use tracing::{debug, error};
 
@@ -22,30 +22,14 @@ impl Action {
 }
 
 /// An external command to create or remove a challenge file for ACME validation
-#[derive(Clone)]
+#[derive(derive_more::AsRef, Clone, derive_more::Debug, derive_more::Deref, derive_more::From)]
+#[as_ref(forward)]
+#[debug("{_0:?}")]
 pub struct ChallengeHelper(OsString);
-
-impl std::fmt::Debug for ChallengeHelper {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl From<OsString> for ChallengeHelper {
-    fn from(path: OsString) -> Self {
-        Self(path)
-    }
-}
 
 impl From<PathBuf> for ChallengeHelper {
     fn from(path: PathBuf) -> Self {
         Self(path.into_os_string())
-    }
-}
-
-impl AsRef<OsStr> for ChallengeHelper {
-    fn as_ref(&self) -> &OsStr {
-        &self.0
     }
 }
 

@@ -16,7 +16,8 @@ pub enum Error {
 }
 
 /// Backend URL
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, derive_more::Display, Clone, PartialEq, Eq)]
+#[display("{scheme}://{authority}{path}")]
 pub struct BackendUrl {
     /// URL Scheme, either `http` or `https`
     pub scheme: Scheme,
@@ -46,12 +47,6 @@ impl FromStr for BackendUrl {
                 .path_and_query
                 .unwrap_or_else(|| PathAndQuery::from_static("/")),
         })
-    }
-}
-
-impl std::fmt::Display for BackendUrl {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}://{}{}", self.scheme, self.authority, self.path)
     }
 }
 

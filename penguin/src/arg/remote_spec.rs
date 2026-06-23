@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use std::{fmt::Display, str::FromStr};
+use std::str::FromStr;
 use thiserror::Error;
 
 #[cfg(not(feature = "default-is-ipv6"))]
@@ -38,7 +38,8 @@ pub const HTTP_DEFAULT_PORT: u16 = 8080;
 pub const TPROXY_DEFAULT_PORT: u16 = 1234;
 
 /// Configuration for one item to forward
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, derive_more::Display, Clone, Hash, Eq, PartialEq)]
+#[display("{local_addr}:{remote_addr}/{protocol}")]
 pub struct Remote {
     /// Local-side forwarding info
     pub local_addr: LocalSpec,
@@ -49,47 +50,47 @@ pub struct Remote {
     pub protocol: Protocol,
 }
 
+macro_rules! add_brackets {
+    ($host:expr) => {
+        if $host.contains(':') {
+            format!("[{}]", $host)
+        } else {
+            $host.to_string()
+        }
+    };
+}
+
 /// The local side can be either IP+port or "stdio"
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, derive_more::Display, Clone, Hash, Eq, PartialEq)]
 pub enum LocalSpec {
     /// An IP socket
+    #[display("{}:{}", add_brackets!(_0.0), _0.1)]
     Inet((String, u16)),
     /// Standard input/output
+    #[display("stdio")]
     Stdio,
 }
 
 /// The remote side can be either IP+port, "socks", "http", or "tproxy"
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, derive_more::Display, Clone, Hash, Eq, PartialEq)]
 pub enum RemoteSpec {
     /// An IP socket
+    #[display("{}:{}", add_brackets!(_0.0), _0.1)]
     Inet((String, u16)),
     /// Function as a SOCKS proxy
+    #[display("socks")]
     Socks,
     /// Function as a HTTP proxy
+    #[display("http")]
     Http,
     /// Configure the listen socket for Transparent Proxy
+    #[display("tproxy")]
     Tproxy,
 }
 
-impl Display for RemoteSpec {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Inet((host, port)) => {
-                if host.contains(':') {
-                    write!(f, "[{host}]:{port}")
-                } else {
-                    write!(f, "{host}:{port}")
-                }
-            }
-            Self::Socks => f.write_str("socks"),
-            Self::Http => f.write_str("http"),
-            Self::Tproxy => f.write_str("tproxy"),
-        }
-    }
-}
-
 /// Protocol can be either "tcp" or "udp".
-#[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, derive_more::Display, Copy, Clone, Hash, Eq, PartialEq)]
+#[display(rename_all = "lowercase")]
 pub enum Protocol {
     /// Transmission Control Protocol
     Tcp,
@@ -123,15 +124,6 @@ pub enum Error {
     /// Some protocols require TCP
     #[error("protocol `{0}` does not support UDP")]
     UnsupportedUdp(RemoteSpec),
-}
-
-impl Display for Protocol {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Tcp => "tcp",
-            Self::Udp => "udp",
-        })
-    }
 }
 
 impl FromStr for Protocol {
@@ -189,25 +181,6 @@ fn tokenize_remote(s: &str) -> Result<Vec<&str>, Error> {
             check_and_push!(stuff);
             return Ok(tokens);
         }
-    }
-}
-
-impl Display for Remote {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.local_addr {
-            LocalSpec::Inet((host, port)) => {
-                if host.contains(':') {
-                    write!(f, "[{host}]:{port}")?;
-                } else {
-                    write!(f, "{host}:{port}")?;
-                }
-            }
-            LocalSpec::Stdio => f.write_str("stdio")?,
-        }
-        f.write_str(":")?;
-        self.remote_addr.fmt(f)?;
-        write!(f, "/{}", self.protocol)?;
-        Ok(())
     }
 }
 

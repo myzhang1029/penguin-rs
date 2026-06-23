@@ -22,22 +22,18 @@ use tracing_subscriber::{filter, fmt, prelude::*, reload};
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
 /// Errors
-#[derive(Error)]
+// Simply delegate `Debug` to `Display` so when `main` exits, there
+// is a nice error message.
+#[derive(derive_more::Debug, Error)]
 enum Error {
     #[cfg(feature = "client")]
+    #[debug("{_0}")]
     #[error(transparent)]
     Client(#[from] client::Error),
     #[cfg(feature = "server")]
+    #[debug("{_0}")]
     #[error(transparent)]
     Server(#[from] server::Error),
-}
-
-impl std::fmt::Debug for Error {
-    // Simply delegate to `Display` so when `main` exits, there
-    // is a nice error message.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(self, f)
-    }
 }
 
 const QUIET_QUIET_LOG_LEVEL: filter::LevelFilter = filter::LevelFilter::ERROR;
