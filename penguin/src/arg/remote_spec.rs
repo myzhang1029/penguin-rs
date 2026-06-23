@@ -360,10 +360,15 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn test_parse_remote() {
         crate::tests::setup_logging();
-        let tests: &[(&str, Remote)] = &[
+        let tests: &[(&str, String, Remote)] = &[
             // jpillora's tests and an exhausive list of cases
             (
                 "3000",
+                format!(
+                    "{}:3000:{}:3000/tcp",
+                    default_host!(unspec),
+                    default_host!(local)
+                ),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(unspec), 3000)),
                     remote_addr: RemoteSpec::Inet((default_host!(local), 3000)),
@@ -372,6 +377,11 @@ mod tests {
             ),
             (
                 "4000/udp",
+                format!(
+                    "{}:4000:{}:4000/udp",
+                    default_host!(unspec),
+                    default_host!(local)
+                ),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(unspec), 4000)),
                     remote_addr: RemoteSpec::Inet((default_host!(local), 4000)),
@@ -380,6 +390,7 @@ mod tests {
             ),
             (
                 "google.com:80",
+                format!("{}:80:google.com:80/tcp", default_host!(unspec)),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(unspec), 80)),
                     remote_addr: RemoteSpec::Inet((String::from("google.com"), 80)),
@@ -388,6 +399,7 @@ mod tests {
             ),
             (
                 "テスト.net:80",
+                format!("{}:80:テスト.net:80/tcp", default_host!(unspec)),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(unspec), 80)),
                     remote_addr: RemoteSpec::Inet((String::from("テスト.net"), 80)),
@@ -396,6 +408,7 @@ mod tests {
             ),
             (
                 "8080:example.com:80",
+                format!("{}:8080:example.com:80/tcp", default_host!(unspec)),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(unspec), 8080)),
                     remote_addr: RemoteSpec::Inet((String::from("example.com"), 80)),
@@ -404,6 +417,7 @@ mod tests {
             ),
             (
                 "socks",
+                format!("{}:{SOCKS_DEFAULT_PORT}:socks/tcp", default_host!(local)),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(local), SOCKS_DEFAULT_PORT)),
                     remote_addr: RemoteSpec::Socks,
@@ -412,6 +426,7 @@ mod tests {
             ),
             (
                 "9050:socks",
+                format!("{}:9050:socks/tcp", default_host!(local)),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(local), 9050)),
                     remote_addr: RemoteSpec::Socks,
@@ -420,6 +435,7 @@ mod tests {
             ),
             (
                 "127.0.0.1:1081:socks",
+                String::from("127.0.0.1:1081:socks/tcp"),
                 Remote {
                     local_addr: LocalSpec::Inet((String::from("127.0.0.1"), 1081)),
                     remote_addr: RemoteSpec::Socks,
@@ -428,6 +444,7 @@ mod tests {
             ),
             (
                 "http",
+                format!("{}:{HTTP_DEFAULT_PORT}:http/tcp", default_host!(local)),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(local), HTTP_DEFAULT_PORT)),
                     remote_addr: RemoteSpec::Http,
@@ -436,6 +453,7 @@ mod tests {
             ),
             (
                 "8888:http",
+                format!("{}:8888:http/tcp", default_host!(local)),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(local), 8888)),
                     remote_addr: RemoteSpec::Http,
@@ -444,6 +462,7 @@ mod tests {
             ),
             (
                 "[2001:db8::1]:3081:socks",
+                String::from("[2001:db8::1]:3081:socks/tcp"),
                 Remote {
                     local_addr: LocalSpec::Inet((String::from("2001:db8::1"), 3081)),
                     remote_addr: RemoteSpec::Socks,
@@ -452,6 +471,7 @@ mod tests {
             ),
             (
                 "tproxy",
+                format!("{}:{TPROXY_DEFAULT_PORT}:tproxy/tcp", default_host!(local)),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(local), TPROXY_DEFAULT_PORT)),
                     remote_addr: RemoteSpec::Tproxy,
@@ -460,6 +480,7 @@ mod tests {
             ),
             (
                 "tproxy/udp",
+                format!("{}:{TPROXY_DEFAULT_PORT}:tproxy/udp", default_host!(local)),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(local), TPROXY_DEFAULT_PORT)),
                     remote_addr: RemoteSpec::Tproxy,
@@ -468,6 +489,7 @@ mod tests {
             ),
             (
                 "5000:tproxy",
+                format!("{}:5000:tproxy/tcp", default_host!(local)),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(local), 5000)),
                     remote_addr: RemoteSpec::Tproxy,
@@ -476,6 +498,7 @@ mod tests {
             ),
             (
                 "4567:tproxy/udp",
+                format!("{}:4567:tproxy/udp", default_host!(local)),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(local), 4567)),
                     remote_addr: RemoteSpec::Tproxy,
@@ -484,6 +507,7 @@ mod tests {
             ),
             (
                 "127.0.0.1:1081:tproxy",
+                String::from("127.0.0.1:1081:tproxy/tcp"),
                 Remote {
                     local_addr: LocalSpec::Inet((String::from("127.0.0.1"), 1081)),
                     remote_addr: RemoteSpec::Tproxy,
@@ -492,6 +516,7 @@ mod tests {
             ),
             (
                 "127.0.0.1:1081:tproxy/udp",
+                String::from("127.0.0.1:1081:tproxy/udp"),
                 Remote {
                     local_addr: LocalSpec::Inet((String::from("127.0.0.1"), 1081)),
                     remote_addr: RemoteSpec::Tproxy,
@@ -500,6 +525,7 @@ mod tests {
             ),
             (
                 "[::1]:12345:tproxy/udp",
+                String::from("[::1]:12345:tproxy/udp"),
                 Remote {
                     local_addr: LocalSpec::Inet((String::from("::1"), 12345)),
                     remote_addr: RemoteSpec::Tproxy,
@@ -508,6 +534,7 @@ mod tests {
             ),
             (
                 "1.1.1.1:53/udp",
+                format!("{}:53:1.1.1.1:53/udp", default_host!(unspec)),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(unspec), 53)),
                     remote_addr: RemoteSpec::Inet((String::from("1.1.1.1"), 53)),
@@ -516,6 +543,7 @@ mod tests {
             ),
             (
                 "localhost:5353:1.1.1.1:53/udp",
+                String::from("localhost:5353:1.1.1.1:53/udp"),
                 Remote {
                     local_addr: LocalSpec::Inet((String::from("localhost"), 5353)),
                     remote_addr: RemoteSpec::Inet((String::from("1.1.1.1"), 53)),
@@ -524,6 +552,7 @@ mod tests {
             ),
             (
                 "22:example.com:22",
+                format!("{}:22:example.com:22/tcp", default_host!(unspec)),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(unspec), 22)),
                     remote_addr: RemoteSpec::Inet((String::from("example.com"), 22)),
@@ -532,6 +561,7 @@ mod tests {
             ),
             (
                 "[::1]:8080:google.com:80",
+                String::from("[::1]:8080:google.com:80/tcp"),
                 Remote {
                     local_addr: LocalSpec::Inet((String::from("::1"), 8080)),
                     remote_addr: RemoteSpec::Inet((String::from("google.com"), 80)),
@@ -540,6 +570,7 @@ mod tests {
             ),
             (
                 "localhost:5354:[2001:db8:4860:0:0:0:0:8888]:53/udp",
+                String::from("localhost:5354:[2001:db8:4860:0:0:0:0:8888]:53/udp"),
                 Remote {
                     local_addr: LocalSpec::Inet((String::from("localhost"), 5354)),
                     remote_addr: RemoteSpec::Inet((String::from("2001:db8:4860:0:0:0:0:8888"), 53)),
@@ -549,6 +580,7 @@ mod tests {
             (
                 // Make sure your editor supports mixed LTR and RTL before editing this line
                 "آزمایشی.com:123:δοκιμή.net:9999/tcp",
+                String::from("آزمایشی.com:123:δοκιμή.net:9999/tcp"),
                 Remote {
                     local_addr: LocalSpec::Inet((String::from("آزمایشی.com"), 123)),
                     remote_addr: RemoteSpec::Inet((String::from("δοκιμή.net"), 9999)),
@@ -557,6 +589,7 @@ mod tests {
             ),
             (
                 "stdio:google.com:80",
+                String::from("stdio:google.com:80/tcp"),
                 Remote {
                     local_addr: LocalSpec::Stdio,
                     remote_addr: RemoteSpec::Inet((String::from("google.com"), 80)),
@@ -565,6 +598,7 @@ mod tests {
             ),
             (
                 "stdio:socks",
+                String::from("stdio:socks/tcp"),
                 Remote {
                     local_addr: LocalSpec::Stdio,
                     remote_addr: RemoteSpec::Socks,
@@ -573,6 +607,7 @@ mod tests {
             ),
             (
                 "stdio:443",
+                format!("stdio:{}:443/tcp", default_host!(local)),
                 Remote {
                     local_addr: LocalSpec::Stdio,
                     remote_addr: RemoteSpec::Inet((default_host!(local), 443)),
@@ -581,6 +616,7 @@ mod tests {
             ),
             (
                 "stdio:5353/udp",
+                format!("stdio:{}:5353/udp", default_host!(local)),
                 Remote {
                     local_addr: LocalSpec::Stdio,
                     remote_addr: RemoteSpec::Inet((default_host!(local), 5353)),
@@ -588,10 +624,12 @@ mod tests {
                 },
             ),
         ];
-        for (s, expected) in tests {
+        for (s, canonical, expected) in tests {
             // Test that the common format is parsed correctly
             let actual = s.parse::<Remote>().unwrap();
             assert_eq!(actual, *expected);
+            // Test that the canonical format is as expected
+            assert_eq!(actual.to_string(), *canonical);
             // Test that the canonical format is made and parsed correctly
             let reparsed = actual.to_string().parse::<Remote>().unwrap();
             assert_eq!(reparsed, *expected);
