@@ -12,6 +12,7 @@ mod header;
 mod remote_spec;
 #[cfg(feature = "client")]
 mod server_url;
+mod url_common;
 
 #[cfg(feature = "server")]
 pub use self::{

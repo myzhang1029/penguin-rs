@@ -1,3 +1,7 @@
+//! Server backend URL utilities
+//
+// SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
+use super::url_common::convert_idn_with_default_scheme;
 use http::uri::{Authority, PathAndQuery, Scheme, Uri};
 use std::str::FromStr;
 
@@ -13,6 +17,9 @@ pub enum Error {
     /// Scheme not one of `http` or `https`
     #[error("invalid backend scheme: {0}")]
     InvalidScheme(Scheme),
+    /// IDN conversion error
+    #[error("invalid IDN in backend URL: {0}")]
+    IdnConversion(#[from] idna::Errors),
 }
 
 /// Backend URL
@@ -32,11 +39,11 @@ impl FromStr for BackendUrl {
 
     /// Sanitize the backend URL
     fn from_str(url: &str) -> Result<Self, Self::Err> {
-        // We don't try as hard to parse the URL as we do for the server URL
-        // because the backend URL is on the server side, so we don't need to
-        // be as forgiving.
-        let url_parts = Uri::from_str(url)?.into_parts();
-        let scheme = url_parts.scheme.unwrap_or(Scheme::HTTP);
+        let url = convert_idn_with_default_scheme(url, "http")?;
+        let url_parts = Uri::from_str(&url)?.into_parts();
+        let scheme = url_parts.scheme.expect(
+            "Scheme should be present after `convert_idn_with_default_scheme` (this is a bug)",
+        );
         if scheme != Scheme::HTTP && scheme != Scheme::HTTPS {
             return Err(Error::InvalidScheme(scheme));
         }

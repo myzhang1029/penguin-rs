@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
+use super::url_common::convert_idn_with_default_scheme;
 use http::{
     Uri,
     uri::{Authority, PathAndQuery, Scheme},
@@ -23,6 +24,9 @@ pub enum Error {
     /// Failed to build an URL
     #[error("cannot build server URL: {0}")]
     BuildUrl(#[from] http::Error),
+    /// IDN conversion error
+    #[error("invalid IDN in server URL: {0}")]
+    IdnConversion(#[from] idna::Errors),
 }
 
 /// Server URL
@@ -34,18 +38,11 @@ impl FromStr for ServerUrl {
 
     /// Sanitize the URL for WebSocket
     fn from_str(url: &str) -> Result<Self, Self::Err> {
-        let url_parts = match Uri::from_str(url) {
-            Ok(url) => url.into_parts(),
-            Err(_) if !url.contains("://") => {
-                // Try harder to provide a default scheme if none is provided
-                // `Uri`'s parser will not accept a URL without a scheme
-                // unless it only contains authority
-                let url = format!("ws://{url}");
-                Uri::from_str(&url)?.into_parts()
-            }
-            Err(e) => return Err(e.into()),
-        };
-        let old_scheme = url_parts.scheme.unwrap_or(http::uri::Scheme::HTTP);
+        let url = convert_idn_with_default_scheme(url, "ws")?;
+        let url_parts = Uri::from_str(&url)?.into_parts();
+        let old_scheme = url_parts.scheme.expect(
+            "Scheme should be present after `convert_idn_with_default_scheme` (this is a bug)",
+        );
         let (new_scheme, default_port) = match old_scheme.as_ref() {
             "http" | "ws" => Ok(("ws", 80)),
             "https" | "wss" => Ok(("wss", 443)),
