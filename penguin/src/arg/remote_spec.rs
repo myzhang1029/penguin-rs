@@ -48,7 +48,7 @@ macro_rules! add_brackets {
 }
 
 /// Errors that can occur when parsing a remote
-#[derive(Clone, Error, Debug, PartialEq, Eq)]
+#[derive(Debug, Error, PartialEq, Eq)]
 pub enum Error {
     /// Given an empty string where a valid value should be
     #[error("empty address or port")]
@@ -61,18 +61,17 @@ pub enum Error {
     GarbageAfterAddress(char),
     #[error("invalid port or unexpected host `{0}`: {1:?}")]
     Port(String, std::num::IntErrorKind),
-    /// Invalid protocol
     #[error("invalid protocol `{0}`")]
     Protocol(String),
     /// `TProxy` needs a socket to listen on
     #[error("stdio cannot accept Transparent Proxy")]
     StdioTproxy,
-    /// Too many segments
     #[error("found more than four colon-separated segments")]
     TooManySegments,
-    /// Some protocols require TCP
     #[error("protocol `{0}` does not support UDP")]
     UnsupportedUdp(RemoteSpec),
+    #[error("invalid domain name `{0}`")]
+    InvalidDomain(String),
 }
 
 /// Configuration for one item to forward
@@ -89,7 +88,7 @@ pub struct Remote {
 }
 
 /// The local side can be either IP+port or "stdio"
-#[derive(Debug, derive_more::Display, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, derive_more::Display, Clone, Hash, Eq)]
 pub enum LocalSpec {
     /// An IP socket
     #[display("{}:{}", add_brackets!(_0.0), _0.1)]
@@ -99,8 +98,18 @@ pub enum LocalSpec {
     Stdio,
 }
 
+impl PartialEq for LocalSpec {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Inet((host1, port1)), Self::Inet((host2, port2))) => host1.eq_ignore_ascii_case(host2) && port1 == port2,
+            (Self::Stdio, Self::Stdio) => true,
+            _ => false,
+        }
+    }
+}
+
 /// The remote side can be either IP+port, "socks", "http", or "tproxy"
-#[derive(Debug, derive_more::Display, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, derive_more::Display, Clone, Hash, Eq)]
 pub enum RemoteSpec {
     /// An IP socket
     #[display("{}:{}", add_brackets!(_0.0), _0.1)]
@@ -114,6 +123,18 @@ pub enum RemoteSpec {
     /// Configure the listen socket for Transparent Proxy
     #[display("tproxy")]
     Tproxy,
+}
+
+impl PartialEq for RemoteSpec {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Inet((host1, port1)), Self::Inet((host2, port2))) => host1.eq_ignore_ascii_case(host2) && port1 == port2,
+            (Self::Socks, Self::Socks) => true,
+            (Self::Http, Self::Http) => true,
+            (Self::Tproxy, Self::Tproxy) => true,
+            _ => false,
+        }
+    }
 }
 
 /// Protocol can be either "tcp" or "udp".
@@ -243,7 +264,11 @@ impl FromStr for Remote {
             },
             [host, port] => Self {
                 local_addr: LocalSpec::Inet((default_host!(unspec), parse_port_or_bail!(port))),
-                remote_addr: RemoteSpec::Inet((host.to_string(), parse_port_or_bail!(port))),
+                remote_addr: RemoteSpec::Inet((
+                    idna::domain_to_ascii(host)
+                        .map_err(|_| Error::InvalidDomain(host.to_string()))?,
+                    parse_port_or_bail!(port),
+                )),
                 protocol: proto,
             },
             // Three elements:
@@ -253,14 +278,16 @@ impl FromStr for Remote {
             ["stdio", remote_host, remote_port] => Self {
                 local_addr: LocalSpec::Stdio,
                 remote_addr: RemoteSpec::Inet((
-                    remote_host.to_string(),
+                    idna::domain_to_ascii(remote_host)
+                        .map_err(|_| Error::InvalidDomain(remote_host.to_string()))?,
                     parse_port_or_bail!(remote_port),
                 )),
                 protocol: proto,
             },
             [local_host, local_port, "socks" | "http" | "tproxy"] => Self {
                 local_addr: LocalSpec::Inet((
-                    local_host.to_string(),
+                    idna::domain_to_ascii(local_host)
+                        .map_err(|_| Error::InvalidDomain(local_host.to_string()))?,
                     parse_port_or_bail!(local_port),
                 )),
                 remote_addr: parse_remote_special!(tokens[2]),
@@ -272,18 +299,21 @@ impl FromStr for Remote {
                     parse_port_or_bail!(local_port),
                 )),
                 remote_addr: RemoteSpec::Inet((
-                    remote_host.to_string(),
+                    idna::domain_to_ascii(remote_host)
+                        .map_err(|_| Error::InvalidDomain(remote_host.to_string()))?,
                     parse_port_or_bail!(remote_port),
                 )),
                 protocol: proto,
             },
             [local_host, local_port, remote_host, remote_port] => Self {
                 local_addr: LocalSpec::Inet((
-                    local_host.to_string(),
+                    idna::domain_to_ascii(local_host)
+                        .map_err(|_| Error::InvalidDomain(local_host.to_string()))?,
                     parse_port_or_bail!(local_port),
                 )),
                 remote_addr: RemoteSpec::Inet((
-                    remote_host.to_string(),
+                    idna::domain_to_ascii(remote_host)
+                        .map_err(|_| Error::InvalidDomain(remote_host.to_string()))?,
                     parse_port_or_bail!(remote_port),
                 )),
                 protocol: proto,
@@ -362,6 +392,8 @@ mod tests {
         crate::tests::setup_logging();
         let tests: &[(&str, String, Remote)] = &[
             // jpillora's tests and an exhausive list of cases
+            // See <https://www.iana.org/domains/reserved> for the
+            // official IDN test domains
             (
                 "3000",
                 format!(
@@ -401,14 +433,14 @@ mod tests {
                 },
             ),
             (
-                "テスト.net:80",
+                "テスト.テスト:80",
                 format!(
-                    "{}:80:テスト.net:80/tcp",
+                    "{}:80:XN--ZCKZAH.XN--ZCKZAH:80/tcp",
                     add_brackets!(default_host!(unspec))
                 ),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(unspec), 80)),
-                    remote_addr: RemoteSpec::Inet((String::from("テスト.net"), 80)),
+                    remote_addr: RemoteSpec::Inet((String::from("XN--ZCKZAH.XN--ZCKZAH"), 80)),
                     protocol: Protocol::Tcp,
                 },
             ),
@@ -584,6 +616,18 @@ mod tests {
                 },
             ),
             (
+                "5444:example.테스트:5442",
+                format!(
+                    "{}:5444:example.XN--9T4B11YI5A:5442/tcp",
+                    add_brackets!(default_host!(unspec))
+                ),
+                Remote {
+                    local_addr: LocalSpec::Inet((default_host!(unspec), 5444)),
+                    remote_addr: RemoteSpec::Inet((String::from("example.XN--9T4B11YI5A"), 5442)),
+                    protocol: Protocol::Tcp,
+                },
+            ),
+            (
                 "[::1]:8080:google.com:80",
                 String::from("[::1]:8080:google.com:80/tcp"),
                 Remote {
@@ -603,11 +647,11 @@ mod tests {
             ),
             (
                 // Make sure your editor supports mixed LTR and RTL before editing this line
-                "آزمایشی.com:123:δοκιμή.net:9999/tcp",
-                String::from("آزمایشی.com:123:δοκιμή.net:9999/tcp"),
+                "آزمایشی.испытание:123:δοκιμή.net:9999/tcp",
+                String::from("XN--HGBK6AJ7F53BBA.XN--80AKHBYKNJ4F:123:XN--JXALPDLP.net:9999/tcp"),
                 Remote {
-                    local_addr: LocalSpec::Inet((String::from("آزمایشی.com"), 123)),
-                    remote_addr: RemoteSpec::Inet((String::from("δοκιμή.net"), 9999)),
+                    local_addr: LocalSpec::Inet((String::from("XN--HGBK6AJ7F53BBA.XN--80AKHBYKNJ4F"), 123)),
+                    remote_addr: RemoteSpec::Inet((String::from("XN--JXALPDLP.net"), 9999)),
                     protocol: Protocol::Tcp,
                 },
             ),
@@ -653,7 +697,7 @@ mod tests {
             let actual = s.parse::<Remote>().unwrap();
             assert_eq!(actual, *expected);
             // Test that the canonical format is as expected
-            assert_eq!(actual.to_string(), *canonical);
+            assert!(actual.to_string().eq_ignore_ascii_case(&canonical));
             // Test that the canonical format is made and parsed correctly
             let reparsed = actual.to_string().parse::<Remote>().unwrap();
             assert_eq!(reparsed, *expected);
