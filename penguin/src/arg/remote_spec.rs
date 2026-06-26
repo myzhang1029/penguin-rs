@@ -101,7 +101,9 @@ pub enum LocalSpec {
 impl PartialEq for LocalSpec {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Inet((host1, port1)), Self::Inet((host2, port2))) => host1.eq_ignore_ascii_case(host2) && port1 == port2,
+            (Self::Inet((host1, port1)), Self::Inet((host2, port2))) => {
+                host1.eq_ignore_ascii_case(host2) && port1 == port2
+            }
             (Self::Stdio, Self::Stdio) => true,
             _ => false,
         }
@@ -128,10 +130,12 @@ pub enum RemoteSpec {
 impl PartialEq for RemoteSpec {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Inet((host1, port1)), Self::Inet((host2, port2))) => host1.eq_ignore_ascii_case(host2) && port1 == port2,
-            (Self::Socks, Self::Socks) => true,
-            (Self::Http, Self::Http) => true,
-            (Self::Tproxy, Self::Tproxy) => true,
+            (Self::Inet((host1, port1)), Self::Inet((host2, port2))) => {
+                host1.eq_ignore_ascii_case(host2) && port1 == port2
+            }
+            (Self::Socks, Self::Socks)
+            | (Self::Http, Self::Http)
+            | (Self::Tproxy, Self::Tproxy) => true,
             _ => false,
         }
     }
@@ -650,7 +654,10 @@ mod tests {
                 "آزمایشی.испытание:123:δοκιμή.net:9999/tcp",
                 String::from("XN--HGBK6AJ7F53BBA.XN--80AKHBYKNJ4F:123:XN--JXALPDLP.net:9999/tcp"),
                 Remote {
-                    local_addr: LocalSpec::Inet((String::from("XN--HGBK6AJ7F53BBA.XN--80AKHBYKNJ4F"), 123)),
+                    local_addr: LocalSpec::Inet((
+                        String::from("XN--HGBK6AJ7F53BBA.XN--80AKHBYKNJ4F"),
+                        123,
+                    )),
                     remote_addr: RemoteSpec::Inet((String::from("XN--JXALPDLP.net"), 9999)),
                     protocol: Protocol::Tcp,
                 },
