@@ -37,6 +37,44 @@ pub const HTTP_DEFAULT_PORT: u16 = 8080;
 /// Default TPROXY port
 pub const TPROXY_DEFAULT_PORT: u16 = 1234;
 
+macro_rules! add_brackets {
+    ($host:expr) => {
+        if $host.contains(':') {
+            format!("[{}]", $host)
+        } else {
+            $host.to_string()
+        }
+    };
+}
+
+/// Errors that can occur when parsing a remote
+#[derive(Clone, Error, Debug, PartialEq, Eq)]
+pub enum Error {
+    /// Given an empty string where a valid value should be
+    #[error("empty address or port")]
+    EmptySegment,
+    /// IPv6 address missing closing bracket
+    #[error("missing closing `]`")]
+    BracketMismatch,
+    /// Unexpected character after an IPv6 address
+    #[error("found garbage following IPv6 (first offending character `{0}`)")]
+    GarbageAfterAddress(char),
+    #[error("invalid port or unexpected host `{0}`: {1:?}")]
+    Port(String, std::num::IntErrorKind),
+    /// Invalid protocol
+    #[error("invalid protocol `{0}`")]
+    Protocol(String),
+    /// `TProxy` needs a socket to listen on
+    #[error("stdio cannot accept Transparent Proxy")]
+    StdioTproxy,
+    /// Too many segments
+    #[error("found more than four colon-separated segments")]
+    TooManySegments,
+    /// Some protocols require TCP
+    #[error("protocol `{0}` does not support UDP")]
+    UnsupportedUdp(RemoteSpec),
+}
+
 /// Configuration for one item to forward
 #[derive(Debug, derive_more::Display, Clone, Hash, Eq, PartialEq)]
 #[display("{local_addr}:{remote_addr}/{protocol}")]
@@ -48,16 +86,6 @@ pub struct Remote {
     pub remote_addr: RemoteSpec,
     /// Layer-4 protocol this instance forwards
     pub protocol: Protocol,
-}
-
-macro_rules! add_brackets {
-    ($host:expr) => {
-        if $host.contains(':') {
-            format!("[{}]", $host)
-        } else {
-            $host.to_string()
-        }
-    };
 }
 
 /// The local side can be either IP+port or "stdio"
@@ -96,46 +124,6 @@ pub enum Protocol {
     Tcp,
     /// User Datagram Protocol
     Udp,
-}
-
-/// Errors that can occur when parsing a remote
-#[derive(Clone, Error, Debug, PartialEq, Eq)]
-pub enum Error {
-    /// Given an empty string where a valid value should be
-    #[error("empty address or port")]
-    EmptySegment,
-    /// IPv6 address missing closing bracket
-    #[error("missing closing `]`")]
-    BracketMismatch,
-    /// Unexpected character after an IPv6 address
-    #[error("found garbage following IPv6 (first offending character `{0}`)")]
-    GarbageAfterAddress(char),
-    #[error("invalid port or unexpected host `{0}`: {1:?}")]
-    Port(String, std::num::IntErrorKind),
-    /// Invalid protocol
-    #[error("invalid protocol `{0}`")]
-    Protocol(String),
-    /// `TProxy` needs a socket to listen on
-    #[error("stdio cannot accept Transparent Proxy")]
-    StdioTproxy,
-    /// Too many segments
-    #[error("found more than four colon-separated segments")]
-    TooManySegments,
-    /// Some protocols require TCP
-    #[error("protocol `{0}` does not support UDP")]
-    UnsupportedUdp(RemoteSpec),
-}
-
-impl FromStr for Protocol {
-    type Err = Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "tcp" => Ok(Self::Tcp),
-            "udp" => Ok(Self::Udp),
-            other => Err(Error::Protocol(other.to_string())),
-        }
-    }
 }
 
 /// Tokenize a remote string by splitting on `:`.
@@ -320,6 +308,18 @@ impl FromStr for Remote {
             Err(Error::UnsupportedUdp(result.remote_addr))
         } else {
             Ok(result)
+        }
+    }
+}
+
+impl FromStr for Protocol {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "tcp" => Ok(Self::Tcp),
+            "udp" => Ok(Self::Udp),
+            other => Err(Error::Protocol(other.to_string())),
         }
     }
 }
