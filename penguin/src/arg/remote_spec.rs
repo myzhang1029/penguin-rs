@@ -75,7 +75,7 @@ pub enum Error {
 }
 
 /// Configuration for one item to forward
-#[derive(Debug, derive_more::Display, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, derive_more::Display, Clone, Eq, PartialEq)]
 #[display("{local_addr}:{remote_addr}/{protocol}")]
 pub struct Remote {
     /// Local-side forwarding info
@@ -88,7 +88,7 @@ pub struct Remote {
 }
 
 /// The local side can be either IP+port or "stdio"
-#[derive(Debug, derive_more::Display, Clone, Hash, Eq)]
+#[derive(Debug, derive_more::Display, Clone, Eq)]
 pub enum LocalSpec {
     /// An IP socket
     #[display("{}:{}", add_brackets!(_0.0), _0.1)]
@@ -109,7 +109,7 @@ impl PartialEq for LocalSpec {
 }
 
 /// The remote side can be either IP+port, "socks", "http", or "tproxy"
-#[derive(Debug, derive_more::Display, Clone, Hash, Eq)]
+#[derive(Debug, derive_more::Display, Clone, Eq)]
 pub enum RemoteSpec {
     /// An IP socket
     #[display("{}:{}", add_brackets!(_0.0), _0.1)]
