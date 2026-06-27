@@ -20,7 +20,6 @@ path = "src/lib.rs"
 
 [dependencies]
 arc-swap = "1"
-aws-lc-rs = { version = "1", optional = true }
 base64 = { version = "0.22", optional = true }
 bytes = "^1, >=1.11.1"
 clap = { version = "4", features = ["cargo", "derive", "string"] }
@@ -76,8 +75,8 @@ rustls-native-roots = ["dep:rustls-native-certs", "hyper-rustls/native-tokio", "
 __rustls = ["dep:rustls", "dep:rustls-pemfile", "dep:tokio-rustls"]
 nativetls = ["dep:tokio-native-tls", "dep:hyper-tls"]
 # Use ring or aws-lc-rs (supported on fewer platforms)
-ring = ["instant-acme/ring", "rustls/ring", "tokio-rustls/ring", "hyper-rustls/ring"]
-aws-lc-rs = ["dep:aws-lc-rs", "instant-acme/aws-lc-rs", "rustls/aws-lc-rs", "rustls/prefer-post-quantum", "tokio-rustls/aws-lc-rs", "hyper-rustls/aws-lc-rs"]
+ring = ["instant-acme?/ring", "rustls/ring", "hyper-rustls/ring"]
+aws-lc-rs = ["instant-acme?/aws-lc-rs", "rustls/aws-lc-rs", "rustls/prefer-post-quantum", "hyper-rustls/aws-lc-rs"]
 
 # Dependencies for testing
 dev-dependencies = ["tracing-subscriber/env-filter", "tokio/process"]

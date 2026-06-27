@@ -1954,7 +1954,6 @@ name = "rusty-penguin"
 version = "0.8.3"
 dependencies = [
  "arc-swap",
- "aws-lc-rs",
  "base64 0.22.1",
  "bytes",
  "clap",
