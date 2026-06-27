@@ -13,6 +13,11 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::server::WebPkiClientVerifier;
 use rustls::server::danger::SignatureVerificationInput;
 use rustls::{ClientConfig, RootCertStore, ServerConfig};
+#[cfg(feature = "aws-lc-rs")]
+use rustls::{
+    client::{EchGreaseConfig, EchMode},
+    crypto::hpke::Hpke,
+};
 use std::hash::Hasher;
 use std::sync::Arc;
 use tracing::debug;
@@ -80,6 +85,15 @@ async fn make_server_config_from_mem(
     Ok(config)
 }
 
+#[cfg(feature = "aws-lc-rs")]
+fn grease_todotodo() -> Result<EchMode, Error> {
+    // Enable GREASE like Chrome does
+    static GREASE_HPKE_SUITE: &dyn Hpke = rustls_aws_lc_rs::hpke::DH_KEM_X25519_HKDF_SHA256_AES_128;
+    let (public_key, _) = GREASE_HPKE_SUITE.generate_key_pair()?;
+    let ech_mode = EchMode::from(EchGreaseConfig::new(GREASE_HPKE_SUITE, public_key));
+    Ok(ech_mode)
+}
+
 /// Create a `rustls::ClientConfig` with possibly a client certificate and a custom CA store
 pub async fn make_client_config(
     cert_path: Option<&str>,
@@ -89,10 +103,14 @@ pub async fn make_client_config(
     tls_alpn: Option<&[&str]>,
 ) -> Result<ClientConfig, Error> {
     let provider = get_crypto_provider().dupe();
-    let config = ClientConfig::builder(provider);
+    let mut config = ClientConfig::builder(provider);
     // Whether there is a custom CA store
     let roots = generate_rustls_rootcertstore(ca_path).await?;
     let client_certificate = try_load_certificate(key_path, cert_path).await?;
+    #[cfg(feature = "aws-lc-rs")]
+    {
+        config = config.with_ech(grease_todotodo()?);
+    }
     // Whether to skip TLS verification and whether there is a client certificate
     let mut config = match (tls_skip_verify, client_certificate) {
         (true, Some((cert_chain, key_der))) => config

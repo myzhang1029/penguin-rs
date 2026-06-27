@@ -40,6 +40,7 @@ nohash-hasher = { version = "0.2", optional = true }
 parking_lot = "0.12"
 penguin-mux = { version = "0.8", path = "../penguin-mux", features = ["tungstenite"] }
 rustls = { version = "0.24.0-dev.0", optional = true }
+rustls-aws-lc-rs = { version = "0.1.0-dev.0", optional = true }
 rustls-native-certs = { version = "0.8", optional = true }
 rustls-pemfile = { version = "2", optional = true }
 sha1 = { version = "0.11", optional = true }
@@ -77,7 +78,7 @@ __rustls = ["dep:rustls", "dep:rustls-pemfile", "dep:tokio-rustls"]
 nativetls = ["dep:tokio-native-tls", "dep:hyper-tls"]
 # Use ring or aws-lc-rs (supported on fewer platforms)
 ring = ["instant-acme/ring", "tokio-rustls/ring", "hyper-rustls/ring"]
-aws-lc-rs = ["dep:aws-lc-rs", "instant-acme/aws-lc-rs", "tokio-rustls/aws-lc-rs", "hyper-rustls/aws-lc-rs"]
+aws-lc-rs = ["dep:aws-lc-rs", "dep:rustls-aws-lc-rs", "instant-acme/aws-lc-rs", "tokio-rustls/aws-lc-rs", "hyper-rustls/aws-lc-rs"]
 
 # Dependencies for testing
 dev-dependencies = ["tracing-subscriber/env-filter", "tokio/process"]
