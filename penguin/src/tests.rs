@@ -25,6 +25,15 @@ pub fn setup_logging() {
         .ok();
     #[cfg(feature = "deadlock-detection")]
     penguin_mux::deadlock_detection::try_spawn_deadlock_detection();
+
+    #[cfg(feature = "ring")]
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .ok();
+    #[cfg(feature = "aws-lc-rs")]
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .ok();
 }
 
 #[cfg(feature = "server")]

@@ -88,6 +88,15 @@ async fn main() -> Result<(), Box<Error>> {
 
     #[cfg(feature = "deadlock-detection")]
     penguin_mux::deadlock_detection::try_spawn_deadlock_detection();
+    #[cfg(feature = "ring")]
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Default provider installation failed (this is a bug)");
+    #[cfg(feature = "aws-lc-rs")]
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("Default provider installation failed (this is a bug)");
+
     match &cli_args.subcommand {
         #[cfg(feature = "client")]
         arg::Commands::Client(args) => client::client_main(args)
