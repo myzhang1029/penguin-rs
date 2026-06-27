@@ -69,6 +69,10 @@ pub enum Error {
     /// Unsupported feature
     #[error("{0} is not supported: {1}")]
     UnsupportedFeature(&'static str, &'static str),
+    /// Rustls ApiMisuse errors
+    #[error("LOOK AT ME: Rustls API misuse: {0}")]
+    #[cfg(feature = "__rustls")]
+    RustlsApiMisuse(#[from] ::rustls::error::ApiMisuse),
 }
 
 /// Create a TCP connection and wrap it in a TLS stream

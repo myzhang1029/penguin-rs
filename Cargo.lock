@@ -972,7 +972,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "log",
- "rustls",
+ "rustls 0.23.41",
  "rustls-native-certs",
  "rustls-platform-verifier",
  "tokio",
@@ -1162,7 +1162,7 @@ dependencies = [
  "hyper-util",
  "rcgen",
  "ring",
- "rustls",
+ "rustls 0.23.41",
  "rustls-pki-types",
  "serde",
  "serde_json",
@@ -1869,7 +1869,21 @@ dependencies = [
  "once_cell",
  "ring",
  "rustls-pki-types",
- "rustls-webpki",
+ "rustls-webpki 0.103.13",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
+name = "rustls"
+version = "0.24.0-dev.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d99552b8a20dd0e79f6c4af553583fa7e1a77acb86ef40eb3392cc7b30f373db"
+dependencies = [
+ "log",
+ "once_cell",
+ "rustls-pki-types",
+ "rustls-webpki 0.104.0-alpha.2",
  "subtle",
  "zeroize",
 ]
@@ -1915,10 +1929,10 @@ dependencies = [
  "jni",
  "log",
  "once_cell",
- "rustls",
+ "rustls 0.23.41",
  "rustls-native-certs",
  "rustls-platform-verifier-android",
- "rustls-webpki",
+ "rustls-webpki 0.103.13",
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
@@ -1938,6 +1952,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
 dependencies = [
  "aws-lc-rs",
+ "ring",
+ "rustls-pki-types",
+ "untrusted 0.9.0",
+]
+
+[[package]]
+name = "rustls-webpki"
+version = "0.104.0-alpha.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d58d0ba9664baf780379001ecb183f4b95dabec82d464bff14173dee21bf49e3"
+dependencies = [
  "ring",
  "rustls-pki-types",
  "untrusted 0.9.0",
@@ -1977,7 +2002,7 @@ dependencies = [
  "penguin-mux",
  "rand 0.10.1",
  "rcgen",
- "rustls",
+ "rustls 0.24.0-dev.0",
  "rustls-native-certs",
  "rustls-pemfile",
  "rusty-penguin",
@@ -2376,7 +2401,7 @@ version = "0.26.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1729aa945f29d91ba541258c8df89027d5792d85a8841fb65e8bf0f4ede4ef61"
 dependencies = [
- "rustls",
+ "rustls 0.23.41",
  "tokio",
 ]
 

@@ -4,11 +4,16 @@
 
 use super::Error;
 use penguin_mux::Dupe;
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::crypto::CryptoProvider;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
+use rustls::client::danger::{
+    HandshakeSignatureValid, PeerVerified, ServerIdentity, ServerVerifier,
+};
+use rustls::crypto::{CryptoProvider, Identity, SignatureScheme};
+use rustls::enums::ApplicationProtocol;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::server::WebPkiClientVerifier;
-use rustls::{ClientConfig, DigitallySignedStruct, RootCertStore, ServerConfig, SignatureScheme};
+use rustls::server::danger::SignatureVerificationInput;
+use rustls::{ClientConfig, RootCertStore, ServerConfig};
+use std::hash::Hasher;
 use std::sync::Arc;
 use tracing::debug;
 
@@ -60,18 +65,17 @@ async fn make_server_config_from_mem(
     key: PrivateKeyDer<'static>,
     client_ca_path: Option<&str>,
 ) -> Result<TlsIdentityInner, Error> {
-    let provider = get_crypto_provider().dupe();
-    let config =
-        ServerConfig::builder_with_provider(provider).with_safe_default_protocol_versions()?;
+    let provider = get_crypto_provider();
+    let config = ServerConfig::builder(provider.dupe());
     let mut config = if let Some(client_ca_path) = client_ca_path {
         let store = generate_rustls_rootcertstore(Some(client_ca_path)).await?;
-        let verifier = WebPkiClientVerifier::builder(Arc::new(store)).build()?;
-        config.with_client_cert_verifier(verifier)
+        let verifier = WebPkiClientVerifier::builder(Arc::new(store), provider).build()?;
+        config.with_client_cert_verifier(Arc::new(verifier))
     } else {
         config.with_no_client_auth()
     }
-    .with_single_cert(certs, key)?;
-    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    .with_single_cert(Arc::new(Identity::from_cert_chain(certs)?), key)?;
+    config.alpn_protocols = vec![ApplicationProtocol::Http2, ApplicationProtocol::Http11];
     config.key_log = Arc::new(rustls::KeyLogFile::new());
     Ok(config)
 }
@@ -85,8 +89,7 @@ pub async fn make_client_config(
     tls_alpn: Option<&[&str]>,
 ) -> Result<ClientConfig, Error> {
     let provider = get_crypto_provider().dupe();
-    let config =
-        ClientConfig::builder_with_provider(provider).with_safe_default_protocol_versions()?;
+    let config = ClientConfig::builder(provider);
     // Whether there is a custom CA store
     let roots = generate_rustls_rootcertstore(ca_path).await?;
     let client_certificate = try_load_certificate(key_path, cert_path).await?;
@@ -95,18 +98,21 @@ pub async fn make_client_config(
         (true, Some((cert_chain, key_der))) => config
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(EmptyVerifier(get_crypto_provider())))
-            .with_client_auth_cert(cert_chain, key_der)?,
+            .with_client_auth_cert(Arc::new(Identity::from_cert_chain(cert_chain)?), key_der)?,
         (true, None) => config
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(EmptyVerifier(get_crypto_provider())))
-            .with_no_client_auth(),
+            .with_no_client_auth()?,
         (false, Some((cert_chain, key_der))) => config
             .with_root_certificates(roots)
-            .with_client_auth_cert(cert_chain, key_der)?,
-        (false, None) => config.with_root_certificates(roots).with_no_client_auth(),
+            .with_client_auth_cert(Arc::new(Identity::from_cert_chain(cert_chain)?), key_der)?,
+        (false, None) => config.with_root_certificates(roots).with_no_client_auth()?,
     };
     if let Some(tls_alpn) = tls_alpn {
-        config.alpn_protocols = tls_alpn.iter().map(|&x| x.as_bytes().to_vec()).collect();
+        config.alpn_protocols = tls_alpn
+            .iter()
+            .map(|&x| x.as_bytes().to_vec().into())
+            .collect();
     }
     // else leave it empty
     config.key_log = Arc::new(rustls::KeyLogFile::new());
@@ -173,48 +179,39 @@ async fn try_load_certificate(
 #[derive(Debug)]
 pub struct EmptyVerifier(&'static Arc<CryptoProvider>);
 
-impl ServerCertVerifier for EmptyVerifier {
-    fn verify_server_cert(
+impl ServerVerifier for EmptyVerifier {
+    fn verify_identity(
         &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, rustls::Error> {
-        Ok(ServerCertVerified::assertion())
+        _identity: &ServerIdentity<'_>,
+    ) -> Result<PeerVerified, rustls::Error> {
+        Ok(PeerVerified::assertion())
     }
 
     fn verify_tls12_signature(
         &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
+        input: &SignatureVerificationInput<'_>,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls12_signature(
-            message,
-            cert,
-            dss,
-            &self.0.signature_verification_algorithms,
-        )
+        rustls::crypto::verify_tls12_signature(input, &self.0.signature_verification_algorithms)
     }
 
     fn verify_tls13_signature(
         &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
+        input: &SignatureVerificationInput<'_>,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls13_signature(
-            message,
-            cert,
-            dss,
-            &self.0.signature_verification_algorithms,
-        )
+        rustls::crypto::verify_tls13_signature(input, &self.0.signature_verification_algorithms)
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
         self.0.signature_verification_algorithms.supported_schemes()
+    }
+
+    fn request_ocsp_response(&self) -> bool {
+        false
+    }
+
+    fn hash_config(&self, h: &mut dyn Hasher) {
+        // This Verifier is always the same
+        h.write(b"EmptyVerifier");
     }
 }
 
