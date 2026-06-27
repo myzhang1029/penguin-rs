@@ -79,9 +79,6 @@ nativetls = ["dep:tokio-native-tls", "dep:hyper-tls"]
 ring = ["instant-acme/ring", "rustls/ring", "tokio-rustls/ring", "hyper-rustls/ring"]
 aws-lc-rs = ["dep:aws-lc-rs", "instant-acme/aws-lc-rs", "rustls/aws-lc-rs", "rustls/prefer-post-quantum", "tokio-rustls/aws-lc-rs", "hyper-rustls/aws-lc-rs"]
 
-# Export key logs to a file specified via env SSLKEYLOGFILE
-rustls-keylog = ["__rustls"]
-
 # Dependencies for testing
 dev-dependencies = ["tracing-subscriber/env-filter", "tokio/process"]
 # Allow some tests that require real internet connection

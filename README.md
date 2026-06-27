@@ -111,8 +111,6 @@ Executable features:
 - `ring`: use `ring` as the crypto provider for `rustls`
 - `aws-lc-rs`: use `aws-lc-rs` as the crypto provider for `rustls`
 
-- `rustls-keylog`: (caution) export TLS session data to the file specified in the environmental variable `SSLKEYLOGFILE`
-
 - `default-is-ipv6`: use `::`/`::1` instead of `0.0.0.0`/`127.0.0.1` when an IP address is omitted in the client command line
 
 - `tokio-console`: enable `console-subscriber` support
