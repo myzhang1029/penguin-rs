@@ -3,13 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::Error;
-use rustls::{
-    ClientConfig, RootCertStore, ServerConfig,
-    client::danger::{ServerCertVerified, ServerCertVerifier},
-    crypto::CryptoProvider,
-    pki_types::{CertificateDer, PrivateKeyDer, ServerName},
-    server::WebPkiClientVerifier,
-};
+use penguin_mux::Dupe;
+use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use rustls::crypto::CryptoProvider;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
+use rustls::server::WebPkiClientVerifier;
+use rustls::{ClientConfig, DigitallySignedStruct, RootCertStore, ServerConfig, SignatureScheme};
 use std::sync::Arc;
 use tracing::debug;
 
@@ -61,8 +60,9 @@ async fn make_server_config_from_mem(
     key: PrivateKeyDer<'static>,
     client_ca_path: Option<&str>,
 ) -> Result<TlsIdentityInner, Error> {
-    // Build config
-    let config = ServerConfig::builder();
+    let provider = get_crypto_provider().dupe();
+    let config =
+        ServerConfig::builder_with_provider(provider).with_safe_default_protocol_versions()?;
     let mut config = if let Some(client_ca_path) = client_ca_path {
         let store = generate_rustls_rootcertstore(Some(client_ca_path)).await?;
         let verifier = WebPkiClientVerifier::builder(Arc::new(store)).build()?;
@@ -87,7 +87,9 @@ pub async fn make_client_config(
     tls_skip_verify: bool,
     tls_alpn: Option<&[&str]>,
 ) -> Result<ClientConfig, Error> {
-    let config = ClientConfig::builder();
+    let provider = get_crypto_provider().dupe();
+    let config =
+        ClientConfig::builder_with_provider(provider).with_safe_default_protocol_versions()?;
     // Whether there is a custom CA store
     let roots = generate_rustls_rootcertstore(ca_path).await?;
     let client_certificate = try_load_certificate(key_path, cert_path).await?;
@@ -95,17 +97,11 @@ pub async fn make_client_config(
     let mut config = match (tls_skip_verify, client_certificate) {
         (true, Some((cert_chain, key_der))) => config
             .dangerous()
-            .with_custom_certificate_verifier(Arc::new(EmptyVerifier(
-                CryptoProvider::get_default()
-                    .expect("no process-level CryptoProvider available (this is a bug)"),
-            )))
+            .with_custom_certificate_verifier(Arc::new(EmptyVerifier(get_crypto_provider())))
             .with_client_auth_cert(cert_chain, key_der)?,
         (true, None) => config
             .dangerous()
-            .with_custom_certificate_verifier(Arc::new(EmptyVerifier(
-                CryptoProvider::get_default()
-                    .expect("no process-level CryptoProvider available (this is a bug)"),
-            )))
+            .with_custom_certificate_verifier(Arc::new(EmptyVerifier(get_crypto_provider())))
             .with_no_client_auth(),
         (false, Some((cert_chain, key_der))) => config
             .with_root_certificates(roots)
@@ -190,7 +186,7 @@ impl ServerCertVerifier for EmptyVerifier {
         _intermediates: &[CertificateDer<'_>],
         _server_name: &ServerName<'_>,
         _ocsp_response: &[u8],
-        _now: rustls::pki_types::UnixTime,
+        _now: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
         Ok(ServerCertVerified::assertion())
     }
@@ -199,8 +195,8 @@ impl ServerCertVerifier for EmptyVerifier {
         &self,
         message: &[u8],
         cert: &CertificateDer<'_>,
-        dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
         rustls::crypto::verify_tls12_signature(
             message,
             cert,
@@ -213,8 +209,8 @@ impl ServerCertVerifier for EmptyVerifier {
         &self,
         message: &[u8],
         cert: &CertificateDer<'_>,
-        dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
         rustls::crypto::verify_tls13_signature(
             message,
             cert,
@@ -223,7 +219,7 @@ impl ServerCertVerifier for EmptyVerifier {
         )
     }
 
-    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
         self.0.signature_verification_algorithms.supported_schemes()
     }
 }
@@ -242,6 +238,11 @@ pub fn make_hyper_connector() -> std::io::Result<HyperConnector> {
         .enable_http2()
         .build();
     Ok(conn)
+}
+
+fn get_crypto_provider() -> &'static Arc<CryptoProvider> {
+    CryptoProvider::get_default()
+        .expect("no process-level CryptoProvider available (this is a bug)")
 }
 
 #[cfg(test)]
