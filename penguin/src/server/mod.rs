@@ -107,7 +107,8 @@ pub async fn server_main(
         args.outgoing_from_v6.0,
         args.timeout,
         args.timeout,
-    )?;
+    )
+    .await?;
     let sockaddrs = arg_to_sockaddrs(args)?;
     let mut listening_tasks = JoinSet::new();
     if let Some(tls_config) = check_start_tls(args).await? {

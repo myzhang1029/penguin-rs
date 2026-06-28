@@ -72,13 +72,13 @@ default = ["rustls-native-roots", "tests-real-internet4", "tests-udp", "penguin-
 # Note that it does not make sense to use more than one TLS implementations
 # at the same time, but there must be at least one if `penguin-binary` is
 # enabled.
-rustls-webpki-roots = ["dep:webpki-roots", "hyper-rustls/webpki-tokio", "__rustls"]
-rustls-native-roots = ["dep:rustls-native-certs", "hyper-rustls/native-tokio", "__rustls"]
-__rustls = ["dep:rustls", "dep:rustls-pemfile", "dep:tokio-rustls"]
+rustls-webpki-roots = ["dep:webpki-roots", "__rustls"]
+rustls-native-roots = ["dep:rustls-native-certs", "__rustls"]
+__rustls = ["dep:rustls", "dep:rustls-pemfile", "dep:tokio-rustls", "dep:hyper-rustls"]
 nativetls = ["dep:tokio-native-tls", "dep:hyper-tls"]
 # Use ring or aws-lc-rs
-ring = ["instant-acme?/ring", "rustls/ring", "hyper-rustls/ring"]
-aws-lc-rs = ["instant-acme?/aws-lc-rs", "rustls/aws-lc-rs", "rustls/prefer-post-quantum", "hyper-rustls/aws-lc-rs"]
+ring = ["instant-acme?/ring", "rustls/ring"]
+aws-lc-rs = ["instant-acme?/aws-lc-rs", "rustls/aws-lc-rs", "rustls/prefer-post-quantum"]
 meek-chromium = ["aws-lc-rs", "rustls-webpki/aws-lc-rs"]
 
 # Dependencies for testing

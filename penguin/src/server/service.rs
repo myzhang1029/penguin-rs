@@ -6,7 +6,7 @@ use super::websocket::handle_websocket;
 use crate::arg::BackendUrl;
 use crate::http::body::IncomingOrFullBody;
 use crate::server::io_with_timeout;
-use crate::tls::{HyperConnector, MaybeTlsStream};
+use crate::tls::{self, HyperConnector, MaybeTlsStream};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64_STANDARD_ENGINE;
 use bytes::Bytes;
@@ -115,7 +115,7 @@ impl Dupe for State {
 impl State {
     /// Create a new `State`
     #[expect(clippy::too_many_arguments)]
-    pub fn new(
+    pub async fn new(
         backend: Option<&'static BackendUrl>,
         http2_support: &'static OnceLock<bool>,
         ws_psk: Option<&'static HeaderValue>,
@@ -126,9 +126,9 @@ impl State {
         outgoing_from_v6: Ipv6Addr,
         tls_timeout: OptionalDuration,
         http_timeout: OptionalDuration,
-    ) -> std::io::Result<Self> {
-        let client =
-            HyperClient::builder(TokioExecutor::new()).build(crate::tls::make_hyper_connector()?);
+    ) -> Result<Self, tls::Error> {
+        let client = HyperClient::builder(TokioExecutor::new())
+            .build(crate::tls::make_hyper_connector().await?);
         Ok(Self {
             backend,
             ws_psk,
@@ -484,6 +484,7 @@ mod tests {
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         )
+        .await
         .unwrap();
         let req = Request::builder()
             .method(Method::GET)
@@ -507,6 +508,7 @@ mod tests {
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         )
+        .await
         .unwrap();
         let req = Request::builder()
             .method(Method::GET)
@@ -530,6 +532,7 @@ mod tests {
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         )
+        .await
         .unwrap();
         let req = Request::builder()
             .method(Method::GET)
@@ -553,6 +556,7 @@ mod tests {
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         )
+        .await
         .unwrap();
         let req = Request::builder()
             .method(Method::GET)
@@ -587,6 +591,7 @@ mod tests {
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         )
+        .await
         .unwrap();
         let req = Request::builder()
             .method(Method::GET)
@@ -607,6 +612,7 @@ mod tests {
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         )
+        .await
         .unwrap();
         let req = Request::builder()
             .method(Method::GET)
@@ -639,6 +645,7 @@ mod tests {
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         )
+        .await
         .unwrap();
         let req = Request::builder()
             .version(http::Version::HTTP_11)
@@ -673,6 +680,7 @@ mod tests {
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         )
+        .await
         .unwrap();
         let req = Request::builder()
             .version(http::Version::HTTP_2)
@@ -713,6 +721,7 @@ mod tests {
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         )
+        .await
         .unwrap();
         // Google does support HTTP/2. We try that here, but let's not expect it to always work
         let req = Request::builder()
@@ -735,6 +744,7 @@ mod tests {
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         )
+        .await
         .unwrap();
         assert!(BACKEND_SUPPORTS_HTTP2.get().is_some());
         let req = Request::builder()
@@ -764,6 +774,7 @@ mod tests {
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         )
+        .await
         .unwrap();
         let req = Request::builder()
             .method(Method::POST)
@@ -800,6 +811,7 @@ mod tests {
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         )
+        .await
         .unwrap();
         let req = Request::builder()
             .method(Method::GET)
@@ -834,6 +846,7 @@ mod tests {
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         )
+        .await
         .unwrap();
         let req = Request::builder()
             .method(Method::GET)
@@ -872,6 +885,7 @@ mod tests {
             OptionalDuration::NONE,
             OptionalDuration::NONE,
         )
+        .await
         .unwrap();
         let on_upgrade = hyper::upgrade::on(http::Request::new(EmptyBody::new()));
         let req = Request::builder()
