@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
+#[cfg(all(feature = "aws-lc-rs", feature = "meek-chromium"))]
+pub mod aws_lc_rs_chromium;
 mod maybe_tls;
 #[cfg(feature = "nativetls")]
 mod native;
@@ -69,6 +71,24 @@ pub enum Error {
     /// Unsupported feature
     #[error("{0} is not supported: {1}")]
     UnsupportedFeature(&'static str, &'static str),
+}
+
+/// Initialize the process-wide Rustls crypto provider according to the features enabled in this build.
+#[expect(clippy::must_use_candidate)]
+pub fn init_crypto_provider() -> Option<()> {
+    #[cfg(all(feature = "ring", not(feature = "aws-lc-rs")))]
+    ::rustls::crypto::ring::default_provider()
+        .install_default()
+        .ok()?;
+    #[cfg(all(feature = "aws-lc-rs", feature = "meek-chromium"))]
+    aws_lc_rs_chromium::chromium_like_provider()
+        .install_default()
+        .ok()?;
+    #[cfg(all(feature = "aws-lc-rs", not(feature = "meek-chromium")))]
+    ::rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .ok()?;
+    Some(())
 }
 
 /// Create a TCP connection and wrap it in a TLS stream

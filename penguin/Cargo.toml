@@ -41,6 +41,7 @@ penguin-mux = { version = "0.8", path = "../penguin-mux", features = ["tungsteni
 rustls = { version = "^0.23, >=0.23.18", features = ["logging", "std", "tls12"], default-features = false, optional = true }
 rustls-native-certs = { version = "0.8", optional = true }
 rustls-pemfile = { version = "2", optional = true }
+rustls-webpki = { version = "0.103", optional = true }
 sha1 = { version = "0.11", optional = true }
 socket2 = { version = "0.6", features = ["all"], optional = true }
 thiserror = "2"
@@ -74,9 +75,10 @@ rustls-webpki-roots = ["dep:webpki-roots", "hyper-rustls/webpki-tokio", "__rustl
 rustls-native-roots = ["dep:rustls-native-certs", "hyper-rustls/native-tokio", "__rustls"]
 __rustls = ["dep:rustls", "dep:rustls-pemfile", "dep:tokio-rustls"]
 nativetls = ["dep:tokio-native-tls", "dep:hyper-tls"]
-# Use ring or aws-lc-rs (supported on fewer platforms)
+# Use ring or aws-lc-rs
 ring = ["instant-acme?/ring", "rustls/ring", "hyper-rustls/ring"]
 aws-lc-rs = ["instant-acme?/aws-lc-rs", "rustls/aws-lc-rs", "rustls/prefer-post-quantum", "hyper-rustls/aws-lc-rs"]
+meek-chromium = ["aws-lc-rs", "rustls-webpki/aws-lc-rs"]
 
 # Dependencies for testing
 dev-dependencies = ["tracing-subscriber/env-filter", "tokio/process"]
