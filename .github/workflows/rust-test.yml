@@ -85,11 +85,12 @@ jobs:
       env:
         RUSTFLAGS: -Cinstrument-coverage
 
-    - name: Run cargo tests with meek-chromium enabled
+    - name: Run cargo tests with PENGUIN_TLS_CHROMIUM_LIKE enabled
       if: ${{ matrix.tls != 'nativetls' }}
-      run: cargo nextest run --all-targets --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,acme,penguin-binary,meek-chromium --no-default-features
+      run: cargo nextest run --all-targets --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,acme,penguin-binary --no-default-features
       env:
         RUSTFLAGS: -Cinstrument-coverage
+        PENGUIN_TLS_CHROMIUM_LIKE: on
 
     - name: Run cargo lib tests with minimal features
       run: cargo nextest run --all-targets --verbose --no-default-features --package penguin-mux

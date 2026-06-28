@@ -78,8 +78,7 @@ __rustls = ["dep:rustls", "dep:rustls-pemfile", "dep:tokio-rustls", "dep:hyper-r
 nativetls = ["dep:tokio-native-tls", "dep:hyper-tls"]
 # Use ring or aws-lc-rs
 ring = ["instant-acme?/ring", "rustls/ring"]
-aws-lc-rs = ["instant-acme?/aws-lc-rs", "rustls/aws-lc-rs", "rustls/prefer-post-quantum"]
-meek-chromium = ["aws-lc-rs", "rustls-webpki/aws-lc-rs"]
+aws-lc-rs = ["instant-acme?/aws-lc-rs", "rustls/aws-lc-rs", "rustls/prefer-post-quantum", "rustls-webpki/aws-lc-rs"]
 
 # Dependencies for testing
 dev-dependencies = ["tracing-subscriber/env-filter", "tokio/process"]

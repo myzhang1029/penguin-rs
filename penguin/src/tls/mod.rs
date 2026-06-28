@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-#[cfg(all(feature = "aws-lc-rs", feature = "meek-chromium"))]
+#[cfg(feature = "aws-lc-rs")]
 pub mod aws_lc_rs_chromium;
 mod maybe_tls;
 #[cfg(feature = "nativetls")]
@@ -80,14 +80,19 @@ pub fn init_crypto_provider() -> Option<()> {
     ::rustls::crypto::ring::default_provider()
         .install_default()
         .ok()?;
-    #[cfg(all(feature = "aws-lc-rs", feature = "meek-chromium"))]
-    aws_lc_rs_chromium::chromium_like_provider()
-        .install_default()
-        .ok()?;
-    #[cfg(all(feature = "aws-lc-rs", not(feature = "meek-chromium")))]
-    ::rustls::crypto::aws_lc_rs::default_provider()
-        .install_default()
-        .ok()?;
+    #[cfg(feature = "aws-lc-rs")]
+    if std::env::var("PENGUIN_TLS_CHROMIUM_LIKE")
+        .unwrap_or_default()
+        .is_empty()
+    {
+        ::rustls::crypto::aws_lc_rs::default_provider()
+            .install_default()
+            .ok()?;
+    } else {
+        aws_lc_rs_chromium::chromium_like_provider()
+            .install_default()
+            .ok()?;
+    }
     Some(())
 }
 
