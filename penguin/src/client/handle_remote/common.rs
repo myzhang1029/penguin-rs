@@ -14,27 +14,23 @@ use tracing::info;
 /// A Listener that can accept connections asynchronously.
 pub trait AsyncAcceptable {
     type Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static;
-    fn accept(&self) -> impl Future<Output = io::Result<(Self::Stream, SocketAddr)>>;
+    async fn accept(&self) -> io::Result<(Self::Stream, SocketAddr)>;
 }
 
 impl AsyncAcceptable for TcpListener {
     type Stream = TcpStream;
-
-    fn accept(&self) -> impl Future<Output = io::Result<(Self::Stream, SocketAddr)>> {
-        self.accept()
+    async fn accept(&self) -> io::Result<(Self::Stream, SocketAddr)> {
+        self.accept().await
     }
 }
 
 #[cfg(unix)]
 impl AsyncAcceptable for tokio::net::UnixListener {
     type Stream = tokio::net::UnixStream;
-
-    fn accept(&self) -> impl Future<Output = io::Result<(Self::Stream, SocketAddr)>> {
-        async {
-            self.accept()
-                .await
-                .map(|(stream, _)| (stream, SocketAddr::from(([0, 0, 0, 0], 0))))
-        }
+    async fn accept(&self) -> io::Result<(Self::Stream, SocketAddr)> {
+        self.accept()
+            .await
+            .map(|(stream, _)| (stream, SocketAddr::from(([0, 0, 0, 0], 0))))
     }
 }
 
