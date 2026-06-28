@@ -76,6 +76,20 @@ async fn make_server_config_from_mem(
     Ok(config)
 }
 
+#[cfg(feature = "aws-lc-rs")]
+fn grease_ech_config() -> Result<rustls::client::EchMode, Error> {
+    use rand::seq::IndexedRandom;
+    use rustls::client::{EchGreaseConfig, EchMode};
+    use rustls::crypto::aws_lc_rs;
+    let all_suites = aws_lc_rs::hpke::ALL_SUPPORTED_SUITES;
+    let suite = all_suites
+        .choose(&mut rand::rng())
+        .expect("aws_lc_rs::hpke::ALL_SUPPORTED_SUITES is empty (this is a bug)");
+    let (public_key, _) = suite.generate_key_pair()?;
+    let ech_mode = EchMode::from(EchGreaseConfig::new(*suite, public_key));
+    Ok(ech_mode)
+}
+
 /// Create a `rustls::ClientConfig` with possibly a client certificate and a custom CA store
 pub async fn make_client_config(
     cert_path: Option<&str>,
@@ -85,6 +99,9 @@ pub async fn make_client_config(
     tls_alpn: Option<&[&str]>,
 ) -> Result<ClientConfig, Error> {
     let provider = get_crypto_provider().dupe();
+    #[cfg(feature = "aws-lc-rs")]
+    let config = ClientConfig::builder_with_provider(provider).with_ech(grease_ech_config()?)?;
+    #[cfg(all(feature = "ring", not(feature = "aws-lc-rs")))]
     let config =
         ClientConfig::builder_with_provider(provider).with_safe_default_protocol_versions()?;
     // Whether there is a custom CA store
