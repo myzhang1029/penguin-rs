@@ -388,6 +388,19 @@ impl FromStr for Remote {
                 "udp",
             ));
         }
+        if matches!(
+            result,
+            Self {
+                local_addr: LocalSpec::DomainSocket(_),
+                remote_addr: RemoteSpec::Tproxy,
+                ..
+            }
+        ) {
+            return Err(Error::UnsupportedCombination(
+                "unix domain socket local",
+                "tproxy remote",
+            ));
+        }
         Ok(result)
     }
 }
@@ -657,15 +670,6 @@ mod tests {
                 },
             ),
             (
-                "[unix:/tmp/socket]:tproxy",
-                String::from("[unix:/tmp/socket]:tproxy/tcp"),
-                Remote {
-                    local_addr: LocalSpec::DomainSocket(PathBuf::from("/tmp/socket")),
-                    remote_addr: RemoteSpec::Tproxy,
-                    protocol: Protocol::Tcp,
-                },
-            ),
-            (
                 "[unix:/tmp/path:with:a:colon]:http",
                 String::from("[unix:/tmp/path:with:a:colon]:http/tcp"),
                 Remote {
@@ -880,6 +884,10 @@ mod tests {
             (
                 "[unix:/tmp/socket]:tproxy/udp",
                 Error::UnsupportedCombination("unix domain socket local", "udp"),
+            ),
+            (
+                "[unix:/tmp/socket]:tproxy",
+                Error::UnsupportedCombination("unix domain socket local", "tproxy remote"),
             ),
         ];
         for (s, expected) in tests {

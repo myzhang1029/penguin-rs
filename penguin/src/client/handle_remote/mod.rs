@@ -160,11 +160,8 @@ pub(super) async fn handle_remote(
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Tproxy, Protocol::Udp) => {
             handle_tproxy_udp(lhost, *lport, handler_resources).await
         }
-        (LocalSpec::Stdio, RemoteSpec::Tproxy, _) => {
+        (LocalSpec::Stdio | LocalSpec::DomainSocket(_), RemoteSpec::Tproxy, _) => {
             unreachable!("`clap` should have rejected this combination (this is a bug)")
-        }
-        (LocalSpec::DomainSocket(_), RemoteSpec::Tproxy, _) => {
-            todo!("unix domain sockets TPROXY is not yet implemented")
         }
     }
 }
