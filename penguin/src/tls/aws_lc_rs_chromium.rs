@@ -7,11 +7,10 @@ use rustls::crypto::{CryptoProvider, SupportedKxGroup, WebPkiSupportedAlgorithms
 use rustls::{
     CipherSuite, CipherSuiteCommon, SignatureScheme, SupportedCipherSuite, Tls12CipherSuite,
 };
-use std::sync::LazyLock;
 use webpki::aws_lc_rs as webpki_algs;
 
 // Actually implements TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256, but advertises itself as TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA
-static TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA: LazyLock<Tls12CipherSuite> = LazyLock::new(|| {
+const TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA: Tls12CipherSuite = {
     let SupportedCipherSuite::Tls12(actual) = cipher_suite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
     else {
         panic!("TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 should be Tls12");
@@ -23,10 +22,10 @@ static TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA: LazyLock<Tls12CipherSuite> = LazyLock
         },
         ..*actual
     }
-});
+};
 
 // Actually implements TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384, but advertises itself as TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA
-static TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA: LazyLock<Tls12CipherSuite> = LazyLock::new(|| {
+const TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA: Tls12CipherSuite = {
     let SupportedCipherSuite::Tls12(actual) = cipher_suite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
     else {
         panic!("TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384 should be Tls12");
@@ -38,10 +37,10 @@ static TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA: LazyLock<Tls12CipherSuite> = LazyLock
         },
         ..*actual
     }
-});
+};
 
 // Actually implements TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256, but advertises itself as TLS_RSA_WITH_AES_128_GCM_SHA256
-static TLS_RSA_WITH_AES_128_GCM_SHA256: LazyLock<Tls12CipherSuite> = LazyLock::new(|| {
+const TLS_RSA_WITH_AES_128_GCM_SHA256: Tls12CipherSuite = {
     let SupportedCipherSuite::Tls12(actual) = cipher_suite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
     else {
         panic!("TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 should be Tls12");
@@ -53,10 +52,10 @@ static TLS_RSA_WITH_AES_128_GCM_SHA256: LazyLock<Tls12CipherSuite> = LazyLock::n
         },
         ..*actual
     }
-});
+};
 
 // Actually implements TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384, but advertises itself as TLS_RSA_WITH_AES_256_GCM_SHA384
-static TLS_RSA_WITH_AES_256_GCM_SHA384: LazyLock<Tls12CipherSuite> = LazyLock::new(|| {
+const TLS_RSA_WITH_AES_256_GCM_SHA384: Tls12CipherSuite = {
     let SupportedCipherSuite::Tls12(actual) = cipher_suite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
     else {
         panic!("TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384 should be Tls12");
@@ -68,10 +67,10 @@ static TLS_RSA_WITH_AES_256_GCM_SHA384: LazyLock<Tls12CipherSuite> = LazyLock::n
         },
         ..*actual
     }
-});
+};
 
 // Actually implements TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256, but advertises itself as TLS_RSA_WITH_AES_128_CBC_SHA
-static TLS_RSA_WITH_AES_128_CBC_SHA: LazyLock<Tls12CipherSuite> = LazyLock::new(|| {
+const TLS_RSA_WITH_AES_128_CBC_SHA: Tls12CipherSuite = {
     let SupportedCipherSuite::Tls12(actual) = cipher_suite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
     else {
         panic!("TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 should be Tls12");
@@ -83,10 +82,10 @@ static TLS_RSA_WITH_AES_128_CBC_SHA: LazyLock<Tls12CipherSuite> = LazyLock::new(
         },
         ..*actual
     }
-});
+};
 
 // Actually implements TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384, but advertises itself as TLS_RSA_WITH_AES_256_CBC_SHA
-static TLS_RSA_WITH_AES_256_CBC_SHA: LazyLock<Tls12CipherSuite> = LazyLock::new(|| {
+const TLS_RSA_WITH_AES_256_CBC_SHA: Tls12CipherSuite = {
     let SupportedCipherSuite::Tls12(actual) = cipher_suite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
     else {
         panic!("TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384 should be Tls12");
@@ -98,30 +97,28 @@ static TLS_RSA_WITH_AES_256_CBC_SHA: LazyLock<Tls12CipherSuite> = LazyLock::new(
         },
         ..*actual
     }
-});
+};
 
 // Cipher Suites
-static CIPHER_SUITES: LazyLock<[SupportedCipherSuite; 15]> = LazyLock::new(|| {
-    [
-        // TLS1.3 suites
-        cipher_suite::TLS13_AES_128_GCM_SHA256,
-        cipher_suite::TLS13_AES_256_GCM_SHA384,
-        cipher_suite::TLS13_CHACHA20_POLY1305_SHA256,
-        // TLS1.2 suites
-        cipher_suite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
-        cipher_suite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-        cipher_suite::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
-        cipher_suite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-        cipher_suite::TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
-        cipher_suite::TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
-        SupportedCipherSuite::Tls12(&TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA),
-        SupportedCipherSuite::Tls12(&TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA),
-        SupportedCipherSuite::Tls12(&TLS_RSA_WITH_AES_128_GCM_SHA256),
-        SupportedCipherSuite::Tls12(&TLS_RSA_WITH_AES_256_GCM_SHA384),
-        SupportedCipherSuite::Tls12(&TLS_RSA_WITH_AES_128_CBC_SHA),
-        SupportedCipherSuite::Tls12(&TLS_RSA_WITH_AES_256_CBC_SHA),
-    ]
-});
+const CIPHER_SUITES: &[SupportedCipherSuite] = &[
+    // TLS1.3 suites
+    cipher_suite::TLS13_AES_128_GCM_SHA256,
+    cipher_suite::TLS13_AES_256_GCM_SHA384,
+    cipher_suite::TLS13_CHACHA20_POLY1305_SHA256,
+    // TLS1.2 suites
+    cipher_suite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+    cipher_suite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+    cipher_suite::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+    cipher_suite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+    cipher_suite::TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+    cipher_suite::TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+    SupportedCipherSuite::Tls12(&TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA),
+    SupportedCipherSuite::Tls12(&TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA),
+    SupportedCipherSuite::Tls12(&TLS_RSA_WITH_AES_128_GCM_SHA256),
+    SupportedCipherSuite::Tls12(&TLS_RSA_WITH_AES_256_GCM_SHA384),
+    SupportedCipherSuite::Tls12(&TLS_RSA_WITH_AES_128_CBC_SHA),
+    SupportedCipherSuite::Tls12(&TLS_RSA_WITH_AES_256_CBC_SHA),
+];
 
 // Extension: supported_groups
 const KX_GROUPS: &[&dyn SupportedKxGroup] = &[
