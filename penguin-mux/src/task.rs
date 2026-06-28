@@ -188,6 +188,7 @@ impl<S: WebSocket> Task<S> {
         // make up for it.
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let mut last_pong_timestamp = Instant::now();
+        let mut last_ping_sent = Instant::now();
 
         loop {
             tokio::select! {
@@ -200,7 +201,7 @@ impl<S: WebSocket> Task<S> {
                     // The sender is inside `self`
                     if r.is_ok() {
                         last_pong_timestamp = *last_pong_timestamp_rx.borrow();
-                        trace!("updated last pong timestamp");
+                        debug!("ping/pong round trip time: {:?}", Instant::now().duration_since(last_ping_sent));
                     } else {
                         debug_assert!(false, "last pong timestamp sender should not be closed (this is a bug)");
                         return Err(Error::ChannelClosed("last_pong_timestamp_rx"));
@@ -215,6 +216,7 @@ impl<S: WebSocket> Task<S> {
                         return Err(Error::KeepaliveTimeout);
                     }
                     poll_fn(|cx| self.ws.lock().poll_ready_unpin(cx)).await?;
+                    last_ping_sent = Instant::now();
                     self.ws.lock().start_send_unpin(Message::Ping)?;
                 }
             }
