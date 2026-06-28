@@ -82,7 +82,6 @@ async fn read_key_cert(key_path: &str, cert_path: &str) -> Result<Identity, Erro
 
 /// For backend requests
 #[cfg(feature = "server")]
-#[expect(clippy::unnecessary_wraps)]
 pub async fn make_hyper_connector() -> Result<HyperConnector, Error> {
     Ok(HyperConnector::new())
 }
