@@ -236,6 +236,9 @@ jobs:
       if: ${{ matrix.config.linux_packaging }}
       run: |
         .github/workflows/package.sh ${{ matrix.config.rust_target }} ${{ matrix.config.profile }}
+      env:
+        GH_TOKEN: ${{ github.token }}
+
     - name: Upload packages
       if: ${{ matrix.config.linux_packaging }}
       uses: actions/upload-artifact@v4
