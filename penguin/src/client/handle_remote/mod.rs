@@ -174,18 +174,12 @@ mod tproxy {
 
 #[cfg(not(feature = "http-proxy"))]
 mod http {
+    use super::common::AsyncAcceptable;
     use super::{FatalError, HandlerResources};
-    pub(super) async fn handle_http(
-        _lhost: &str,
-        _lport: u16,
+    pub(super) async fn handle_http<L: AsyncAcceptable>(
+        _listener: L,
         _handler_resources: &HandlerResources,
     ) -> Result<(), FatalError> {
-        Err(FatalError::NotEnabled("http-proxy"))
-    }
-    pub(super) async fn handle_http_uds(
-        _path: &Path,
-        _handler_resources: &'static HandlerResources,
-    ) -> Result<(), super::FatalError> {
         Err(FatalError::NotEnabled("http-proxy"))
     }
     pub(super) async fn handle_http_stdio(
