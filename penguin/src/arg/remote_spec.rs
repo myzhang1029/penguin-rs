@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
+use std::path::PathBuf;
 use std::str::FromStr;
 use thiserror::Error;
 
@@ -63,13 +64,10 @@ pub enum Error {
     Port(String, std::num::IntErrorKind),
     #[error("invalid protocol `{0}`")]
     Protocol(String),
-    /// `TProxy` needs a socket to listen on
-    #[error("stdio cannot accept Transparent Proxy")]
-    StdioTproxy,
+    #[error("cannot use {0} with {1}")]
+    UnsupportedCombination(&'static str, &'static str),
     #[error("found more than four colon-separated segments")]
     TooManySegments,
-    #[error("protocol `{0}` does not support UDP")]
-    UnsupportedUdp(RemoteSpec),
     #[error("invalid domain name `{0}`")]
     InvalidDomain(String),
 }
@@ -96,6 +94,9 @@ pub enum LocalSpec {
     /// Standard input/output
     #[display("stdio")]
     Stdio,
+    /// Unix domain socket
+    #[display("[unix:{}]", _0.display())]
+    DomainSocket(PathBuf),
 }
 
 impl PartialEq for LocalSpec {
@@ -105,6 +106,7 @@ impl PartialEq for LocalSpec {
                 host1.eq_ignore_ascii_case(host2) && port1 == port2
             }
             (Self::Stdio, Self::Stdio) => true,
+            (Self::DomainSocket(path1), Self::DomainSocket(path2)) => path1 == path2,
             _ => false,
         }
     }
@@ -222,8 +224,8 @@ impl FromStr for Remote {
             };
         }
         let (rest, proto) = match s.rsplit_once('/') {
-            Some((rest, proto)) => (rest, proto.parse()?),
-            None => (s, Protocol::Tcp),
+            Some((rest, proto)) if !proto.contains(':') => (rest, proto.parse()?),
+            _ => (s, Protocol::Tcp),
         };
         let tokens = tokenize_remote(rest)?;
         let result = match tokens[..] {
@@ -248,21 +250,36 @@ impl FromStr for Remote {
                 remote_addr: RemoteSpec::Inet((default_host!(local), parse_port_or_bail!(port))),
                 protocol: proto,
             },
-            // Two elements: either "socks", "http", or "tproxy" and local port number,
-            // or remote host and port number.
+            // Two elements:
+            // - "stdio" and "socks", "http", or "tproxy",
+            // - "stdio" and remote port number,
+            // - unix domain socket and "socks", "http", or "tproxy",
+            // - local port number and "socks", "http", or "tproxy",
+            // - unix domain socket and remote port number, or
+            // - remote host and port number.
             ["stdio", "socks" | "http"] => Self {
                 local_addr: LocalSpec::Stdio,
                 remote_addr: parse_remote_special!(tokens[1]),
                 protocol: proto,
             },
-            ["stdio", "tproxy"] => return Err(Error::StdioTproxy),
+            ["stdio", "tproxy"] => return Err(Error::UnsupportedCombination("stdio local", "tproxy remote")),
+            ["stdio", port] => Self {
+                local_addr: LocalSpec::Stdio,
+                remote_addr: RemoteSpec::Inet((default_host!(local), parse_port_or_bail!(port))),
+                protocol: proto,
+            },
+            [uds_path, "socks" | "http" | "tproxy"] if uds_path.starts_with("unix:") => Self {
+                local_addr: LocalSpec::DomainSocket(PathBuf::from(&uds_path[5..])),
+                remote_addr: parse_remote_special!(tokens[1]),
+                protocol: proto,
+            },
             [port, "socks" | "http" | "tproxy"] => Self {
                 local_addr: LocalSpec::Inet((default_host!(local), parse_port_or_bail!(port))),
                 remote_addr: parse_remote_special!(tokens[1]),
                 protocol: proto,
             },
-            ["stdio", port] => Self {
-                local_addr: LocalSpec::Stdio,
+            [uds_path, port] if uds_path.starts_with("unix:") => Self {
+                local_addr: LocalSpec::DomainSocket(PathBuf::from(&uds_path[5..])),
                 remote_addr: RemoteSpec::Inet((default_host!(local), parse_port_or_bail!(port))),
                 protocol: proto,
             },
@@ -277,8 +294,9 @@ impl FromStr for Remote {
             },
             // Three elements:
             // - "stdio", remote host, and port number,
-            // - local host, local port number, and (either "socks", "http", or "tproxy"), or
-            // - local port number, remote host, and port number.
+            // - local host, local port number, and (either "socks", "http", or "tproxy"),
+            // - local port number, remote host, and port number, or
+            // - unix domain socket, remote host, and port number.
             ["stdio", remote_host, remote_port] => Self {
                 local_addr: LocalSpec::Stdio,
                 remote_addr: RemoteSpec::Inet((
@@ -297,6 +315,15 @@ impl FromStr for Remote {
                 remote_addr: parse_remote_special!(tokens[2]),
                 protocol: proto,
             },
+            [uds_path, remote_host, remote_port] if uds_path.starts_with("unix:") => Self {
+                local_addr: LocalSpec::DomainSocket(PathBuf::from(&uds_path[5..])),
+                remote_addr: RemoteSpec::Inet((
+                    idna::domain_to_ascii(remote_host)
+                        .map_err(|_| Error::InvalidDomain(remote_host.to_string()))?,
+                    parse_port_or_bail!(remote_port),
+                )),
+                protocol: proto,
+            },
             [local_port, remote_host, remote_port] => Self {
                 local_addr: LocalSpec::Inet((
                     default_host!(unspec),
@@ -309,6 +336,7 @@ impl FromStr for Remote {
                 )),
                 protocol: proto,
             },
+            // Four elements: local host, local port, remote host, and remote port.
             [local_host, local_port, remote_host, remote_port] => Self {
                 local_addr: LocalSpec::Inet((
                     idna::domain_to_ascii(local_host)
@@ -331,6 +359,7 @@ impl FromStr for Remote {
                 return Err(Error::TooManySegments);
             }
         };
+        // Check for invalid cases
         if matches!(
             result,
             Self {
@@ -339,10 +368,19 @@ impl FromStr for Remote {
                 ..
             }
         ) {
-            Err(Error::UnsupportedUdp(result.remote_addr))
-        } else {
-            Ok(result)
+            return Err(Error::UnsupportedCombination("socks or http local", "udp"));
         }
+        if matches!(
+            result,
+            Self {
+                local_addr: LocalSpec::DomainSocket(_),
+                protocol: Protocol::Udp,
+                ..
+            }
+        ) {
+            return Err(Error::UnsupportedCombination("unix domain socket local", "udp"));
+        }
+        Ok(result)
     }
 }
 
@@ -493,7 +531,7 @@ mod tests {
             (
                 "http",
                 format!(
-                    "{}:{HTTP_DEFAULT_PORT}:http/tcp",
+                    "{}:{HTTP_DEFAULT_PORT}:http/TCP",
                     add_brackets!(default_host!(local))
                 ),
                 Remote {
@@ -587,6 +625,63 @@ mod tests {
                     local_addr: LocalSpec::Inet((String::from("::1"), 12345)),
                     remote_addr: RemoteSpec::Tproxy,
                     protocol: Protocol::Udp,
+                },
+            ),
+            (
+                "[unix:/tmp/socket]:8080",
+                format!(
+                    "[unix:/tmp/socket]:{}:8080/tcp",
+                    add_brackets!(default_host!(local))
+                ),
+                Remote {
+                    local_addr: LocalSpec::DomainSocket(PathBuf::from("/tmp/socket")),
+                    remote_addr: RemoteSpec::Inet((default_host!(local), 8080)),
+                    protocol: Protocol::Tcp,
+                },
+            ),
+            (
+                "[unix:/tmp/socket]:socks",
+                String::from("[unix:/tmp/socket]:socks/tcp"),
+                Remote {
+                    local_addr: LocalSpec::DomainSocket(PathBuf::from("/tmp/socket")),
+                    remote_addr: RemoteSpec::Socks,
+                    protocol: Protocol::Tcp,
+                },
+            ),
+            (
+                "[unix:/tmp/socket]:tproxy",
+                String::from("[unix:/tmp/socket]:tproxy/tcp"),
+                Remote {
+                    local_addr: LocalSpec::DomainSocket(PathBuf::from("/tmp/socket")),
+                    remote_addr: RemoteSpec::Tproxy,
+                    protocol: Protocol::Tcp,
+                },
+            ),
+            (
+                "[unix:/tmp/path:with:a:colon]:http",
+                String::from("[unix:/tmp/path:with:a:colon]:http/tcp"),
+                Remote {
+                    local_addr: LocalSpec::DomainSocket(PathBuf::from("/tmp/path:with:a:colon")),
+                    remote_addr: RemoteSpec::Http,
+                    protocol: Protocol::Tcp,
+                },
+            ),
+            (
+                "[unix:/tmp/socket]:example.com:80",
+                String::from("[unix:/tmp/socket]:example.com:80/tcp"),
+                Remote {
+                    local_addr: LocalSpec::DomainSocket(PathBuf::from("/tmp/socket")),
+                    remote_addr: RemoteSpec::Inet((String::from("example.com"), 80)),
+                    protocol: Protocol::Tcp,
+                },
+            ),
+            (
+                "[unix:/tmp/用户路径]:测试.テスト:443",
+                String::from("[unix:/tmp/用户路径]:XN--0ZWM56D.XN--ZCKZAH:443/tcp"),
+                Remote {
+                    local_addr: LocalSpec::DomainSocket(PathBuf::from("/tmp/用户路径")),
+                    remote_addr: RemoteSpec::Inet((String::from("xn--0zwm56d.xn--zckzah"), 443)),
+                    protocol: Protocol::Tcp,
                 },
             ),
             (
@@ -704,7 +799,13 @@ mod tests {
             let actual = s.parse::<Remote>().unwrap();
             assert_eq!(actual, *expected);
             // Test that the canonical format is as expected
-            assert!(actual.to_string().eq_ignore_ascii_case(&canonical));
+            if !actual.to_string().eq_ignore_ascii_case(&canonical) {
+                assert!(
+                    false,
+                    "Assertion failed: actual.to_string() = {:?}, canonical = {canonical:?}",
+                    actual.to_string()
+                );
+            }
             // Test that the canonical format is made and parsed correctly
             let reparsed = actual.to_string().parse::<Remote>().unwrap();
             assert_eq!(reparsed, *expected);
@@ -756,9 +857,19 @@ mod tests {
                 "[::1]:99/nonsense",
                 Error::Protocol(String::from("nonsense")),
             ),
-            ("socks/udp", Error::UnsupportedUdp(RemoteSpec::Socks)),
-            ("http/udp", Error::UnsupportedUdp(RemoteSpec::Http)),
-            ("stdio:tproxy", Error::StdioTproxy),
+            (
+                "socks/udp",
+                Error::UnsupportedCombination("socks or http local", "udp"),
+            ),
+            (
+                "http/udp",
+                Error::UnsupportedCombination("socks or http local", "udp")
+            ),
+            ("stdio:tproxy", Error::UnsupportedCombination("stdio local", "tproxy remote")),
+            (
+                "[unix:/tmp/socket]:tproxy/udp",
+                Error::UnsupportedCombination("unix domain socket local", "udp"),
+            ),
         ];
         for (s, expected) in tests {
             // Test that an incorrect format is rejected with the correct error

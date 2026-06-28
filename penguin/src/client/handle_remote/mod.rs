@@ -103,6 +103,9 @@ pub(super) async fn handle_remote(
         (LocalSpec::Stdio, RemoteSpec::Tproxy, _) => {
             unreachable!("`clap` should have rejected this combination (this is a bug)")
         }
+        (LocalSpec::DomainSocket(_), _, _) => {
+            todo!("domain socket remotes not yet supported")
+        }
     }
 }
 
