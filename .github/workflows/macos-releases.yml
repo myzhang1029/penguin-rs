@@ -21,7 +21,10 @@ jobs:
 
     steps:
     - name: Checkout source
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
+      with:
+        fetch-depth: 100
+        fetch-tags: true
 
     - name: Rust Cache
       uses: Swatinem/rust-cache@v2
@@ -39,10 +42,10 @@ jobs:
         mv -v target/aarch64-apple-darwin/release/penguin binaries/penguin-aarch64-apple-darwin
 
     - name: Nightly Binaries
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@v3
       if: github.ref == 'refs/heads/main'
       with:
-        body: "Nightly binaries for commit ${{ github.sha }}. DO NOT USE the source tarball here."
+        body: "Nightly binaries for commit ${{ github.sha }}. Please ignore and DO NOT USE the GitHub-generated archives named `Source code (zip)` and `Source code (tar.gz)`."
         draft: false
         prerelease: true
         files: binaries/*
@@ -54,7 +57,7 @@ jobs:
         make_latest: false
 
     - name: Create GitHub Release for Tag
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@v3
       if: github.ref_type == 'tag'
       with:
         body: "Release for tag ${{ github.ref }} on commit ${{ github.sha }}."
