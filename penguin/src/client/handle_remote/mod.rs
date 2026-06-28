@@ -86,10 +86,15 @@ pub(super) async fn handle_remote(
         (LocalSpec::DomainSocket(path), RemoteSpec::Inet((rhost, rport)), _) => {
             // The parser guarantees that the protocol is TCP
             #[cfg(unix)]
-            let listener = tokio::net::UnixListener::bind(path).map_err(FatalError::ClientIo)?;
+            {
+                let listener =
+                    tokio::net::UnixListener::bind(path).map_err(FatalError::ClientIo)?;
+                handle_tcp(listener, rhost, *rport, handler_resources).await
+            }
             #[cfg(not(unix))]
-            let listener = return Err(FatalError::NotAvailable("unix domain sockets"));
-            handle_tcp(listener, rhost, *rport, handler_resources).await
+            {
+                return Err(FatalError::NotAvailable("unix domain sockets"));
+            }
         }
         (LocalSpec::Stdio, RemoteSpec::Inet((rhost, rport)), Protocol::Tcp) => {
             handle_tcp_stdio(rhost, *rport, handler_resources).await
@@ -112,10 +117,16 @@ pub(super) async fn handle_remote(
         (LocalSpec::DomainSocket(path), RemoteSpec::Socks, _) => {
             // The parser guarantees that the protocol is TCP
             #[cfg(unix)]
-            let listener = tokio::net::UnixListener::bind(path).map_err(FatalError::ClientIo)?;
+            {
+                let listener =
+                    tokio::net::UnixListener::bind(path).map_err(FatalError::ClientIo)?;
+
+                handle_socks(listener, "localhost", handler_resources).await
+            }
             #[cfg(not(unix))]
-            let listener = return Err(FatalError::NotAvailable("unix domain sockets"));
-            handle_socks(listener, "localhost", handler_resources).await
+            {
+                return Err(FatalError::NotAvailable("unix domain sockets"));
+            }
         }
         // Remote `Http`
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Http, _) => {
@@ -132,10 +143,15 @@ pub(super) async fn handle_remote(
         (LocalSpec::DomainSocket(path), RemoteSpec::Http, _) => {
             // The parser guarantees that the protocol is TCP
             #[cfg(unix)]
-            let listener = tokio::net::UnixListener::bind(path).map_err(FatalError::ClientIo)?;
+            {
+                let listener =
+                    tokio::net::UnixListener::bind(path).map_err(FatalError::ClientIo)?;
+                handle_http(listener, handler_resources).await
+            }
             #[cfg(not(unix))]
-            let listener = return Err(FatalError::NotAvailable("unix domain sockets"));
-            handle_http(listener, handler_resources).await
+            {
+                return Err(FatalError::NotAvailable("unix domain sockets"));
+            }
         }
         // Remote `Tproxy`
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Tproxy, Protocol::Tcp) => {
