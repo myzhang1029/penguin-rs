@@ -204,6 +204,61 @@ async fn test_it_works() {
     client_task.abort();
 }
 
+#[cfg(all(feature = "client", feature = "server"))]
+#[cfg(unix)]
+#[tokio::test]
+async fn test_it_works_uds() {
+    static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
+    static SERVER_ARGS: LazyLock<arg::ServerArgs> =
+        LazyLock::new(|| make_server_args("127.0.0.1", 30865));
+    static CLIENT_ARGS: OnceLock<arg::ClientArgs> = OnceLock::new();
+
+    static HANDLER_RESOURCES: OnceLock<crate::client::HandlerResources> = OnceLock::new();
+    setup_logging();
+
+    let tmpdir = tempfile::tempdir().unwrap();
+    let uds_path = tmpdir.path().join("test.sock");
+
+    CLIENT_ARGS.set(
+        make_client_args(
+            "127.0.0.1",
+            30865,
+            vec![Remote::from_str(&format!("[unix:{}]:127.0.0.1:30755", uds_path.display())).unwrap()],
+        )
+    ).unwrap();
+
+    let input_bytes: Vec<u8> = (0..(1024 * 1024)).map(|_| rand::random::<u8>()).collect();
+    let input_len = input_bytes.len();
+    let second_task = tokio::spawn(async move {
+        let listener = TcpListener::bind("127.0.0.1:30755").await.unwrap();
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut output_bytes = vec![0u8; input_len];
+        stream.read_exact(&mut output_bytes).await.unwrap();
+        output_bytes
+    });
+    let (handler_resources, stream_command_rx, datagram_rx) =
+        crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let client_task = tokio::spawn(crate::client::client_main_inner(
+        CLIENT_ARGS.get().unwrap(),
+        HANDLER_RESOURCES.get().unwrap(),
+        stream_command_rx,
+        datagram_rx,
+    ));
+    let server_task = tokio::spawn(crate::server::server_main(
+        &SERVER_ARGS,
+        &BACKEND_SUPPORTS_HTTP2,
+    ));
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let mut sock = tokio::net::UnixStream::connect(&uds_path).await.unwrap();
+    sock.write_all(&input_bytes).await.unwrap();
+    sock.shutdown().await.unwrap();
+    let output_bytes = second_task.await.unwrap();
+    assert_eq!(input_bytes, output_bytes);
+    server_task.abort();
+    client_task.abort();
+}
+
 #[cfg(feature = "server")]
 #[tokio::test]
 async fn test_server_timeout() {
