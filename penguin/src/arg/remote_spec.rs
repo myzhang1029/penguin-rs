@@ -262,7 +262,12 @@ impl FromStr for Remote {
                 remote_addr: parse_remote_special!(tokens[1]),
                 protocol: proto,
             },
-            ["stdio", "tproxy"] => return Err(Error::UnsupportedCombination("stdio local", "tproxy remote")),
+            ["stdio", "tproxy"] => {
+                return Err(Error::UnsupportedCombination(
+                    "stdio local",
+                    "tproxy remote",
+                ));
+            }
             ["stdio", port] => Self {
                 local_addr: LocalSpec::Stdio,
                 remote_addr: RemoteSpec::Inet((default_host!(local), parse_port_or_bail!(port))),
@@ -378,7 +383,10 @@ impl FromStr for Remote {
                 ..
             }
         ) {
-            return Err(Error::UnsupportedCombination("unix domain socket local", "udp"));
+            return Err(Error::UnsupportedCombination(
+                "unix domain socket local",
+                "udp",
+            ));
         }
         Ok(result)
     }
@@ -863,9 +871,12 @@ mod tests {
             ),
             (
                 "http/udp",
-                Error::UnsupportedCombination("socks or http local", "udp")
+                Error::UnsupportedCombination("socks or http local", "udp"),
             ),
-            ("stdio:tproxy", Error::UnsupportedCombination("stdio local", "tproxy remote")),
+            (
+                "stdio:tproxy",
+                Error::UnsupportedCombination("stdio local", "tproxy remote"),
+            ),
             (
                 "[unix:/tmp/socket]:tproxy/udp",
                 Error::UnsupportedCombination("unix domain socket local", "udp"),

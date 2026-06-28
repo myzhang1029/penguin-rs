@@ -8,6 +8,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
+mod common;
 #[cfg(feature = "http-proxy")]
 mod http;
 pub(super) mod socks;
@@ -16,6 +17,7 @@ mod tcp;
 mod tproxy;
 mod udp;
 
+use self::common::open_tcp_listener;
 use self::http::{handle_http, handle_http_stdio};
 use self::socks::{handle_socks, handle_socks_stdio};
 use self::tcp::{handle_tcp, handle_tcp_stdio};
@@ -52,6 +54,10 @@ pub enum FatalError {
     /// turned off at compile time.
     #[error("feature `{0}` is not enabled")]
     NotEnabled(&'static str),
+    /// Happens when the user is trying to open a remote with features
+    /// unavailable on the current platform.
+    #[error("feature `{0}` is not available on this platform")]
+    NotAvailable(&'static str),
 }
 
 /// Construct a TCP remote based on the description. These are simple because
@@ -66,11 +72,24 @@ pub(super) async fn handle_remote(
 ) -> Result<(), FatalError> {
     debug!("opening remote");
     match (&remote.local_addr, &remote.remote_addr, remote.protocol) {
+        // Remote `Inet`
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Inet((rhost, rport)), Protocol::Tcp) => {
-            handle_tcp(lhost, *lport, rhost, *rport, handler_resources).await
+            // Failing to open the listener is a fatal error and should be propagated.
+            let listener = open_tcp_listener(lhost, *lport)
+                .await
+                .map_err(FatalError::ClientIo)?;
+            handle_tcp(listener, rhost, *rport, handler_resources).await
         }
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Inet((rhost, rport)), Protocol::Udp) => {
             handle_udp(lhost, *lport, rhost, *rport, handler_resources).await
+        }
+        (LocalSpec::DomainSocket(path), RemoteSpec::Inet((rhost, rport)), _) => {
+            // The parser guarantees that the protocol is TCP
+            #[cfg(unix)]
+            let listener = tokio::net::UnixListener::bind(path).map_err(FatalError::ClientIo)?;
+            #[cfg(not(unix))]
+            let listener = return Err(FatalError::NotAvailable("unix domain sockets"));
+            handle_tcp(listener, rhost, *rport, handler_resources).await
         }
         (LocalSpec::Stdio, RemoteSpec::Inet((rhost, rport)), Protocol::Tcp) => {
             handle_tcp_stdio(rhost, *rport, handler_resources).await
@@ -78,22 +97,47 @@ pub(super) async fn handle_remote(
         (LocalSpec::Stdio, RemoteSpec::Inet((rhost, rport)), Protocol::Udp) => {
             handle_udp_stdio(rhost, *rport, handler_resources).await
         }
+        // Remote `Socks`
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Socks, _) => {
             // The parser guarantees that the protocol is TCP
-            handle_socks(lhost, *lport, handler_resources).await
-        }
-        (LocalSpec::Stdio, RemoteSpec::Http, _) => {
-            // The parser guarantees that the protocol is TCP
-            handle_http_stdio(handler_resources).await
-        }
-        (LocalSpec::Inet((lhost, lport)), RemoteSpec::Http, _) => {
-            // The parser guarantees that the protocol is TCP
-            handle_http(lhost, *lport, handler_resources).await
+            let listener = open_tcp_listener(lhost, *lport)
+                .await
+                .map_err(FatalError::ClientIo)?;
+            handle_socks(listener, lhost, handler_resources).await
         }
         (LocalSpec::Stdio, RemoteSpec::Socks, _) => {
             // The parser guarantees that the protocol is TCP
             handle_socks_stdio(handler_resources).await
         }
+        (LocalSpec::DomainSocket(path), RemoteSpec::Socks, _) => {
+            // The parser guarantees that the protocol is TCP
+            #[cfg(unix)]
+            let listener = tokio::net::UnixListener::bind(path).map_err(FatalError::ClientIo)?;
+            #[cfg(not(unix))]
+            let listener = return Err(FatalError::NotAvailable("unix domain sockets"));
+            handle_socks(listener, "localhost", handler_resources).await
+        }
+        // Remote `Http`
+        (LocalSpec::Inet((lhost, lport)), RemoteSpec::Http, _) => {
+            // The parser guarantees that the protocol is TCP
+            let listener = open_tcp_listener(lhost, *lport)
+                .await
+                .map_err(FatalError::ClientIo)?;
+            handle_http(listener, handler_resources).await
+        }
+        (LocalSpec::Stdio, RemoteSpec::Http, _) => {
+            // The parser guarantees that the protocol is TCP
+            handle_http_stdio(handler_resources).await
+        }
+        (LocalSpec::DomainSocket(path), RemoteSpec::Http, _) => {
+            // The parser guarantees that the protocol is TCP
+            #[cfg(unix)]
+            let listener = tokio::net::UnixListener::bind(path).map_err(FatalError::ClientIo)?;
+            #[cfg(not(unix))]
+            let listener = return Err(FatalError::NotAvailable("unix domain sockets"));
+            handle_http(listener, handler_resources).await
+        }
+        // Remote `Tproxy`
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Tproxy, Protocol::Tcp) => {
             handle_tproxy_tcp(lhost, *lport, handler_resources).await
         }
@@ -103,8 +147,8 @@ pub(super) async fn handle_remote(
         (LocalSpec::Stdio, RemoteSpec::Tproxy, _) => {
             unreachable!("`clap` should have rejected this combination (this is a bug)")
         }
-        (LocalSpec::DomainSocket(_), _, _) => {
-            todo!("domain socket remotes not yet supported")
+        (LocalSpec::DomainSocket(_), RemoteSpec::Tproxy, _) => {
+            todo!("unix domain sockets TPROXY is not yet implemented")
         }
     }
 }
@@ -136,6 +180,12 @@ mod http {
         _lport: u16,
         _handler_resources: &HandlerResources,
     ) -> Result<(), FatalError> {
+        Err(FatalError::NotEnabled("http-proxy"))
+    }
+    pub(super) async fn handle_http_uds(
+        _path: &Path,
+        _handler_resources: &'static HandlerResources,
+    ) -> Result<(), super::FatalError> {
         Err(FatalError::NotEnabled("http-proxy"))
     }
     pub(super) async fn handle_http_stdio(

@@ -1,7 +1,7 @@
 //! Support for Linux Transparent Proxy
 //! SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use super::{FatalError, HandlerResources, tcp::request_tcp_channel};
+use super::{FatalError, HandlerResources, common::request_tcp_channel};
 use bytes::Bytes;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::SocketAddr;

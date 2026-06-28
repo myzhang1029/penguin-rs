@@ -2,58 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use super::super::MaybeRetryableError;
 use super::FatalError;
-use crate::client::{HandlerResources, MuxStream, StreamCommand};
+use super::common::{AsyncAcceptable, request_tcp_channel};
+use crate::client::HandlerResources;
+use crate::client::MaybeRetryableError;
 use bytes::Bytes;
 use tokio::io as tio;
-use tokio::net::TcpListener;
-use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info, warn};
 
-/// Request a channel from the mux
-/// Returns an error if the main loop timed out waiting for a response.
-#[tracing::instrument(skip(stream_command_tx_permit), level = "debug")]
-pub(super) async fn request_tcp_channel(
-    stream_command_tx_permit: mpsc::Permit<'_, StreamCommand>,
-    dest_host: Bytes,
-    dest_port: u16,
-) -> Result<MuxStream, oneshot::error::RecvError> {
-    let (tx, rx) = oneshot::channel();
-    let stream_request = StreamCommand {
-        tx,
-        host: dest_host,
-        port: dest_port,
-    };
-    stream_command_tx_permit.send(stream_request);
-    rx.await
-}
-
-/// Open a TCP listener.
-#[tracing::instrument(level = "trace")]
-pub(super) async fn open_tcp_listener(lhost: &str, lport: u16) -> std::io::Result<TcpListener> {
-    let listener = TcpListener::bind((lhost, lport)).await?;
-    // `expect`: at this point `listener` should be bound. Otherwise, it's a bug.
-    let local_addr = listener
-        .local_addr()
-        .expect("Failed to get local address of TCP listener (this is a bug)");
-    info!("Listening on {local_addr}");
-    Ok(listener)
-}
-
 /// Handle a TCP Inet->Inet remote.
-#[tracing::instrument(skip(handler_resources), level = "debug")]
-pub(super) async fn handle_tcp(
-    lhost: &str,
-    lport: u16,
+#[tracing::instrument(skip(listener, handler_resources), level = "debug")]
+pub(super) async fn handle_tcp<L: AsyncAcceptable>(
+    listener: L,
     rhost: &'static str,
     rport: u16,
     handler_resources: &HandlerResources,
 ) -> Result<(), FatalError> {
-    // Not being able to open a TCP listener is a fatal error.
-    let listener = open_tcp_listener(lhost, lport)
-        .await
-        .map_err(FatalError::ClientIo)?;
     let rhost = rhost.as_bytes();
     loop {
         // This fails only if main has exited, which is a fatal error.
@@ -120,7 +84,7 @@ pub(super) async fn handle_tcp_stdio(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::super::common::open_tcp_listener;
     use tokio::io::AsyncWriteExt;
 
     #[tokio::test]

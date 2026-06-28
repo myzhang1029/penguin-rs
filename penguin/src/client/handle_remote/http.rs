@@ -4,7 +4,7 @@
 
 use super::{
     FatalError,
-    tcp::{open_tcp_listener, request_tcp_channel},
+    common::{AsyncAcceptable, request_tcp_channel},
 };
 use crate::client::HandlerResources;
 use crate::http::{body::IncomingOrFullBody, proxy};
@@ -125,16 +125,11 @@ where
     exec.serve_connection_with_upgrades(hyper_io, service).await
 }
 
-#[tracing::instrument(skip(handler_resources), level = "debug")]
-pub(super) async fn handle_http(
-    lhost: &'static str,
-    lport: u16,
+#[tracing::instrument(skip_all, level = "debug")]
+pub(super) async fn handle_http<L: AsyncAcceptable>(
+    listener: L,
     handler_resources: &'static HandlerResources,
 ) -> Result<(), super::FatalError> {
-    // Not being able to open a TCP listener is a fatal error.
-    let listener = open_tcp_listener(lhost, lport)
-        .await
-        .map_err(FatalError::ClientIo)?;
     loop {
         let (stream, peer_addr) = listener.accept().await.map_err(FatalError::ClientIo)?;
         debug!("Accepted HTTP proxy connection from {peer_addr}");

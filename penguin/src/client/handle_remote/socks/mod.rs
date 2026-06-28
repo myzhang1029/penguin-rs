@@ -6,8 +6,9 @@ mod v4;
 mod v5;
 
 use super::HandlerResources;
-use super::tcp::{open_tcp_listener, request_tcp_channel};
+use super::common::request_tcp_channel;
 use crate::client::StreamCommand;
+use crate::client::handle_remote::common::AsyncAcceptable;
 use crate::config;
 use bytes::{Buf, Bytes};
 use penguin_mux::{Datagram, Dupe};
@@ -43,15 +44,11 @@ pub enum Error {
     Fatal(#[from] super::FatalError),
 }
 
-pub(super) async fn handle_socks(
+pub(super) async fn handle_socks<L: AsyncAcceptable>(
+    listener: L,
     lhost: &'static str,
-    lport: u16,
     handler_resources: &'static HandlerResources,
 ) -> Result<(), super::FatalError> {
-    // Failing to open the listener is a fatal error and should be propagated.
-    let listener = open_tcp_listener(lhost, lport)
-        .await
-        .map_err(super::FatalError::ClientIo)?;
     let mut socks_jobs = JoinSet::new();
     loop {
         tokio::select! {
@@ -66,7 +63,7 @@ pub(super) async fn handle_socks(
             }
             result = listener.accept() => {
                 // A failed accept() is a fatal error and should be propagated.
-                let (stream, _) = result.map_err(super::FatalError::ClientIo)?;
+                let stream = result.map_err(super::FatalError::ClientIo)?.0;
                 socks_jobs.spawn(on_socks_accept(stream, lhost, handler_resources));
             }
         }
