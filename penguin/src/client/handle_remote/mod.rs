@@ -21,7 +21,7 @@ mod udp;
 use self::common::{bind_tcp, bind_uds};
 use self::http::handle_http;
 use self::socks::handle_socks;
-use self::stdio::StdioListener;
+use self::stdio::ReusableListener;
 use self::tcp::handle_tcp;
 use self::udp::{handle_udp, handle_udp_stdio};
 use crate::arg::{LocalSpec, Protocol, Remote, RemoteSpec};
@@ -95,7 +95,13 @@ pub(super) async fn handle_remote(
             handle_tcp(bind_uds(path).await?, rhost, *rport, handler_resources).await
         }
         (LocalSpec::Stdio, RemoteSpec::Inet((rhost, rport)), Protocol::Tcp) => {
-            handle_tcp(StdioListener::new(), rhost, *rport, handler_resources).await
+            handle_tcp(
+                ReusableListener::new_stdio(),
+                rhost,
+                *rport,
+                handler_resources,
+            )
+            .await
         }
         (LocalSpec::Stdio, RemoteSpec::Inet((rhost, rport)), Protocol::Udp) => {
             handle_udp_stdio(rhost, *rport, handler_resources).await
@@ -107,7 +113,12 @@ pub(super) async fn handle_remote(
         }
         (LocalSpec::Stdio, RemoteSpec::Socks, _) => {
             // The parser guarantees that the protocol is TCP
-            handle_socks(StdioListener::new(), "localhost", handler_resources).await
+            handle_socks(
+                ReusableListener::new_stdio(),
+                "localhost",
+                handler_resources,
+            )
+            .await
         }
         (LocalSpec::DomainSocket(path), RemoteSpec::Socks, _) => {
             // The parser guarantees that the protocol is TCP
@@ -120,7 +131,7 @@ pub(super) async fn handle_remote(
         }
         (LocalSpec::Stdio, RemoteSpec::Http, _) => {
             // The parser guarantees that the protocol is TCP
-            handle_http(StdioListener::new(), handler_resources).await
+            handle_http(ReusableListener::new_stdio(), handler_resources).await
         }
         (LocalSpec::DomainSocket(path), RemoteSpec::Http, _) => {
             // The parser guarantees that the protocol is TCP
