@@ -1,4 +1,4 @@
-//! Common remote helpers.
+//! Common remote helpers
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
@@ -8,11 +8,13 @@ use bytes::Bytes;
 use std::io;
 use std::net::SocketAddr;
 use tokio::io::{AsyncRead, AsyncWrite};
+#[cfg(unix)]
+use tokio::net::UnixListener;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 use tracing::info;
 
-/// A Listener that can accept connections asynchronously.
+/// A Listener that can accept connections asynchronously
 pub trait AsyncAcceptable {
     type Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static;
     async fn accept(&self) -> io::Result<(Self::Stream, SocketAddr)>;
@@ -26,7 +28,7 @@ impl AsyncAcceptable for TcpListener {
 }
 
 #[cfg(unix)]
-impl AsyncAcceptable for tokio::net::UnixListener {
+impl AsyncAcceptable for UnixListener {
     type Stream = tokio::net::UnixStream;
     async fn accept(&self) -> io::Result<(Self::Stream, SocketAddr)> {
         self.accept()
@@ -53,9 +55,9 @@ pub async fn request_tcp_channel(
     rx.await
 }
 
-/// Open a TCP listener.
+/// Open a TCP listener
 #[tracing::instrument(level = "trace")]
-pub async fn open_tcp_listener(lhost: &str, lport: u16) -> Result<TcpListener, FatalError> {
+pub async fn bind_tcp(lhost: &str, lport: u16) -> Result<TcpListener, FatalError> {
     let listener = TcpListener::bind((lhost, lport))
         .await
         .map_err(FatalError::ClientIo)?;
@@ -65,4 +67,72 @@ pub async fn open_tcp_listener(lhost: &str, lport: u16) -> Result<TcpListener, F
         .expect("Failed to get local address of TCP listener (this is a bug)");
     info!("Listening on {local_addr}");
     Ok(listener)
+}
+
+/// Open a STREAM type unix domain socket listener
+#[tracing::instrument(level = "trace")]
+#[cfg(unix)]
+#[inline]
+pub async fn bind_uds(path: &std::path::Path) -> Result<UnixListener, FatalError> {
+    if path.exists() {
+        tokio::fs::remove_file(path)
+            .await
+            .map_err(FatalError::ClientIo)?;
+    }
+    let listener = UnixListener::bind(path).map_err(FatalError::ClientIo)?;
+    let local_addr = listener
+        .local_addr()
+        .expect("Failed to get local address of TCP listener (this is a bug)");
+    info!("Listening on {local_addr:?}");
+    Ok(listener)
+}
+#[tracing::instrument(level = "trace")]
+#[cfg(not(unix))]
+#[inline]
+pub async fn bind_uds(_path: &std::path::Path) -> Result<TcpListener, FatalError> {
+    Err(FatalError::NotAvailable("unix domain sockets"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::AsyncWriteExt;
+
+    #[tokio::test]
+    async fn test_bind_tcp() {
+        crate::tests::setup_logging();
+        let listener = bind_tcp("127.0.0.1", 0).await.unwrap();
+        let local_addr = listener.local_addr().unwrap();
+        assert_eq!(local_addr.ip(), std::net::Ipv4Addr::LOCALHOST);
+        let accept_task = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            stream.shutdown().await.unwrap();
+        });
+        let mut stream = tokio::net::TcpStream::connect(local_addr).await.unwrap();
+        stream.shutdown().await.unwrap();
+        accept_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_bind_uds() {
+        crate::tests::setup_logging();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.sock");
+        #[cfg(unix)]
+        {
+            let listener = bind_uds(&path).await.unwrap();
+            let accept_task = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                stream.shutdown().await.unwrap();
+            });
+            let mut stream = tokio::net::UnixStream::connect(&path).await.unwrap();
+            stream.shutdown().await.unwrap();
+            accept_task.await.unwrap();
+        }
+        #[cfg(not(unix))]
+        {
+            let result = bind_uds(&path).await;
+            assert!(result.is_err());
+        }
+    }
 }
