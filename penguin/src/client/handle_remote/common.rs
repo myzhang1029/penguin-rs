@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
+use crate::client::handle_remote::FatalError;
 use crate::client::{MuxStream, StreamCommand};
 use bytes::Bytes;
 use std::io;
@@ -54,8 +55,10 @@ pub async fn request_tcp_channel(
 
 /// Open a TCP listener.
 #[tracing::instrument(level = "trace")]
-pub async fn open_tcp_listener(lhost: &str, lport: u16) -> io::Result<TcpListener> {
-    let listener = TcpListener::bind((lhost, lport)).await?;
+pub async fn open_tcp_listener(lhost: &str, lport: u16) -> Result<TcpListener, FatalError> {
+    let listener = TcpListener::bind((lhost, lport))
+        .await
+        .map_err(FatalError::ClientIo)?;
     // `expect`: at this point `listener` should be bound. Otherwise, it's a bug.
     let local_addr = listener
         .local_addr()
