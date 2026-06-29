@@ -17,7 +17,7 @@ use hyper_util::{
     server::conn::auto,
 };
 use std::{convert::Infallible, net::SocketAddr};
-use tokio::io::{self as tio, AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::{debug, trace, warn};
 
 fn make_static_body(status: StatusCode, content: &'static [u8]) -> Response<IncomingOrFullBody> {
@@ -132,25 +132,19 @@ pub(super) async fn handle_http<L: AsyncAcceptable>(
 ) -> Result<(), super::FatalError> {
     loop {
         let (stream, peer_addr) = listener.accept().await.map_err(FatalError::ClientIo)?;
+        let peer_addr_for_proxy = if peer_addr.ip().is_unspecified() {
+            None
+        } else {
+            Some(peer_addr)
+        };
         debug!("Accepted HTTP proxy connection from {peer_addr}");
         tokio::spawn(async move {
-            if let Err(e) = http_proxy_on_stream(stream, Some(peer_addr), handler_resources).await {
+            if let Err(e) =
+                http_proxy_on_stream(stream, peer_addr_for_proxy, handler_resources).await
+            {
                 warn!("HTTP proxy forwarded from {peer_addr} failed: {e}");
             }
         });
-    }
-}
-
-#[tracing::instrument(skip(handler_resources), level = "debug")]
-pub(super) async fn handle_http_stdio(
-    handler_resources: &'static HandlerResources,
-) -> Result<(), super::FatalError> {
-    loop {
-        let stdio = tio::join(tio::stdin(), tio::stdout());
-        if let Err(e) = http_proxy_on_stream(stdio, None, handler_resources).await {
-            warn!("HTTP proxy forwarded from stdio failed: {e}");
-            break Ok(());
-        }
     }
 }
 

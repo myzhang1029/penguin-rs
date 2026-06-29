@@ -15,7 +15,7 @@ use penguin_mux::{Datagram, Dupe};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use thiserror::Error;
-use tokio::io::{self as tio, AsyncBufRead, AsyncRead, AsyncReadExt, AsyncWrite, BufReader};
+use tokio::io::{AsyncBufRead, AsyncRead, AsyncReadExt, AsyncWrite, BufReader};
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
@@ -68,19 +68,6 @@ pub(super) async fn handle_socks<L: AsyncAcceptable>(
             }
         }
     }
-}
-
-pub(super) async fn handle_socks_stdio(
-    handler_resources: &'static HandlerResources,
-) -> Result<(), super::FatalError> {
-    let stdio = tio::join(tio::stdin(), tio::stdout());
-    if let Err(e) = on_socks_accept(stdio, "localhost", handler_resources).await {
-        if let Error::Fatal(e) = e {
-            return Err(e);
-        }
-        info!("{e}");
-    }
-    Ok(())
 }
 
 /// Handle a SOCKS5 connection.

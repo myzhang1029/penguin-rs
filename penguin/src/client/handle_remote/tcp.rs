@@ -5,12 +5,10 @@
 use super::FatalError;
 use super::common::{AsyncAcceptable, request_tcp_channel};
 use crate::client::HandlerResources;
-use crate::client::MaybeRetryableError;
 use bytes::Bytes;
-use tokio::io as tio;
-use tracing::{error, info, warn};
+use tracing::warn;
 
-/// Handle a TCP Inet->Inet remote.
+/// Handle a TCP Inet remote
 #[tracing::instrument(skip(listener, handler_resources), level = "debug")]
 pub(super) async fn handle_tcp<L: AsyncAcceptable>(
     listener: L,
@@ -42,42 +40,5 @@ pub(super) async fn handle_tcp<L: AsyncAcceptable>(
                 warn!("TCP forwarder failed: {error}");
             }
         });
-    }
-}
-
-/// Handle a TCP Stdio->Inet remote.
-#[tracing::instrument(skip(handler_resources))]
-pub(super) async fn handle_tcp_stdio(
-    rhost: &'static str,
-    rport: u16,
-    handler_resources: &HandlerResources,
-) -> Result<(), FatalError> {
-    let mut stdio = tio::join(tio::stdin(), tio::stdout());
-    let rhost = rhost.as_bytes();
-    // We want `loop` to be able to continue after a connection failure
-    loop {
-        // This fails only if main has exited, which is a fatal error.
-        let stream_command_tx_permit = handler_resources
-            .stream_command_tx
-            .reserve()
-            .await
-            .or(Err(FatalError::RequestStream))?;
-        let channel =
-            request_tcp_channel(stream_command_tx_permit, Bytes::from_static(rhost), rport)
-                .await
-                .or(Err(FatalError::MainLoopExitWithoutSendingStream))?;
-        match channel.into_copy_bidirectional(&mut stdio).await {
-            Ok(_) => {
-                info!("TCP stdio connection closed");
-                break Ok(());
-            }
-            Err(error) if error.retryable() => {
-                warn!("TCP stdio connection failed: {error}");
-            }
-            Err(error) => {
-                error!("TCP stdio connection failed: {error}");
-                break Err(FatalError::ClientIo(error));
-            }
-        }
     }
 }
