@@ -44,7 +44,7 @@ use std::{fmt::Debug, sync::OnceLock};
 #[derive(Parser, Debug)]
 #[command(
     author, about, long_about = None,
-    version = format!("{} (protocol {})", clap::crate_version!(), penguin_mux::PROTOCOL_VERSION)
+    version = format!(concat!(clap::crate_version!(), " (protocol {})"), penguin_mux::PROTOCOL_VERSION)
 )]
 #[command(propagate_version = true)]
 pub struct PenguinCli {

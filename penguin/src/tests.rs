@@ -219,13 +219,16 @@ async fn test_it_works_uds() {
     let tmpdir = tempfile::tempdir().unwrap();
     let uds_path = tmpdir.path().join("test.sock");
 
-    CLIENT_ARGS.set(
-        make_client_args(
+    CLIENT_ARGS
+        .set(make_client_args(
             "127.0.0.1",
             30865,
-            vec![Remote::from_str(&format!("[unix:{}]:127.0.0.1:30755", uds_path.display())).unwrap()],
-        )
-    ).unwrap();
+            vec![
+                Remote::from_str(&format!("[unix:{}]:127.0.0.1:30755", uds_path.display()))
+                    .unwrap(),
+            ],
+        ))
+        .unwrap();
 
     let input_bytes: Vec<u8> = (0..(1024 * 1024)).map(|_| rand::random::<u8>()).collect();
     let input_len = input_bytes.len();
@@ -657,7 +660,7 @@ async fn test_http_host_and_sni() {
 
     let mut client_args = arg::ClientArgs {
         server: ServerUrl::from_str(&format!("wss://{addr}/ws")).unwrap(),
-        remote: vec![Remote::from_str(&format!("0:127.0.0.1:0")).unwrap()],
+        remote: vec![Remote::from_str("0:127.0.0.1:0").unwrap()],
         max_retry_count: 1,
         max_retry_interval: 1,
         hostname: None,

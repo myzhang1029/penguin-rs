@@ -576,7 +576,7 @@ mod tests {
         crate::tests::setup_logging();
         let (server_task, server_addr) = start_test_server().await;
         BACKEND
-            .set(BackendUrl::from_str(&format!("http://{}", server_addr)).unwrap())
+            .set(BackendUrl::from_str(&format!("http://{server_addr}")).unwrap())
             .unwrap();
         // Test that the backend is actually working
         let state = State::new(
@@ -631,7 +631,7 @@ mod tests {
         crate::tests::setup_logging();
         let (server_task, server_addr) = start_test_server().await;
         BACKEND
-            .set(BackendUrl::from_str(&format!("http://{}", server_addr)).unwrap())
+            .set(BackendUrl::from_str(&format!("http://{server_addr}")).unwrap())
             .unwrap();
         let state = State::new(
             Some(BACKEND.get().unwrap()),
