@@ -90,7 +90,7 @@ pub(super) async fn handle_remote(
         }
         (LocalSpec::DomainSocket(path), RemoteSpec::Inet((rhost, rport)), _) => {
             // The parser guarantees that the protocol is TCP
-            handle_tcp(bind_uds(path)?, rhost, *rport, handler_resources).await
+            handle_tcp(bind_uds(path).await?, rhost, *rport, handler_resources).await
         }
         (LocalSpec::Stdio, RemoteSpec::Inet((rhost, rport)), Protocol::Tcp) => {
             handle_tcp_stdio(rhost, *rport, handler_resources).await
@@ -114,7 +114,7 @@ pub(super) async fn handle_remote(
         }
         (LocalSpec::DomainSocket(path), RemoteSpec::Socks, _) => {
             // The parser guarantees that the protocol is TCP
-            handle_socks(bind_uds(path)?, "localhost", handler_resources).await
+            handle_socks(bind_uds(path).await?, "localhost", handler_resources).await
         }
         // Remote `Http`
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Http, _) => {
@@ -127,7 +127,7 @@ pub(super) async fn handle_remote(
         }
         (LocalSpec::DomainSocket(path), RemoteSpec::Http, _) => {
             // The parser guarantees that the protocol is TCP
-            handle_http(bind_uds(path)?, handler_resources).await
+            handle_http(bind_uds(path).await?, handler_resources).await
         }
         // Remote `Tproxy`
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Tproxy, Protocol::Tcp) => {
@@ -144,12 +144,17 @@ pub(super) async fn handle_remote(
 
 #[cfg(unix)]
 #[inline]
-fn bind_uds(path: &std::path::Path) -> Result<tokio::net::UnixListener, FatalError> {
+async fn bind_uds(path: &std::path::Path) -> Result<tokio::net::UnixListener, FatalError> {
+    if path.exists() {
+        tokio::fs::remove_file(path)
+            .await
+            .map_err(FatalError::ClientIo)?;
+    }
     tokio::net::UnixListener::bind(path).map_err(FatalError::ClientIo)
 }
 #[cfg(not(unix))]
 #[inline]
-fn bind_uds(_path: &std::path::Path) -> Result<tokio::net::TcpListener, FatalError> {
+async fn bind_uds(_path: &std::path::Path) -> Result<tokio::net::TcpListener, FatalError> {
     Err(FatalError::NotAvailable("unix domain sockets"))
 }
 
