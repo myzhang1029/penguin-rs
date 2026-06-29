@@ -1,15 +1,21 @@
-use super::common::AsyncAcceptable;
+//! [`AsyncAcceptable`] implementation for a stream that can be repeatedly created
+//! using a factory function and only one instance can be in use at a time.
+//!
+//! A particular use case is to wrap [`tokio::io::stdin`] and [`tokio::io::stdout`].
+//
+// SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
+
+use super::async_acceptable::AsyncAcceptable;
 use futures_util::task::AtomicWaker;
-use penguin_mux::Dupe;
-use std::future::poll_fn;
 use std::io;
-use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 use tokio::io::{self as tio, AsyncRead, AsyncWrite, ReadBuf};
 
+/// A psudo-listener that repeatedly produces an `AsyncRead + AsyncWrite`
+/// using a factory function.
 #[derive(derive_more::Debug)]
 pub struct ReusableListener<R, W> {
     in_use: Arc<AtomicBool>,
@@ -19,28 +25,15 @@ pub struct ReusableListener<R, W> {
 }
 
 impl ReusableListener<tio::Stdin, tio::Stdout> {
+    /// Produce a `ReusableListener` with [`tokio::io::stdin`] and [`tokio::io::stdout`]
+    /// as the underlying streams.
+    #[must_use]
+    #[inline]
     pub fn new_stdio() -> Self {
         Self {
             in_use: Arc::new(AtomicBool::new(false)),
             end_waker: Arc::new(AtomicWaker::new()),
             factory: Box::new(|| (tio::stdin(), tio::stdout())),
-        }
-    }
-}
-
-impl<R, W> ReusableListener<R, W> {
-    fn poll_accept(&self, cx: &Context<'_>) -> Poll<io::Result<ReusableListenerStream<R, W>>> {
-        if self.in_use.swap(true, Ordering::Acquire) {
-            self.end_waker.register(cx.waker());
-            Poll::Pending
-        } else {
-            let (reader, writer) = (self.factory)();
-            Poll::Ready(Ok(ReusableListenerStream {
-                reader,
-                writer,
-                in_use: self.in_use.dupe(),
-                end_waker: self.end_waker.dupe(),
-            }))
         }
     }
 }
@@ -51,12 +44,24 @@ where
     W: AsyncWrite + Unpin + Send + 'static,
 {
     type Stream = ReusableListenerStream<R, W>;
-    async fn accept(&self) -> io::Result<(Self::Stream, SocketAddr)> {
-        let stdio = poll_fn(|cx| self.poll_accept(cx)).await?;
-        Ok((stdio, SocketAddr::from(([0, 0, 0, 0], 0))))
+
+    fn poll_accept(&self, cx: &mut Context<'_>) -> Poll<io::Result<Self::Stream>> {
+        if self.in_use.swap(true, Ordering::Acquire) {
+            self.end_waker.register(cx.waker());
+            Poll::Pending
+        } else {
+            let (reader, writer) = (self.factory)();
+            Poll::Ready(Ok(ReusableListenerStream {
+                reader,
+                writer,
+                in_use: self.in_use.clone(),
+                end_waker: self.end_waker.clone(),
+            }))
+        }
     }
 }
 
+/// A stream produced by calling [`accept`](`crate::AsyncAcceptableExt::accept`) on a [`ReusableListener`].
 #[derive(Debug)]
 pub struct ReusableListenerStream<R, W> {
     reader: R,
@@ -102,6 +107,7 @@ impl<R, W> Drop for ReusableListenerStream<R, W> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::AsyncAcceptableExt;
     use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
 
     #[tokio::test]
@@ -111,9 +117,9 @@ mod tests {
             end_waker: Arc::new(AtomicWaker::new()),
             factory: Box::new(|| duplex(64)),
         };
-        let (mut accepted_stream, _) = listener.accept().await.expect("Failed to accept stream");
-        let test_cx = Context::from_waker(futures_util::task::noop_waker_ref());
-        let res2 = listener.poll_accept(&test_cx);
+        let mut accepted_stream = listener.accept().await.expect("Failed to accept stream");
+        let mut test_cx = Context::from_waker(futures_util::task::noop_waker_ref());
+        let res2 = listener.poll_accept(&mut test_cx);
         assert!(res2.is_pending(), "Listener should be busy");
         accepted_stream
             .write_all(b"Hello")
@@ -126,7 +132,7 @@ mod tests {
             .expect("Failed to read from stream");
         assert_eq!(&buf, b"Hello", "Data read does not match data written");
         drop(accepted_stream);
-        let (mut accepted_stream2, _) = listener
+        let mut accepted_stream2 = listener
             .accept()
             .await
             .expect("Failed to accept stream after previous stream dropped");

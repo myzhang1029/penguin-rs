@@ -3,14 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::FatalError;
-use super::common::{AsyncAcceptable, request_tcp_channel};
+use super::common::request_tcp_channel;
 use crate::client::HandlerResources;
+use async_acceptor::{AsyncAcceptable, AsyncAcceptableExt};
 use bytes::Bytes;
 use tracing::warn;
 
 /// Handle a TCP Inet remote
 #[tracing::instrument(skip(listener, handler_resources), level = "debug")]
-pub(super) async fn handle_tcp<L: AsyncAcceptable>(
+pub(super) async fn handle_tcp<L: AsyncAcceptable + Send + Sync>(
     listener: L,
     rhost: &'static str,
     rport: u16,
@@ -27,7 +28,7 @@ pub(super) async fn handle_tcp<L: AsyncAcceptable>(
         // Only `accept` when we have a permit to send a request.
         // This way, the backpressure is propagated to the TCP listener.
         // Not being able to accept a TCP connection is a fatal error.
-        let (mut tcp_stream, _) = listener.accept().await.map_err(FatalError::ClientIo)?;
+        let mut tcp_stream = listener.accept().await.map_err(FatalError::ClientIo)?;
         // A new channel is created for each incoming TCP connection.
         // It's already TCP, anyways.
         let channel =

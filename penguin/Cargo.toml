@@ -20,6 +20,7 @@ path = "src/lib.rs"
 
 [dependencies]
 arc-swap = "1"
+async-acceptor = { version = "0.1", path = "../async-acceptor" }
 base64 = { version = "0.22", optional = true }
 bytes = "^1, >=1.11.1"
 clap = { version = "4", features = ["cargo", "derive", "string"] }

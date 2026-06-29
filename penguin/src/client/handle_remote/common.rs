@@ -5,37 +5,11 @@
 use crate::client::handle_remote::FatalError;
 use crate::client::{MuxStream, StreamCommand};
 use bytes::Bytes;
-use std::io;
-use std::net::SocketAddr;
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::net::TcpListener;
 #[cfg(unix)]
 use tokio::net::UnixListener;
-use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 use tracing::info;
-
-/// A Listener that can accept connections asynchronously
-pub trait AsyncAcceptable {
-    type Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static;
-    async fn accept(&self) -> io::Result<(Self::Stream, SocketAddr)>;
-}
-
-impl AsyncAcceptable for TcpListener {
-    type Stream = TcpStream;
-    async fn accept(&self) -> io::Result<(Self::Stream, SocketAddr)> {
-        self.accept().await
-    }
-}
-
-#[cfg(unix)]
-impl AsyncAcceptable for UnixListener {
-    type Stream = tokio::net::UnixStream;
-    async fn accept(&self) -> io::Result<(Self::Stream, SocketAddr)> {
-        self.accept()
-            .await
-            .map(|(stream, _)| (stream, SocketAddr::from(([0, 0, 0, 0], 0))))
-    }
-}
 
 /// Request a channel from the mux
 /// Returns an error if the main loop timed out waiting for a response.

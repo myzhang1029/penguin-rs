@@ -12,7 +12,6 @@ mod common;
 #[cfg(feature = "http-proxy")]
 mod http;
 pub(super) mod socks;
-mod stdio;
 mod tcp;
 #[cfg(feature = "tproxy")]
 mod tproxy;
@@ -21,13 +20,11 @@ mod udp;
 use self::common::{bind_tcp, bind_uds};
 use self::http::handle_http;
 use self::socks::handle_socks;
-use self::stdio::ReusableListener;
 use self::tcp::handle_tcp;
 use self::udp::{handle_udp, handle_udp_stdio};
 use crate::arg::{LocalSpec, Protocol, Remote, RemoteSpec};
 use crate::client::HandlerResources;
-#[cfg(not(unix))]
-use crate::client::handle_remote::common::AsyncAcceptable;
+use async_acceptor::ReusableListener;
 use std::io;
 use thiserror::Error;
 use tproxy::{handle_tproxy_tcp, handle_tproxy_udp};
@@ -171,8 +168,8 @@ mod tproxy {
 
 #[cfg(not(feature = "http-proxy"))]
 mod http {
-    use super::common::AsyncAcceptable;
     use super::{FatalError, HandlerResources};
+    use async_acceptor::AsyncAcceptable;
     pub(super) async fn handle_http<L: AsyncAcceptable>(
         _listener: L,
         _handler_resources: &HandlerResources,

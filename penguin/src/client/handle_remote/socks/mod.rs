@@ -8,8 +8,8 @@ mod v5;
 use super::HandlerResources;
 use super::common::request_tcp_channel;
 use crate::client::StreamCommand;
-use crate::client::handle_remote::common::AsyncAcceptable;
 use crate::config;
+use async_acceptor::{AsyncAcceptable, AsyncAcceptableExt};
 use bytes::{Buf, Bytes};
 use penguin_mux::{Datagram, Dupe};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -44,7 +44,7 @@ pub enum Error {
     Fatal(#[from] super::FatalError),
 }
 
-pub(super) async fn handle_socks<L: AsyncAcceptable>(
+pub(super) async fn handle_socks<L: AsyncAcceptable + Send + Sync>(
     listener: L,
     lhost: &'static str,
     handler_resources: &'static HandlerResources,
@@ -63,7 +63,7 @@ pub(super) async fn handle_socks<L: AsyncAcceptable>(
             }
             result = listener.accept() => {
                 // A failed accept() is a fatal error and should be propagated.
-                let stream = result.map_err(super::FatalError::ClientIo)?.0;
+                let stream = result.map_err(super::FatalError::ClientIo)?;
                 socks_jobs.spawn(on_socks_accept(stream, lhost, handler_resources));
             }
         }

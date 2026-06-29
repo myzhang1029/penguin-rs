@@ -146,6 +146,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-acceptor"
+version = "0.1.0"
+dependencies = [
+ "async-acceptor",
+ "derive_more",
+ "futures-util",
+ "tokio",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.89"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1991,6 +2001,7 @@ name = "rusty-penguin"
 version = "0.8.4"
 dependencies = [
  "arc-swap",
+ "async-acceptor",
  "base64 0.22.1",
  "bytes",
  "clap",

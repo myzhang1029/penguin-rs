@@ -2,12 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use super::{
-    FatalError,
-    common::{AsyncAcceptable, request_tcp_channel},
-};
+use super::{FatalError, common::request_tcp_channel};
 use crate::client::HandlerResources;
 use crate::http::{body::IncomingOrFullBody, proxy};
+use async_acceptor::{AsyncAcceptable, AsyncAcceptableExt};
 use bytes::Bytes;
 use http::{Method, Request, Response, StatusCode, uri::Scheme};
 use hyper::client::conn::http1;
@@ -126,12 +124,15 @@ where
 }
 
 #[tracing::instrument(skip_all, level = "debug")]
-pub(super) async fn handle_http<L: AsyncAcceptable>(
+pub(super) async fn handle_http<L: AsyncAcceptable + Send + Sync>(
     listener: L,
     handler_resources: &'static HandlerResources,
 ) -> Result<(), super::FatalError> {
     loop {
-        let (stream, peer_addr) = listener.accept().await.map_err(FatalError::ClientIo)?;
+        let (stream, peer_addr) = listener
+            .accept_with_sockaddr()
+            .await
+            .map_err(FatalError::ClientIo)?;
         let peer_addr_for_proxy = if peer_addr.ip().is_unspecified() {
             None
         } else {
