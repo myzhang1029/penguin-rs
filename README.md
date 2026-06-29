@@ -31,7 +31,7 @@ See `penguin server --help` for more options.
 
 ### Client
 ```bash
-$ penguin client --ws-psk some-secret wss://server 1080:socks 80:example.com:80
+$ penguin client --ws-psk some-secret wss://server/ws 1080:socks '[unix:/tmp/http-proxy.sock]:http' 53:example.com:53/udp '[unix:/tmp/remote-ssh.sock]:[::1]:22'
 ```
 See `penguin client --help` for more options.
 
@@ -119,7 +119,7 @@ Executable features:
 - `acme`: (requires `server`) enable the built-in ACME client (default)
 Will also make the binary use `rustls` even if `nativetls` is enabled due to internal dependencies.
 - `tproxy`: enable `:tproxy` (transparent proxy) remote types in the client (default)
-- `http`: enable `:http` (http proxy) remote types in the client (default)
+- `http-proxy`: enable `:http` (http proxy) remote types in the client (default)
 
 Testing features:
 - `tests-real-internet4`: run tests that require IPv4 access to the internet
