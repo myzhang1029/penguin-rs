@@ -69,94 +69,60 @@ pub enum FatalError {
 #[tracing::instrument(skip_all, fields(remote = %remote), level = "debug")]
 pub(super) async fn handle_remote(
     remote: &'static Remote,
-    handler_resources: &'static HandlerResources,
+    hr: &'static HandlerResources,
 ) -> Result<(), FatalError> {
     debug!("opening remote");
     match (&remote.local_addr, &remote.remote_addr, remote.protocol) {
         // Remote `Inet`
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Inet((rhost, rport)), Protocol::Tcp) => {
             // Failing to open the listener is a fatal error and should be propagated.
-            handle_tcp(
-                bind_tcp(lhost, *lport).await?,
-                rhost,
-                *rport,
-                true,
-                handler_resources,
-            )
-            .await
+            handle_tcp(bind_tcp(lhost, *lport).await?, rhost, *rport, true, hr).await
         }
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Inet((rhost, rport)), Protocol::Udp) => {
-            handle_udp(lhost, *lport, rhost, *rport, true, handler_resources).await
+            handle_udp(lhost, *lport, rhost, *rport, true, hr).await
         }
         (LocalSpec::DomainSocket(path), RemoteSpec::Inet((rhost, rport)), _) => {
             // The parser guarantees that the protocol is TCP
-            handle_tcp(
-                bind_uds(path).await?,
-                rhost,
-                *rport,
-                true,
-                handler_resources,
-            )
-            .await
+            handle_tcp(bind_uds(path).await?, rhost, *rport, true, hr).await
         }
         (LocalSpec::Stdio, RemoteSpec::Inet((rhost, rport)), Protocol::Tcp) => {
-            handle_tcp(
-                ReusableListener::new_stdio(),
-                rhost,
-                *rport,
-                false,
-                handler_resources,
-            )
-            .await
+            handle_tcp(ReusableListener::new_stdio(), rhost, *rport, false, hr).await
         }
         (LocalSpec::Stdio, RemoteSpec::Inet((rhost, rport)), Protocol::Udp) => {
-            handle_udp_stdio(rhost, *rport, handler_resources).await
+            handle_udp_stdio(rhost, *rport, hr).await
         }
         // Remote `Socks`
-        (LocalSpec::Inet((lhost, lport)), RemoteSpec::Socks, _) =>
-        // The parser guarantees that the protocol is TCP
-        {
-            handle_socks(
-                bind_tcp(lhost, *lport).await?,
-                lhost,
-                true,
-                handler_resources,
-            )
-            .await
+        (LocalSpec::Inet((lhost, lport)), RemoteSpec::Socks, _) => {
+            // The parser guarantees that the protocol is TCP
+            handle_socks(bind_tcp(lhost, *lport).await?, lhost, true, hr).await
         }
         (LocalSpec::Stdio, RemoteSpec::Socks, _) => {
             // The parser guarantees that the protocol is TCP
-            handle_socks(
-                ReusableListener::new_stdio(),
-                "localhost",
-                false,
-                handler_resources,
-            )
-            .await
+            handle_socks(ReusableListener::new_stdio(), "localhost", false, hr).await
         }
         (LocalSpec::DomainSocket(path), RemoteSpec::Socks, _) => {
             // The parser guarantees that the protocol is TCP
-            handle_socks(bind_uds(path).await?, "localhost", true, handler_resources).await
+            handle_socks(bind_uds(path).await?, "localhost", true, hr).await
         }
         // Remote `Http`
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Http, _) => {
             // The parser guarantees that the protocol is TCP
-            handle_http(bind_tcp(lhost, *lport).await?, true, handler_resources).await
+            handle_http(bind_tcp(lhost, *lport).await?, true, hr).await
         }
         (LocalSpec::Stdio, RemoteSpec::Http, _) => {
             // The parser guarantees that the protocol is TCP
-            handle_http(ReusableListener::new_stdio(), false, handler_resources).await
+            handle_http(ReusableListener::new_stdio(), false, hr).await
         }
         (LocalSpec::DomainSocket(path), RemoteSpec::Http, _) => {
             // The parser guarantees that the protocol is TCP
-            handle_http(bind_uds(path).await?, true, handler_resources).await
+            handle_http(bind_uds(path).await?, true, hr).await
         }
         // Remote `Tproxy`
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Tproxy, Protocol::Tcp) => {
-            handle_tproxy_tcp(lhost, *lport, handler_resources).await
+            handle_tproxy_tcp(lhost, *lport, hr).await
         }
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Tproxy, Protocol::Udp) => {
-            handle_tproxy_udp(lhost, *lport, handler_resources).await
+            handle_tproxy_udp(lhost, *lport, hr).await
         }
         (LocalSpec::Stdio | LocalSpec::DomainSocket(_), RemoteSpec::Tproxy, _) => {
             unreachable!("`clap` should have rejected this combination (this is a bug)")

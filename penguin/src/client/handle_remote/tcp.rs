@@ -11,18 +11,18 @@ use futures_util::TryFutureExt;
 use tracing::warn;
 
 /// Handle a TCP Inet remote
-#[tracing::instrument(skip(listener, handler_resources), level = "debug")]
+#[tracing::instrument(skip(listener, hr), level = "debug")]
 pub(super) async fn handle_tcp<L: AsyncAcceptable + Send + Sync>(
     listener: L,
     rhost: &'static str,
     rport: u16,
     accept_multiple: bool,
-    handler_resources: &HandlerResources,
+    hr: &HandlerResources,
 ) -> Result<(), FatalError> {
     let rhost = rhost.as_bytes();
     loop {
         // This fails only if main has exited, which is a fatal error.
-        let stream_command_tx_permit = handler_resources
+        let stream_command_tx_permit = hr
             .stream_command_tx
             .reserve()
             .await

@@ -31,10 +31,10 @@ fn make_static_body(status: StatusCode, content: &'static [u8]) -> Response<Inco
 async fn do_proxy_request(
     mut req: Request<Incoming>,
     client_addr: Option<SocketAddr>,
-    handler_resources: &HandlerResources,
+    hr: &HandlerResources,
 ) -> Result<Response<IncomingOrFullBody>, Infallible> {
     // This fails only if main has exited
-    let Ok(stream_command_tx_permit) = handler_resources.stream_command_tx.reserve().await else {
+    let Ok(stream_command_tx_permit) = hr.stream_command_tx.reserve().await else {
         return Ok(make_static_body(
             StatusCode::SERVICE_UNAVAILABLE,
             b"Proxy server is shutting down",
@@ -114,14 +114,14 @@ async fn do_proxy_request(
 async fn http_proxy_on_stream<S>(
     stream: S,
     client_addr: Option<SocketAddr>,
-    handler_resources: &'static HandlerResources,
+    hr: &'static HandlerResources,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let hyper_io = TokioIo::new(stream);
     let exec = auto::Builder::new(TokioExecutor::new());
-    let service = service_fn(move |req| do_proxy_request(req, client_addr, handler_resources));
+    let service = service_fn(move |req| do_proxy_request(req, client_addr, hr));
     exec.serve_connection_with_upgrades(hyper_io, service).await
 }
 
@@ -129,7 +129,7 @@ where
 pub(super) async fn handle_http<L: AsyncAcceptable + Send + Sync>(
     listener: L,
     accept_multiple: bool,
-    handler_resources: &'static HandlerResources,
+    hr: &'static HandlerResources,
 ) -> Result<(), super::FatalError> {
     loop {
         let (stream, peer_addr) = listener
@@ -143,7 +143,7 @@ pub(super) async fn handle_http<L: AsyncAcceptable + Send + Sync>(
         };
         debug!("Accepted HTTP proxy connection from {peer_addr}");
         wait_break_or_spawn!(
-            http_proxy_on_stream(stream, peer_addr_for_proxy, handler_resources).map_ok_or_else(
+            http_proxy_on_stream(stream, peer_addr_for_proxy, hr).map_ok_or_else(
                 move |e| {
                     warn!("HTTP proxy forwarded from {peer_addr} failed: {e}");
                     Ok::<(), FatalError>(())

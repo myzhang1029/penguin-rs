@@ -141,12 +141,12 @@ fn get_tcp_orig_addr(
 pub(super) async fn handle_tproxy_tcp(
     lhost: &str,
     lport: u16,
-    handler_resources: &HandlerResources,
+    hr: &HandlerResources,
 ) -> Result<(), FatalError> {
     let (listener, domain) = TcpListener::bind_tproxy(lhost, lport).await?;
     loop {
         // This fails only if main has exited, which is a fatal error.
-        let stream_command_tx_permit = handler_resources
+        let stream_command_tx_permit = hr
             .stream_command_tx
             .reserve()
             .await

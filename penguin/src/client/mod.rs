@@ -285,9 +285,9 @@ impl ClientIdMapEntry {
 #[tracing::instrument(level = "trace")]
 pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
     static HANDLER_RESOURCES: OnceLock<HandlerResources> = OnceLock::new();
-    let (handler_resources, stream_command_rx, datagram_rx) = HandlerResources::create();
+    let (hr, stream_command_rx, datagram_rx) = HandlerResources::create();
     HANDLER_RESOURCES
-        .set(handler_resources)
+        .set(hr)
         .expect("HandlerResources should only be set once (this is a bug)");
     client_main_inner(
         args,
@@ -303,14 +303,14 @@ pub async fn client_main(args: &'static ClientArgs) -> Result<(), Error> {
 /// Main client function, factored out for testing purposes
 pub async fn client_main_inner(
     args: &'static ClientArgs,
-    handler_resources: &'static HandlerResources,
+    hr: &'static HandlerResources,
     mut stream_command_rx: mpsc::Receiver<StreamCommand>,
     mut datagram_rx: mpsc::Receiver<Datagram>,
 ) -> Result<(), Error> {
     let mut jobs = JoinSet::new();
     // Spawn listeners. See `handle_remote.rs` for the implementation considerations.
     for remote in &args.remote {
-        jobs.spawn(handle_remote(remote, handler_resources));
+        jobs.spawn(handle_remote(remote, hr));
     }
     // Check if any listener has failed. If so, quit immediately.
     let check_listeners_future = async move {
@@ -343,7 +343,7 @@ pub async fn client_main_inner(
                         &mut stream_command_rx,
                         &mut failed_stream_request,
                         &mut datagram_rx,
-                        &handler_resources.udp_client_map,
+                        &hr.udp_client_map,
                     )
                     // Since we once connected, reset the retry count
                     .inspect_err(|_| backoff.reset())
@@ -376,7 +376,7 @@ pub async fn client_main_inner(
         biased;
         result = check_listeners_future => result,
         // This future never resolves
-        () = prune_client_id_map_task(handler_resources) => unreachable!("prune_client_id_map_task should never return"),
+        () = prune_client_id_map_task(hr) => unreachable!("prune_client_id_map_task should never return"),
         result = main_future => result,
     }
 }
@@ -481,12 +481,12 @@ async fn get_send_stream_chan(
 
 /// Prune the client ID map of entries that have not been used for a while.
 #[tracing::instrument(skip_all, level = "trace")]
-async fn prune_client_id_map_task(handler_resources: &HandlerResources) {
+async fn prune_client_id_map_task(hr: &HandlerResources) {
     let mut interval = time::interval(config::UDP_PRUNE_TIMEOUT);
     interval.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
     loop {
         interval.tick().await;
-        handler_resources.prune_udp_clients();
+        hr.prune_udp_clients();
     }
 }
 
@@ -499,18 +499,18 @@ mod tests {
         crate::tests::setup_logging();
         let (stub_stream_tx, _stub_stream_rx) = mpsc::channel(1);
         let (stub_datagram_tx, _stub_datagram_rx) = mpsc::channel(1);
-        let handler_resources = HandlerResources {
+        let hr = HandlerResources {
             stream_command_tx: stub_stream_tx,
             datagram_tx: stub_datagram_tx,
             udp_client_map: Arc::new(Mutex::new(ClientIdMaps::new())),
         };
         let stub_socket = Arc::new(UdpSocket::bind(("127.0.0.1", 0)).await.unwrap());
-        let client_id = handler_resources.add_udp_client(
+        let client_id = hr.add_udp_client(
             (IpAddr::from([127, 0, 0, 1]), 1234).into(),
             stub_socket.dupe(),
             false,
         );
-        let client_id2 = handler_resources.add_udp_client(
+        let client_id2 = hr.add_udp_client(
             (IpAddr::from([127, 0, 0, 1]), 1234).into(),
             stub_socket.dupe(),
             false,
@@ -518,14 +518,14 @@ mod tests {
         // We should get the same client ID for the same client address and socket
         assert_eq!(client_id, client_id2);
         let stub_socket_2 = Arc::new(UdpSocket::bind(("127.0.0.1", 0)).await.unwrap());
-        let client_id2 = handler_resources.add_udp_client(
+        let client_id2 = hr.add_udp_client(
             (IpAddr::from([127, 0, 0, 1]), 1234).into(),
             stub_socket_2,
             false,
         );
         // We should get a different client ID for a different socket
         assert_ne!(client_id, client_id2);
-        let client_id2 = handler_resources.add_udp_client(
+        let client_id2 = hr.add_udp_client(
             (IpAddr::from([127, 0, 0, 1]), 1235).into(),
             stub_socket.dupe(),
             false,
@@ -539,25 +539,19 @@ mod tests {
         crate::tests::setup_logging();
         let (stub_stream_tx, _stub_stream_rx) = mpsc::channel(1);
         let (stub_datagram_tx, _stub_datagram_rx) = mpsc::channel(1);
-        let handler_resources = HandlerResources {
+        let hr = HandlerResources {
             stream_command_tx: stub_stream_tx,
             datagram_tx: stub_datagram_tx,
             udp_client_map: Arc::new(Mutex::new(ClientIdMaps::new())),
         };
         let stub_socket = Arc::new(UdpSocket::bind(("127.0.0.1", 0)).await.unwrap());
-        let _ = handler_resources.add_udp_client(
+        let _ = hr.add_udp_client(
             (IpAddr::from([127, 0, 0, 1]), 1234).into(),
             stub_socket.dupe(),
             false,
         );
         tokio::time::sleep(config::UDP_PRUNE_TIMEOUT).await;
-        handler_resources.prune_udp_clients();
-        assert!(
-            handler_resources
-                .udp_client_map
-                .lock()
-                .client_id_map
-                .is_empty()
-        );
+        hr.prune_udp_clients();
+        assert!(hr.udp_client_map.lock().client_id_map.is_empty());
     }
 }

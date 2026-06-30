@@ -13,14 +13,14 @@ use tokio::net::UdpSocket;
 use tracing::{info, trace};
 
 /// Handle a UDP Inet->Inet remote.
-#[tracing::instrument(skip(handler_resources), level = "debug")]
+#[tracing::instrument(skip(hr), level = "debug")]
 pub(super) async fn handle_udp(
     lhost: &'static str,
     lport: u16,
     rhost: &'static str,
     rport: u16,
     accept_multiple: bool,
-    handler_resources: &HandlerResources,
+    hr: &HandlerResources,
 ) -> Result<(), FatalError> {
     // Not being able to bind to the local port is a fatal error.
     let socket = UdpSocket::bind((lhost, lport))
@@ -41,7 +41,7 @@ pub(super) async fn handle_udp(
             .map_err(FatalError::ClientIo)?;
         buf.truncate(len);
         trace!("received {len} bytes from {addr}");
-        let client_id = handler_resources.add_udp_client(addr, socket.dupe(), false);
+        let client_id = hr.add_udp_client(addr, socket.dupe(), false);
         let frame = Datagram {
             target_host: Bytes::from(rhost),
             target_port: rport,
@@ -49,8 +49,7 @@ pub(super) async fn handle_udp(
             data: Bytes::from(buf),
         };
         // This fails only if main has exited, which is a fatal error.
-        handler_resources
-            .datagram_tx
+        hr.datagram_tx
             .send(frame)
             .await
             .or(Err(FatalError::SendDatagram))?;
@@ -61,11 +60,11 @@ pub(super) async fn handle_udp(
 }
 
 /// Handle a UDP Stdio->Inet remote.
-#[tracing::instrument(skip(handler_resources), level = "debug")]
+#[tracing::instrument(skip(hr), level = "debug")]
 pub(super) async fn handle_udp_stdio(
     rhost: &'static str,
     rport: u16,
-    handler_resources: &HandlerResources,
+    hr: &HandlerResources,
 ) -> Result<(), FatalError> {
     let mut stdin = BufReader::new(tokio::io::stdin());
     loop {
@@ -82,8 +81,7 @@ pub(super) async fn handle_udp_stdio(
             data: Bytes::from(line),
         };
         // This fails only if main has exited, which is a fatal error.
-        handler_resources
-            .datagram_tx
+        hr.datagram_tx
             .send(frame)
             .await
             .or(Err(FatalError::SendDatagram))?;
@@ -104,14 +102,13 @@ mod tests {
         let (datagram_tx, mut datagram_rx) = tokio::sync::mpsc::channel(1);
         let (stream_command_tx, _) = tokio::sync::mpsc::channel(1);
         let udp_client_map = Arc::new(Mutex::new(ClientIdMaps::new()));
-        let handler_resources = HandlerResources {
+        let hr = HandlerResources {
             datagram_tx,
             stream_command_tx,
             udp_client_map: udp_client_map.dupe(),
         };
-        let forwarding_task = tokio::spawn(async move {
-            handle_udp(LHOST, 14196, RHOST, 255, false, &handler_resources).await
-        });
+        let forwarding_task =
+            tokio::spawn(async move { handle_udp(LHOST, 14196, RHOST, 255, false, &hr).await });
         let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let local_addr = socket.local_addr().unwrap();
         socket.connect("127.0.0.1:14196").await.unwrap();

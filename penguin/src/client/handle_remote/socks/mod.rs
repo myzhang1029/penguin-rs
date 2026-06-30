@@ -48,7 +48,7 @@ pub(super) async fn handle_socks<L: AsyncAcceptable + Send + Sync>(
     listener: L,
     lhost: &'static str,
     accept_multiple: bool,
-    handler_resources: &'static HandlerResources,
+    hr: &'static HandlerResources,
 ) -> Result<(), super::FatalError> {
     let mut socks_jobs: JoinSet<Result<(), super::FatalError>> = JoinSet::new();
     loop {
@@ -60,7 +60,7 @@ pub(super) async fn handle_socks<L: AsyncAcceptable + Send + Sync>(
             result = listener.accept() => {
                 // A failed accept() is a fatal error and should be propagated.
                 let stream = result.map_err(super::FatalError::ClientIo)?;
-                wait_break_or_spawn!(on_socks_accept_wrapped(stream, lhost, handler_resources), accept_multiple, socks_jobs);
+                wait_break_or_spawn!(on_socks_accept_wrapped(stream, lhost, hr), accept_multiple, socks_jobs);
             }
         }
     }
@@ -70,31 +70,29 @@ pub(super) async fn handle_socks<L: AsyncAcceptable + Send + Sync>(
 async fn on_socks_accept_wrapped<RW>(
     stream: RW,
     local_addr: &str,
-    handler_resources: &'static HandlerResources,
+    hr: &'static HandlerResources,
 ) -> Result<(), super::FatalError>
 where
     RW: AsyncRead + AsyncWrite + Unpin,
 {
-    on_socks_accept(stream, local_addr, handler_resources)
-        .await
-        .or_else(|e| {
-            if let Error::Fatal(e) = e {
-                Err(e)
-            } else {
-                info!("{e}");
-                Ok(())
-            }
-        })
+    on_socks_accept(stream, local_addr, hr).await.or_else(|e| {
+        if let Error::Fatal(e) = e {
+            Err(e)
+        } else {
+            info!("{e}");
+            Ok(())
+        }
+    })
 }
 
 /// Handle a SOCKS5 connection.
 /// Based on socksv5's example.
-/// We need to be able to request additional channels, so we need `handler_resources`
-#[tracing::instrument(skip(stream, handler_resources), level = "trace")]
+/// We need to be able to request additional channels, so we need `hr`
+#[tracing::instrument(skip(stream, hr), level = "trace")]
 async fn on_socks_accept<RW>(
     stream: RW,
     local_addr: &str,
-    handler_resources: &'static HandlerResources,
+    hr: &'static HandlerResources,
 ) -> Result<(), Error>
 where
     RW: AsyncRead + AsyncWrite + Unpin,
@@ -105,14 +103,14 @@ where
         .await
         .map_err(|e| Error::ProcessSocksRequest("read version", e))?;
     match version {
-        4 => socks4(&mut bufreader, handler_resources).await,
-        5 => socks5(&mut bufreader, local_addr, handler_resources).await,
+        4 => socks4(&mut bufreader, hr).await,
+        5 => socks5(&mut bufreader, local_addr, hr).await,
         version => Err(Error::SocksVersion(version)),
     }
 }
 
 #[tracing::instrument(skip_all, fields(host, port, cmd))]
-async fn socks4<RW>(stream: &mut RW, handler_resources: &HandlerResources) -> Result<(), Error>
+async fn socks4<RW>(stream: &mut RW, hr: &HandlerResources) -> Result<(), Error>
 where
     RW: AsyncBufRead + AsyncWrite + Unpin,
 {
@@ -124,7 +122,7 @@ where
     if command == 0x01 {
         // CONNECT
         // This fails only if main has exited, which is a fatal error.
-        let stream_command_tx_permit = handler_resources
+        let stream_command_tx_permit = hr
             .stream_command_tx
             .reserve()
             .await
@@ -140,7 +138,7 @@ where
 async fn socks5<RW>(
     stream: &mut RW,
     local_addr: &str,
-    handler_resources: &'static HandlerResources,
+    hr: &'static HandlerResources,
 ) -> Result<(), Error>
 where
     RW: AsyncBufRead + AsyncWrite + Unpin,
@@ -166,7 +164,7 @@ where
         0x01 => {
             // CONNECT
             // This fails only if main has exited, which is a fatal error.
-            let stream_command_tx_permit = handler_resources
+            let stream_command_tx_permit = hr
                 .stream_command_tx
                 .reserve()
                 .await
@@ -174,7 +172,7 @@ where
             handle_connect(stream, rhost, rport, stream_command_tx_permit, true).await
         }
         // UDP ASSOCIATE
-        0x03 => handle_associate(stream, local_addr, handler_resources).await,
+        0x03 => handle_associate(stream, local_addr, hr).await,
         // We don't support BIND because I can't ask the remote host to bind
         _ => {
             v5::write_response_unspecified(stream, 0x07).await?;
@@ -216,7 +214,7 @@ where
 async fn handle_associate<RW>(
     stream: &mut RW,
     local_addr: &str,
-    handler_resources: &'static HandlerResources,
+    hr: &'static HandlerResources,
 ) -> Result<(), Error>
 where
     RW: AsyncRead + AsyncWrite + Unpin,
@@ -236,7 +234,7 @@ where
         }
     };
     trace!("SOCKS relaying at {sock_local_addr}");
-    let relay_task = tokio::spawn(udp_relay(handler_resources, socket));
+    let relay_task = tokio::spawn(udp_relay(hr, socket));
     // Send back a successful response
     v5::write_response(stream, 0x00, sock_local_addr).await?;
     // My crude way to detect when the client closes the connection
@@ -249,7 +247,7 @@ where
 
 /// UDP task spawned by the TCP connection
 #[tracing::instrument(skip_all, level = "trace")]
-async fn udp_relay(handler_resources: &HandlerResources, socket: UdpSocket) -> Result<(), Error> {
+async fn udp_relay(hr: &HandlerResources, socket: UdpSocket) -> Result<(), Error> {
     let socket = Arc::new(socket);
     loop {
         let Some((target_host, target_port, data, src, sport)) =
@@ -257,7 +255,7 @@ async fn udp_relay(handler_resources: &HandlerResources, socket: UdpSocket) -> R
         else {
             continue;
         };
-        let client_id = handler_resources.add_udp_client((src, sport).into(), socket.dupe(), true);
+        let client_id = hr.add_udp_client((src, sport).into(), socket.dupe(), true);
         let datagram_frame = Datagram {
             target_host,
             target_port,
@@ -265,8 +263,7 @@ async fn udp_relay(handler_resources: &HandlerResources, socket: UdpSocket) -> R
             data,
         };
         // This fails only if main has exited, which is a fatal error.
-        handler_resources
-            .datagram_tx
+        hr.datagram_tx
             .send(datagram_frame)
             .await
             .or(Err(super::FatalError::SendDatagram))?;

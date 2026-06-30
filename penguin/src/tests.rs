@@ -96,9 +96,8 @@ async fn test_client_handshake_timeout() {
         ..Default::default()
     };
     CLIENT_ARGS.set(client_args).unwrap();
-    let (handler_resources, stream_command_rx, datagram_rx) =
-        crate::client::HandlerResources::create();
-    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let (hr, stream_command_rx, datagram_rx) = crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(hr).unwrap();
     let r = crate::client::client_main_inner(
         CLIENT_ARGS.get().unwrap(),
         HANDLER_RESOURCES.get().unwrap(),
@@ -133,9 +132,8 @@ async fn test_client_handshake_timeout_will_retry() {
         ..Default::default()
     };
     CLIENT_ARGS.set(client_args).unwrap();
-    let (handler_resources, stream_command_rx, datagram_rx) =
-        crate::client::HandlerResources::create();
-    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let (hr, stream_command_rx, datagram_rx) = crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(hr).unwrap();
     let initial_time = std::time::Instant::now();
     let r = crate::client::client_main_inner(
         CLIENT_ARGS.get().unwrap(),
@@ -181,9 +179,8 @@ async fn test_it_works() {
         stream.read_exact(&mut output_bytes).await.unwrap();
         output_bytes
     });
-    let (handler_resources, stream_command_rx, datagram_rx) =
-        crate::client::HandlerResources::create();
-    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let (hr, stream_command_rx, datagram_rx) = crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(hr).unwrap();
     let client_task = tokio::spawn(crate::client::client_main_inner(
         &CLIENT_ARGS,
         HANDLER_RESOURCES.get().unwrap(),
@@ -239,9 +236,8 @@ async fn test_it_works_uds() {
         stream.read_exact(&mut output_bytes).await.unwrap();
         output_bytes
     });
-    let (handler_resources, stream_command_rx, datagram_rx) =
-        crate::client::HandlerResources::create();
-    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let (hr, stream_command_rx, datagram_rx) = crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(hr).unwrap();
     let client_task = tokio::spawn(crate::client::client_main_inner(
         CLIENT_ARGS.get().unwrap(),
         HANDLER_RESOURCES.get().unwrap(),
@@ -315,9 +311,8 @@ async fn test_server_timeout_does_not_interrupt_ws() {
         output_bytes
     });
 
-    let (handler_resources, stream_command_rx, datagram_rx) =
-        crate::client::HandlerResources::create();
-    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let (hr, stream_command_rx, datagram_rx) = crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(hr).unwrap();
     let client_task = tokio::spawn(crate::client::client_main_inner(
         &CLIENT_ARGS,
         HANDLER_RESOURCES.get().unwrap(),
@@ -365,9 +360,8 @@ async fn test_it_works_v6() {
         output_bytes
     });
 
-    let (handler_resources, stream_command_rx, datagram_rx) =
-        crate::client::HandlerResources::create();
-    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let (hr, stream_command_rx, datagram_rx) = crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(hr).unwrap();
     let client_task = tokio::spawn(crate::client::client_main_inner(
         &CLIENT_ARGS,
         HANDLER_RESOURCES.get().unwrap(),
@@ -420,9 +414,8 @@ async fn test_setting_outgoing_ip_works() {
         let peer_addr = stream.peer_addr().unwrap();
         assert_eq!(peer_addr.ip(), OUTGOING_IP);
     });
-    let (handler_resources, stream_command_rx, datagram_rx) =
-        crate::client::HandlerResources::create();
-    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let (hr, stream_command_rx, datagram_rx) = crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(hr).unwrap();
     let client_task = tokio::spawn(crate::client::client_main_inner(
         &CLIENT_ARGS,
         HANDLER_RESOURCES.get().unwrap(),
@@ -490,9 +483,8 @@ async fn test_it_works_tls_simple() {
         output_bytes
     });
 
-    let (handler_resources, stream_command_rx, datagram_rx) =
-        crate::client::HandlerResources::create();
-    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let (hr, stream_command_rx, datagram_rx) = crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(hr).unwrap();
     let client_task = tokio::spawn(crate::client::client_main_inner(
         &CLIENT_ARGS,
         HANDLER_RESOURCES.get().unwrap(),
@@ -681,9 +673,8 @@ async fn test_http_host_and_sni() {
     let client_task = tokio::spawn(async move {
         // First test
         {
-            let (handler_resources, stream_command_rx, datagram_rx) =
-                crate::client::HandlerResources::create();
-            HANDLER_RESOURCES_1.set(handler_resources).unwrap();
+            let (hr, stream_command_rx, datagram_rx) = crate::client::HandlerResources::create();
+            HANDLER_RESOURCES_1.set(hr).unwrap();
             let client_task = tokio::spawn(crate::client::client_main_inner(
                 CLIENT_ARGS_PLAIN.get().unwrap(),
                 HANDLER_RESOURCES_1.get().unwrap(),
@@ -695,9 +686,8 @@ async fn test_http_host_and_sni() {
         }
         // Second test
         {
-            let (handler_resources, stream_command_rx, datagram_rx) =
-                crate::client::HandlerResources::create();
-            HANDLER_RESOURCES_2.set(handler_resources).unwrap();
+            let (hr, stream_command_rx, datagram_rx) = crate::client::HandlerResources::create();
+            HANDLER_RESOURCES_2.set(hr).unwrap();
             let client_task = tokio::spawn(crate::client::client_main_inner(
                 CLIENT_ARGS_HAS_HOSTNAME.get().unwrap(),
                 HANDLER_RESOURCES_2.get().unwrap(),
@@ -709,9 +699,8 @@ async fn test_http_host_and_sni() {
         }
         // Third test
         {
-            let (handler_resources, stream_command_rx, datagram_rx) =
-                crate::client::HandlerResources::create();
-            HANDLER_RESOURCES_3.set(handler_resources).unwrap();
+            let (hr, stream_command_rx, datagram_rx) = crate::client::HandlerResources::create();
+            HANDLER_RESOURCES_3.set(hr).unwrap();
             let client_task = tokio::spawn(crate::client::client_main_inner(
                 CLIENT_ARGS_HAS_SNI.get().unwrap(),
                 HANDLER_RESOURCES_3.get().unwrap(),
@@ -773,9 +762,8 @@ async fn test_http_proxy() {
     static HANDLER_RESOURCES: OnceLock<crate::client::HandlerResources> = OnceLock::new();
     setup_logging();
 
-    let (handler_resources, stream_command_rx, datagram_rx) =
-        crate::client::HandlerResources::create();
-    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let (hr, stream_command_rx, datagram_rx) = crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(hr).unwrap();
     let client_task = tokio::spawn(crate::client::client_main_inner(
         &CLIENT_ARGS,
         HANDLER_RESOURCES.get().unwrap(),
@@ -853,9 +841,8 @@ async fn test_socks5_connect_reliability_v4() {
     static HANDLER_RESOURCES: OnceLock<crate::client::HandlerResources> = OnceLock::new();
     setup_logging();
 
-    let (handler_resources, stream_command_rx, datagram_rx) =
-        crate::client::HandlerResources::create();
-    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let (hr, stream_command_rx, datagram_rx) = crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(hr).unwrap();
     let client_task = tokio::spawn(crate::client::client_main_inner(
         &CLIENT_ARGS,
         HANDLER_RESOURCES.get().unwrap(),
@@ -925,9 +912,8 @@ async fn test_socks5_connect_reliability_v6() {
     static HANDLER_RESOURCES: OnceLock<crate::client::HandlerResources> = OnceLock::new();
     setup_logging();
 
-    let (handler_resources, stream_command_rx, datagram_rx) =
-        crate::client::HandlerResources::create();
-    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let (hr, stream_command_rx, datagram_rx) = crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(hr).unwrap();
     let client_task = tokio::spawn(crate::client::client_main_inner(
         &CLIENT_ARGS,
         HANDLER_RESOURCES.get().unwrap(),
@@ -996,9 +982,8 @@ async fn test_socks5_udp_v4v4() {
     static HANDLER_RESOURCES: OnceLock<crate::client::HandlerResources> = OnceLock::new();
     setup_logging();
 
-    let (handler_resources, stream_command_rx, datagram_rx) =
-        crate::client::HandlerResources::create();
-    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let (hr, stream_command_rx, datagram_rx) = crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(hr).unwrap();
     let client_task = tokio::spawn(crate::client::client_main_inner(
         &CLIENT_ARGS,
         HANDLER_RESOURCES.get().unwrap(),
@@ -1097,9 +1082,8 @@ async fn test_socks5_udp_v4v6() {
     static HANDLER_RESOURCES: OnceLock<crate::client::HandlerResources> = OnceLock::new();
     setup_logging();
 
-    let (handler_resources, stream_command_rx, datagram_rx) =
-        crate::client::HandlerResources::create();
-    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let (hr, stream_command_rx, datagram_rx) = crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(hr).unwrap();
     let client_task = tokio::spawn(crate::client::client_main_inner(
         &CLIENT_ARGS,
         HANDLER_RESOURCES.get().unwrap(),
@@ -1202,9 +1186,8 @@ async fn test_socks5_udp_v6v6() {
     static HANDLER_RESOURCES: OnceLock<crate::client::HandlerResources> = OnceLock::new();
     setup_logging();
 
-    let (handler_resources, stream_command_rx, datagram_rx) =
-        crate::client::HandlerResources::create();
-    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let (hr, stream_command_rx, datagram_rx) = crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(hr).unwrap();
     let client_task = tokio::spawn(crate::client::client_main_inner(
         &CLIENT_ARGS,
         HANDLER_RESOURCES.get().unwrap(),
@@ -1304,9 +1287,8 @@ async fn test_socks5_udp_client_prune() {
     });
     static HANDLER_RESOURCES: OnceLock<crate::client::HandlerResources> = OnceLock::new();
     setup_logging();
-    let (handler_resources, stream_command_rx, datagram_rx) =
-        crate::client::HandlerResources::create();
-    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let (hr, stream_command_rx, datagram_rx) = crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(hr).unwrap();
     let client_task = tokio::spawn(crate::client::client_main_inner(
         &CLIENT_ARGS,
         HANDLER_RESOURCES.get().unwrap(),
@@ -1459,9 +1441,8 @@ async fn test_socks4_works() {
     static HANDLER_RESOURCES: OnceLock<crate::client::HandlerResources> = OnceLock::new();
     setup_logging();
 
-    let (handler_resources, stream_command_rx, datagram_rx) =
-        crate::client::HandlerResources::create();
-    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let (hr, stream_command_rx, datagram_rx) = crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(hr).unwrap();
     let client_task = tokio::spawn(crate::client::client_main_inner(
         &CLIENT_ARGS,
         HANDLER_RESOURCES.get().unwrap(),
@@ -1522,9 +1503,8 @@ async fn test_it_works_dns_v4() {
     static HANDLER_RESOURCES: OnceLock<crate::client::HandlerResources> = OnceLock::new();
     setup_logging();
 
-    let (handler_resources, stream_command_rx, datagram_rx) =
-        crate::client::HandlerResources::create();
-    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let (hr, stream_command_rx, datagram_rx) = crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(hr).unwrap();
     let client_task = tokio::spawn(crate::client::client_main_inner(
         &CLIENT_ARGS,
         HANDLER_RESOURCES.get().unwrap(),
@@ -1567,9 +1547,8 @@ async fn test_it_works_dns_v6() {
     static HANDLER_RESOURCES: OnceLock<crate::client::HandlerResources> = OnceLock::new();
     setup_logging();
 
-    let (handler_resources, stream_command_rx, datagram_rx) =
-        crate::client::HandlerResources::create();
-    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let (hr, stream_command_rx, datagram_rx) = crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(hr).unwrap();
     let client_task = tokio::spawn(crate::client::client_main_inner(
         &CLIENT_ARGS,
         HANDLER_RESOURCES.get().unwrap(),
@@ -1613,9 +1592,8 @@ async fn test_tproxy_something_happens() {
     static HANDLER_RESOURCES: OnceLock<crate::client::HandlerResources> = OnceLock::new();
     setup_logging();
 
-    let (handler_resources, stream_command_rx, datagram_rx) =
-        crate::client::HandlerResources::create();
-    HANDLER_RESOURCES.set(handler_resources).unwrap();
+    let (hr, stream_command_rx, datagram_rx) = crate::client::HandlerResources::create();
+    HANDLER_RESOURCES.set(hr).unwrap();
     let client_task = tokio::spawn(crate::client::client_main_inner(
         &CLIENT_ARGS,
         HANDLER_RESOURCES.get().unwrap(),
