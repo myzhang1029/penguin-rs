@@ -80,22 +80,31 @@ pub(super) async fn handle_remote(
                 bind_tcp(lhost, *lport).await?,
                 rhost,
                 *rport,
+                true,
                 handler_resources,
             )
             .await
         }
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Inet((rhost, rport)), Protocol::Udp) => {
-            handle_udp(lhost, *lport, rhost, *rport, handler_resources).await
+            handle_udp(lhost, *lport, rhost, *rport, true, handler_resources).await
         }
         (LocalSpec::DomainSocket(path), RemoteSpec::Inet((rhost, rport)), _) => {
             // The parser guarantees that the protocol is TCP
-            handle_tcp(bind_uds(path).await?, rhost, *rport, handler_resources).await
+            handle_tcp(
+                bind_uds(path).await?,
+                rhost,
+                *rport,
+                true,
+                handler_resources,
+            )
+            .await
         }
         (LocalSpec::Stdio, RemoteSpec::Inet((rhost, rport)), Protocol::Tcp) => {
             handle_tcp(
                 ReusableListener::new_stdio(),
                 rhost,
                 *rport,
+                false,
                 handler_resources,
             )
             .await
@@ -104,35 +113,43 @@ pub(super) async fn handle_remote(
             handle_udp_stdio(rhost, *rport, handler_resources).await
         }
         // Remote `Socks`
-        (LocalSpec::Inet((lhost, lport)), RemoteSpec::Socks, _) => {
-            // The parser guarantees that the protocol is TCP
-            handle_socks(bind_tcp(lhost, *lport).await?, lhost, handler_resources).await
+        (LocalSpec::Inet((lhost, lport)), RemoteSpec::Socks, _) =>
+        // The parser guarantees that the protocol is TCP
+        {
+            handle_socks(
+                bind_tcp(lhost, *lport).await?,
+                lhost,
+                true,
+                handler_resources,
+            )
+            .await
         }
         (LocalSpec::Stdio, RemoteSpec::Socks, _) => {
             // The parser guarantees that the protocol is TCP
             handle_socks(
                 ReusableListener::new_stdio(),
                 "localhost",
+                false,
                 handler_resources,
             )
             .await
         }
         (LocalSpec::DomainSocket(path), RemoteSpec::Socks, _) => {
             // The parser guarantees that the protocol is TCP
-            handle_socks(bind_uds(path).await?, "localhost", handler_resources).await
+            handle_socks(bind_uds(path).await?, "localhost", true, handler_resources).await
         }
         // Remote `Http`
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Http, _) => {
             // The parser guarantees that the protocol is TCP
-            handle_http(bind_tcp(lhost, *lport).await?, handler_resources).await
+            handle_http(bind_tcp(lhost, *lport).await?, true, handler_resources).await
         }
         (LocalSpec::Stdio, RemoteSpec::Http, _) => {
             // The parser guarantees that the protocol is TCP
-            handle_http(ReusableListener::new_stdio(), handler_resources).await
+            handle_http(ReusableListener::new_stdio(), false, handler_resources).await
         }
         (LocalSpec::DomainSocket(path), RemoteSpec::Http, _) => {
             // The parser guarantees that the protocol is TCP
-            handle_http(bind_uds(path).await?, handler_resources).await
+            handle_http(bind_uds(path).await?, true, handler_resources).await
         }
         // Remote `Tproxy`
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Tproxy, Protocol::Tcp) => {
@@ -172,11 +189,7 @@ mod http {
     use async_acceptor::AsyncAcceptable;
     pub(super) async fn handle_http<L: AsyncAcceptable>(
         _listener: L,
-        _handler_resources: &HandlerResources,
-    ) -> Result<(), FatalError> {
-        Err(FatalError::NotEnabled("http-proxy"))
-    }
-    pub(super) async fn handle_http_stdio(
+        _accept_multiple: bool,
         _handler_resources: &HandlerResources,
     ) -> Result<(), FatalError> {
         Err(FatalError::NotEnabled("http-proxy"))

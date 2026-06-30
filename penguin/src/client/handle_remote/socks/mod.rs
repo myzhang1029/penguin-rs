@@ -6,7 +6,7 @@ mod v4;
 mod v5;
 
 use super::HandlerResources;
-use super::common::request_tcp_channel;
+use super::common::{request_tcp_channel, wait_break_or_spawn};
 use crate::client::StreamCommand;
 use crate::config;
 use async_acceptor::{AsyncAcceptable, AsyncAcceptableExt};
@@ -47,34 +47,51 @@ pub enum Error {
 pub(super) async fn handle_socks<L: AsyncAcceptable + Send + Sync>(
     listener: L,
     lhost: &'static str,
+    accept_multiple: bool,
     handler_resources: &'static HandlerResources,
 ) -> Result<(), super::FatalError> {
-    let mut socks_jobs = JoinSet::new();
+    let mut socks_jobs: JoinSet<Result<(), super::FatalError>> = JoinSet::new();
     loop {
         tokio::select! {
             biased;
             Some(finished) = socks_jobs.join_next() => {
-                if let Err(e) = finished.expect("SOCKS job panicked (this is a bug)") {
-                    if let Error::Fatal(e) = e {
-                        return Err(e);
-                    }
-                    info!("{e}");
-                }
+                finished.expect("SOCKS job panicked (this is a bug)")?;
             }
             result = listener.accept() => {
                 // A failed accept() is a fatal error and should be propagated.
                 let stream = result.map_err(super::FatalError::ClientIo)?;
-                socks_jobs.spawn(on_socks_accept(stream, lhost, handler_resources));
+                wait_break_or_spawn!(on_socks_accept_wrapped(stream, lhost, handler_resources), accept_multiple, socks_jobs);
             }
         }
     }
+}
+
+#[inline]
+async fn on_socks_accept_wrapped<RW>(
+    stream: RW,
+    local_addr: &str,
+    handler_resources: &'static HandlerResources,
+) -> Result<(), super::FatalError>
+where
+    RW: AsyncRead + AsyncWrite + Unpin,
+{
+    on_socks_accept(stream, local_addr, handler_resources)
+        .await
+        .or_else(|e| {
+            if let Error::Fatal(e) = e {
+                Err(e)
+            } else {
+                info!("{e}");
+                Ok(())
+            }
+        })
 }
 
 /// Handle a SOCKS5 connection.
 /// Based on socksv5's example.
 /// We need to be able to request additional channels, so we need `handler_resources`
 #[tracing::instrument(skip(stream, handler_resources), level = "trace")]
-pub(super) async fn on_socks_accept<RW>(
+async fn on_socks_accept<RW>(
     stream: RW,
     local_addr: &str,
     handler_resources: &'static HandlerResources,

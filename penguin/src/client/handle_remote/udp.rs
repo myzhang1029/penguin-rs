@@ -19,6 +19,7 @@ pub(super) async fn handle_udp(
     lport: u16,
     rhost: &'static str,
     rport: u16,
+    accept_multiple: bool,
     handler_resources: &HandlerResources,
 ) -> Result<(), FatalError> {
     // Not being able to bind to the local port is a fatal error.
@@ -53,6 +54,9 @@ pub(super) async fn handle_udp(
             .send(frame)
             .await
             .or(Err(FatalError::SendDatagram))?;
+        if !accept_multiple {
+            break Ok(());
+        }
     }
 }
 
@@ -105,10 +109,9 @@ mod tests {
             stream_command_tx,
             udp_client_map: udp_client_map.dupe(),
         };
-        let forwarding_task =
-            tokio::spawn(
-                async move { handle_udp(LHOST, 14196, RHOST, 255, &handler_resources).await },
-            );
+        let forwarding_task = tokio::spawn(async move {
+            handle_udp(LHOST, 14196, RHOST, 255, false, &handler_resources).await
+        });
         let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let local_addr = socket.local_addr().unwrap();
         socket.connect("127.0.0.1:14196").await.unwrap();
@@ -123,6 +126,6 @@ mod tests {
             .get(&(local_addr, ([127, 0, 0, 1], 14196).into()))
             .unwrap();
         assert_eq!(frame.flow_id, client_id);
-        forwarding_task.abort();
+        forwarding_task.await.unwrap().unwrap();
     }
 }

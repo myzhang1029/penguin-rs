@@ -4,9 +4,11 @@
 
 use super::{FatalError, common::request_tcp_channel};
 use crate::client::HandlerResources;
+use crate::client::handle_remote::common::wait_break_or_spawn;
 use crate::http::{body::IncomingOrFullBody, proxy};
 use async_acceptor::{AsyncAcceptable, AsyncAcceptableExt};
 use bytes::Bytes;
+use futures_util::TryFutureExt;
 use http::{Method, Request, Response, StatusCode, uri::Scheme};
 use hyper::client::conn::http1;
 use hyper::{body::Incoming, service::service_fn};
@@ -126,6 +128,7 @@ where
 #[tracing::instrument(skip_all, level = "debug")]
 pub(super) async fn handle_http<L: AsyncAcceptable + Send + Sync>(
     listener: L,
+    accept_multiple: bool,
     handler_resources: &'static HandlerResources,
 ) -> Result<(), super::FatalError> {
     loop {
@@ -139,13 +142,16 @@ pub(super) async fn handle_http<L: AsyncAcceptable + Send + Sync>(
             Some(peer_addr)
         };
         debug!("Accepted HTTP proxy connection from {peer_addr}");
-        tokio::spawn(async move {
-            if let Err(e) =
-                http_proxy_on_stream(stream, peer_addr_for_proxy, handler_resources).await
-            {
-                warn!("HTTP proxy forwarded from {peer_addr} failed: {e}");
-            }
-        });
+        wait_break_or_spawn!(
+            http_proxy_on_stream(stream, peer_addr_for_proxy, handler_resources).map_ok_or_else(
+                move |e| {
+                    warn!("HTTP proxy forwarded from {peer_addr} failed: {e}");
+                    Ok::<(), FatalError>(())
+                },
+                Ok,
+            ),
+            accept_multiple
+        );
     }
 }
 
