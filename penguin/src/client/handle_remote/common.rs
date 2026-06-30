@@ -11,24 +11,6 @@ use tokio::net::UnixListener;
 use tokio::sync::{mpsc, oneshot};
 use tracing::info;
 
-macro_rules! wait_break_or_spawn {
-    ($task:expr, $should_spawn:expr) => {
-        if $should_spawn {
-            tokio::spawn($task);
-        } else {
-            break $task.await;
-        }
-    };
-    ($task:expr, $should_spawn:expr, $joinset:expr) => {
-        if $should_spawn {
-            $joinset.spawn($task);
-        } else {
-            break $task.await;
-        }
-    };
-}
-pub(super) use wait_break_or_spawn;
-
 /// Request a channel from the mux
 /// Returns an error if the main loop timed out waiting for a response.
 #[tracing::instrument(skip(stream_command_tx_permit), level = "debug")]

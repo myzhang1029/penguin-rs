@@ -6,7 +6,7 @@ mod v4;
 mod v5;
 
 use super::HandlerResources;
-use super::common::{request_tcp_channel, wait_break_or_spawn};
+use super::common::request_tcp_channel;
 use crate::client::StreamCommand;
 use crate::config;
 use async_acceptor::{AsyncAcceptable, AsyncAcceptableExt};
@@ -47,7 +47,6 @@ pub enum Error {
 pub(super) async fn handle_socks<L: AsyncAcceptable + Send + Sync>(
     listener: L,
     lhost: &'static str,
-    accept_multiple: bool,
     hr: &'static HandlerResources,
 ) -> Result<(), super::FatalError> {
     let mut socks_jobs: JoinSet<Result<(), super::FatalError>> = JoinSet::new();
@@ -60,7 +59,7 @@ pub(super) async fn handle_socks<L: AsyncAcceptable + Send + Sync>(
             result = listener.accept() => {
                 // A failed accept() is a fatal error and should be propagated.
                 let stream = result.map_err(super::FatalError::ClientIo)?;
-                wait_break_or_spawn!(on_socks_accept_wrapped(stream, lhost, hr), accept_multiple, socks_jobs);
+                socks_jobs.spawn(on_socks_accept_wrapped(stream, lhost, hr));
             }
         }
     }

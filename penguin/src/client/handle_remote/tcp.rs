@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::FatalError;
-use super::common::{request_tcp_channel, wait_break_or_spawn};
+use super::common::request_tcp_channel;
 use crate::client::HandlerResources;
 use async_acceptor::{AsyncAcceptable, AsyncAcceptableExt};
 use bytes::Bytes;
@@ -16,7 +16,6 @@ pub(super) async fn handle_tcp<L: AsyncAcceptable + Send + Sync>(
     listener: L,
     rhost: &'static str,
     rport: u16,
-    accept_multiple: bool,
     hr: &HandlerResources,
 ) -> Result<(), FatalError> {
     let rhost = rhost.as_bytes();
@@ -37,18 +36,11 @@ pub(super) async fn handle_tcp<L: AsyncAcceptable + Send + Sync>(
             request_tcp_channel(stream_command_tx_permit, Bytes::from_static(rhost), rport)
                 .await
                 .or(Err(FatalError::MainLoopExitWithoutSendingStream))?;
-        wait_break_or_spawn! {
-            channel
-                .into_copy_bidirectional(tcp_stream)
-                .map_ok_or_else(
-                    // Transient errors in the forwarder don't matter
-                    |e| {
-                        warn!("TCP forwarder failed: {e}");
-                        Ok::<(), FatalError>(())
-                    },
-                    |_| Ok(()),
-                ),
-            accept_multiple
-        }
+        tokio::spawn(channel.into_copy_bidirectional(tcp_stream).inspect_err(
+            // Transient errors in the forwarder don't matter
+            |e| {
+                warn!("TCP forwarder failed: {e}");
+            },
+        ));
     }
 }
