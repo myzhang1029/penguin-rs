@@ -235,7 +235,7 @@ jobs:
     - name: Build deb and rpm packages
       if: ${{ matrix.config.linux_packaging }}
       run: |
-        .github/workflows/package.sh ${{ matrix.config.rust_target }} ${{ matrix.config.profile }}
+        .github/workflows/package.sh ${{ matrix.config.rust_target }} ${{ matrix.config.profile }} ${{ github.ref == 'refs/heads/main' || github.ref_type == 'tag' }}
       env:
         GH_TOKEN: ${{ github.token }}
 
