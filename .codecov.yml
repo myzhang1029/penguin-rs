@@ -3,10 +3,18 @@ component_management:
     paths:
       - penguin/src/**
   individual_components:
+    - component_id: rlib_async_acceptor
+      name: async_acceptor
+      paths:
+        - async-acceptor/**
     - component_id: rlib_penguin_mux
       name: multiplexer
       paths:
         - penguin-mux/**
+    - component_id: rlib_penguin_socks
+      name: socks
+      paths:
+        - penguin-socks/**
     - component_id: rlib_penguin_server
       name: server
       paths:
@@ -15,5 +23,3 @@ component_management:
       name: client
       paths:
         - penguin/src/client/**
-
-
