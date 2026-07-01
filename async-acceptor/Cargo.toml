@@ -24,4 +24,4 @@ tokio-net = ["tokio/net"]
 stdio = ["tokio/io-std"]
 
 # Dependencies for testing
-dev-dependencies = ["tokio/process"]
+dev-dependencies = ["tokio/io-util", "tokio/process"]
