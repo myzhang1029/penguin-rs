@@ -50,7 +50,7 @@ pub(super) async fn handle_socks<L: AsyncAcceptable + Send + Sync>(
             result = listener.accept() => {
                 // A failed accept() is a fatal error and should be propagated.
                 let stream = result.map_err(super::FatalError::ClientIo)?;
-                socks_jobs.spawn(on_socks_accept_wrapped(stream, lhost, hr));
+                socks_jobs.spawn(on_socks_accept_wrapped(Box::new(BufReader::new(stream)), lhost, hr));
             }
         }
     }
@@ -58,14 +58,14 @@ pub(super) async fn handle_socks<L: AsyncAcceptable + Send + Sync>(
 
 #[inline]
 async fn on_socks_accept_wrapped<RW>(
-    stream: RW,
+    bufreader: Box<BufReader<RW>>,
     local_addr: &str,
     hr: &'static HandlerResources,
 ) -> Result<(), FatalError>
 where
     RW: AsyncRead + AsyncWrite + Unpin,
 {
-    on_socks_accept(stream, local_addr, hr).await.or_else(|e| {
+    on_socks_accept(bufreader, local_addr, hr).await.or_else(|e| {
         if let Error::Fatal(e) = e {
             Err(e)
         } else {
@@ -78,23 +78,22 @@ where
 /// Handle a SOCKS5 connection.
 /// Based on socksv5's example.
 /// We need to be able to request additional channels, so we need `hr`
-#[tracing::instrument(skip(stream, hr), level = "trace")]
+#[tracing::instrument(skip(bufreader, hr), level = "trace")]
 async fn on_socks_accept<RW>(
-    stream: RW,
+    mut bufreader: Box<BufReader<RW>>,
     local_addr: &str,
     hr: &'static HandlerResources,
 ) -> Result<(), Error>
 where
     RW: AsyncRead + AsyncWrite + Unpin,
 {
-    let mut bufreader = BufReader::new(stream);
     let version = bufreader
         .read_u8()
         .await
         .map_err(|e| SocksError::ProcessSocksRequest("read version", e))?;
     match version {
-        magics::VER_4 => socks4(&mut bufreader, hr).await,
-        magics::VER_5 => socks5(&mut bufreader, local_addr, hr).await,
+        magics::VER_4 => socks4(bufreader.as_mut(), hr).await,
+        magics::VER_5 => socks5(bufreader.as_mut(), local_addr, hr).await,
         version => Err(Error::Socks(SocksError::SocksVersion(version))),
     }
 }
