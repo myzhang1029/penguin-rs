@@ -65,14 +65,16 @@ async fn on_socks_accept_wrapped<RW>(
 where
     RW: AsyncRead + AsyncWrite + Unpin,
 {
-    on_socks_accept(bufreader, local_addr, hr).await.or_else(|e| {
-        if let Error::Fatal(e) = e {
-            Err(e)
-        } else {
-            info!("{e}");
-            Ok(())
-        }
-    })
+    on_socks_accept(bufreader, local_addr, hr)
+        .await
+        .or_else(|e| {
+            if let Error::Fatal(e) = e {
+                Err(e)
+            } else {
+                info!("{e}");
+                Ok(())
+            }
+        })
 }
 
 /// Handle a SOCKS5 connection.

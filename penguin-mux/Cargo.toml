@@ -27,12 +27,13 @@ nohash-hasher = { version = "0.2", optional = true }
 parking_lot = "0.12"
 rand = "0.10"
 thiserror = "2"
-tokio = { version = "^1, >=1.23.1", features = ["io-util", "macros", "parking_lot", "rt", "sync", "time"] }
+tokio = { version = "^1, >=1.23.1", features = ["io-util", "macros", "parking_lot", "sync", "time"] }
 tokio-tungstenite = { version = "0.29", default-features = false, optional = true }
 tracing = "0.1"
 
 [dev-dependencies]
 divan = "0.1"
+penguin-mux = { path = ".", default-features = false, features = ["rt-tokio"] }
 tokio = { version = "^1, >=1.23.1", features = ["net", "rt-multi-thread"] }
 tracing-subscriber = { version = "^0.3, >=0.3.20", features = ["env-filter"] }
 
@@ -40,7 +41,9 @@ tracing-subscriber = { version = "^0.3, >=0.3.20", features = ["env-filter"] }
 loom = { version = "0.7", features = ["checkpoint", "futures"] }
 
 [features]
-default = ["tungstenite"]
+default = ["tungstenite", "rt-tokio"]
+# Expect the tokio runtime to be available
+rt-tokio = ["tokio/rt"]
 # use tungstenite as the WebSocket implementation
 tungstenite = ["dep:tokio-tungstenite"]
 # Use nohash-hasher for flow_id hashmaps

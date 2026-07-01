@@ -1605,6 +1605,7 @@ dependencies = [
  "loom",
  "nohash-hasher",
  "parking_lot",
+ "penguin-mux",
  "rand 0.10.1",
  "thiserror",
  "tokio",

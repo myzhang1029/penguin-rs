@@ -15,9 +15,10 @@ use std::task::{Context, Poll, ready};
 use std::time::Instant;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, watch};
+#[cfg(feature = "rt-tokio")]
 use tokio::task::JoinSet;
 use tokio::time::MissedTickBehavior;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 #[cfg(feature = "nohash")]
 use nohash_hasher::IntMap;
@@ -27,36 +28,40 @@ use std::collections::HashMap as IntMap;
 /// Internal type used for spawning the multiplexor task
 #[derive(Debug)]
 pub struct TaskData<S: WebSocket> {
-    pub task: Task<S>,
+    pub(crate) task: Task<S>,
     // To be taken out when the task is spawned
-    pub tx_frame_rx: mpsc::UnboundedReceiver<FinalizedFrame>,
+    pub(crate) tx_frame_rx: mpsc::UnboundedReceiver<FinalizedFrame>,
     // To be taken out when the task is spawned
-    pub dropped_ports_rx: mpsc::UnboundedReceiver<u32>,
+    pub(crate) dropped_ports_rx: mpsc::UnboundedReceiver<u32>,
     // To be taken out when the task is spawned
-    pub last_pong_timestamp_rx: watch::Receiver<Instant>,
+    pub(crate) last_pong_timestamp_rx: watch::Receiver<Instant>,
 }
 
 impl<S: WebSocket> TaskData<S> {
-    /// Spawn the multiplexor task.
-    /// This function and [`new_no_task`] are implementation details and not exposed in the public API.
-    pub fn spawn(self, task_joinset: Option<&mut JoinSet<Result<()>>>) {
+    /// Create the multiplexor task.
+    #[inline]
+    pub async fn create_task(self) -> Result<()> {
         let Self {
             task,
             tx_frame_rx,
             dropped_ports_rx,
             last_pong_timestamp_rx,
         } = self;
+        task.start(dropped_ports_rx, tx_frame_rx, last_pong_timestamp_rx)
+            .await
+    }
+
+    /// Spawn the multiplexor task in the background using the `tokio` runtime.
+    #[cfg(feature = "rt-tokio")]
+    pub fn spawn(self, task_joinset: Option<&mut JoinSet<Result<()>>>) {
         let parent_id = tokio::task::try_id()
             .as_ref()
             .map_or_else(|| "0".to_string(), tokio::task::Id::to_string);
         let future = async move {
-            let id = tokio::task::id();
-            debug!("spawning mux task {id} from {parent_id}",);
-            let result = task
-                .start(dropped_ports_rx, tx_frame_rx, last_pong_timestamp_rx)
-                .await;
+            debug!("spawning mux task {} from {parent_id}", tokio::task::id());
+            let result = self.create_task().await;
             if let Err(e) = &result {
-                error!("Multiplexor task exited with error: {e}");
+                tracing::error!("Multiplexor task exited with error: {e}");
             }
             result
         };
@@ -110,7 +115,11 @@ impl<S: WebSocket> Task<S> {
     // It doesn't make sense to return a `Result` here because we can't propagate
     // the error to the user from a spawned task.
     // Instead, the user will notice when `rx` channels return `None`.
-    #[tracing::instrument(skip_all, level = "debug", fields(task_id = %tokio::task::id()))]
+    #[cfg_attr(feature = "rt-tokio", tracing::instrument(skip_all, level = "debug", fields(task_id = %tokio::task::id())))]
+    #[cfg_attr(
+        not(feature = "rt-tokio"),
+        tracing::instrument(skip_all, level = "debug")
+    )]
     async fn start(
         self,
         mut dropped_ports_rx: mpsc::UnboundedReceiver<u32>,
@@ -285,6 +294,7 @@ impl<S: WebSocket> Task<S> {
         // Let the tasks do some work now
         // Note that this is not a guarantee, so we may still have some streams that wake up
         // later but only to see a `BrokenPipe`.
+        #[cfg(feature = "rt-tokio")]
         tokio::task::yield_now().await;
         // Further ensure no more frames can be sent. This should cause all further attempts at
         // `AsyncWrite::poll_write` to return `BrokenPipe`.

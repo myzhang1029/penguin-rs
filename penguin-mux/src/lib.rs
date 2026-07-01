@@ -25,7 +25,7 @@ pub mod ws;
 
 use crate::frame::{BindPayload, BindType, FinalizedFrame, Frame};
 use crate::loom::{Arc, AtomicBool, AtomicU32, AtomicWaker, Mutex, Ordering, RwLock};
-use crate::task::{Task, TaskData};
+use crate::task::Task;
 use crate::ws::WebSocket;
 use bytes::Bytes;
 use rand::distr::uniform::SampleUniform;
@@ -35,6 +35,7 @@ use std::time::Instant;
 use thiserror::Error;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot, watch};
+#[cfg(feature = "rt-tokio")]
 use tokio::task::JoinSet;
 use tracing::{error, trace, warn};
 
@@ -46,6 +47,7 @@ use std::collections::HashMap as IntMap;
 pub use crate::dupe::Dupe;
 pub use crate::proto_version::{PROTOCOL_VERSION, PROTOCOL_VERSION_NUMBER};
 pub use crate::stream::MuxStream;
+pub use crate::task::TaskData;
 
 /// Multiplexor error
 #[derive(Debug, Error)]
@@ -135,12 +137,24 @@ impl Multiplexor {
     /// * `task_joinset`: A [`JoinSet`] to spawn the multiplexor task into so
     ///   that the caller can notice if the task exits. If it is `None`, the
     ///   task will be spawned by `tokio::spawn` and errors will be logged.
-    #[tracing::instrument(skip_all, level = "debug")]
+    #[cfg(feature = "rt-tokio")]
+    #[inline]
     pub fn new<S: WebSocket>(
         ws: S,
         options: Option<config::Options>,
         task_joinset: Option<&mut JoinSet<Result<()>>>,
     ) -> Self {
+        let (mux, taskdata) = Self::new_no_task(ws, options);
+        taskdata.spawn(task_joinset);
+        mux
+    }
+
+    /// Create a new `Multiplexor`, without starting the task.
+    #[tracing::instrument(skip_all, level = "debug")]
+    pub fn new_no_task<S: WebSocket>(
+        ws: S,
+        options: Option<config::Options>,
+    ) -> (Self, TaskData<S>) {
         let options = options.unwrap_or_default();
         let (datagram_tx, datagram_rx) = mpsc::channel(options.datagram_buffer_size);
         let (con_recv_stream_tx, con_recv_stream_rx) = mpsc::channel(options.stream_buffer_size);
@@ -189,8 +203,7 @@ impl Multiplexor {
             tx_frame_rx,
             last_pong_timestamp_rx,
         };
-        taskdata.spawn(task_joinset);
-        mux
+        (mux, taskdata)
     }
 
     /// Request a channel for `host` and `port`.
