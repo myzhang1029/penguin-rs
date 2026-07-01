@@ -16,12 +16,11 @@ derive_more = { version = "2", features = ["debug"] }
 tokio = "^1, >=1.23.1"
 
 [dev-dependencies]
-async-acceptor = { path = ".", features = ["dev-dependencies"] }
+async-acceptor = { path = ".", features = ["__dev-dependencies"] }
 
 [features]
 default = ["tokio-net", "stdio"]
 tokio-net = ["tokio/net"]
 stdio = ["tokio/io-std"]
 
-# Dependencies for testing
-dev-dependencies = ["tokio/process"]
+__dev-dependencies = ["tokio/io-util", "tokio/macros", "tokio/process", "tokio/rt-multi-thread"]

@@ -13,4 +13,10 @@ categories = ["network-programming", "protocol-implementation"]
 [dependencies]
 bytes = "^1, >=1.11.1"
 thiserror = "2"
-tokio = "^1, >=1.23.1"
+tokio = { version = "^1, >=1.23.1", features = ["io-util"] }
+
+[dev-dependencies]
+penguin-socks = { path = ".", features = ["__dev-dependencies"] }
+
+[features]
+__dev-dependencies = ["tokio/macros", "tokio/rt-multi-thread"]

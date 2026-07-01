@@ -62,7 +62,7 @@ rand = "0.10"
 rcgen = { version = "0.14", features = ["crypto", "pem"], default-features = false }
 tempfile = "3"
 # Hack; https://stackoverflow.com/q/73015087
-rusty-penguin = { path = ".", default-features = false, features = ["dev-dependencies"] }
+rusty-penguin = { path = ".", default-features = false, features = ["__dev-dependencies"] }
 
 [target.'cfg(dhat)'.dependencies]
 dhat = { version = "0.3" }
@@ -83,7 +83,7 @@ ring = ["instant-acme?/ring", "rustls/ring"]
 aws-lc-rs = ["instant-acme?/aws-lc-rs", "rustls/aws-lc-rs", "rustls/prefer-post-quantum", "rustls-webpki/aws-lc-rs"]
 
 # Dependencies for testing
-dev-dependencies = ["tracing-subscriber/env-filter", "tokio/process"]
+__dev-dependencies = ["tracing-subscriber/env-filter", "tokio/process"]
 # Allow some tests that require real internet connection
 tests-real-internet4 = []
 tests-real-internet6 = []

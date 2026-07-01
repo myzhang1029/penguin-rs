@@ -1619,6 +1619,7 @@ name = "penguin-socks"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "penguin-socks",
  "thiserror",
  "tokio",
 ]

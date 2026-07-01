@@ -92,17 +92,28 @@ jobs:
         RUSTFLAGS: -Cinstrument-coverage
         PENGUIN_TLS_CHROMIUM_LIKE: on
 
-    - name: Run cargo lib tests with minimal features
+    - name: Run async-acceptor tests only
+      run: cargo nextest run --all-targets --verbose --package async-acceptor
+      env:
+        RUSTFLAGS: -Cinstrument-coverage
+
+    - name: Run penguin-socks tests only
+      run: cargo nextest run --all-targets --verbose --package penguin-socks
+      env:
+        RUSTFLAGS: -Cinstrument-coverage
+
+    - name: Run cargo penguin-mux tests with minimal features
       run: cargo nextest run --all-targets --verbose --no-default-features --package penguin-mux
       env:
         RUSTFLAGS: -Cinstrument-coverage
 
-    - name: Run cargo lib tests with rt-tokio
-      run: cargo nextest run --all-targets --verbose --no-default-features --package penguin-mux --features rt-tokio
+    # Note that tokio/rt is always on in tests
+    - name: Run cargo penguin-mux tests with tungstenite
+      run: cargo nextest run --all-targets --verbose --no-default-features --package penguin-mux --features tungstenite
       env:
         RUSTFLAGS: -Cinstrument-coverage
 
-    - name: Run cargo lib tests with loom
+    - name: Run cargo penguin-mux tests with loom
       if: ${{ matrix.config.name != 'aarch64-pc-windows-msvc' }}
       run: cargo test --lib --release --no-default-features --package penguin-mux
       env:

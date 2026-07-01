@@ -32,13 +32,19 @@ jobs:
       run:
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --component llvm-tools-preview
 
-    - name: Check lib only
+    - name: Check async-acceptor only
+      run: cargo check --verbose --no-default-features --package async-acceptor
+
+    - name: Check penguin-socks only
+      run: cargo check --verbose --no-default-features --package penguin-socks
+
+    - name: Check penguin-mux only
       run: cargo check --verbose --no-default-features --package penguin-mux
 
-    - name: Check lib with rt-tokio support
+    - name: Check penguin-mux with rt-tokio support
       run: cargo check --verbose --features rt-tokio --no-default-features --package penguin-mux
 
-    - name: Check lib with tungstenite support
+    - name: Check penguin-mux with tungstenite support
       run: cargo check --verbose --features tungstenite --no-default-features --package penguin-mux
 
     - name: Check default features

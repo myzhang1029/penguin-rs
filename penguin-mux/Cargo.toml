@@ -33,8 +33,7 @@ tracing = "0.1"
 
 [dev-dependencies]
 divan = "0.1"
-penguin-mux = { path = ".", default-features = false, features = ["rt-tokio"] }
-tokio = { version = "^1, >=1.23.1", features = ["net", "rt-multi-thread"] }
+penguin-mux = { path = ".", default-features = false, features = ["__dev-dependencies"] }
 tracing-subscriber = { version = "^0.3, >=0.3.20", features = ["env-filter"] }
 
 [target.'cfg(loom)'.dependencies]
@@ -50,6 +49,8 @@ tungstenite = ["dep:tokio-tungstenite"]
 nohash = ["dep:nohash-hasher"]
 # Facility to launch `parking_lot`'s deadlock detection in a separate thread in tests
 deadlock-detection = ["parking_lot/deadlock_detection"]
+
+__dev-dependencies = ["rt-tokio", "tokio/macros", "tokio/net", "tokio/rt-multi-thread"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)', 'cfg(loom)'] }
