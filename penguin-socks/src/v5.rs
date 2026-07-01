@@ -2,11 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use super::Error;
-use bytes::Bytes;
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use crate::{Error, magics};
+use bytes::{Buf, Bytes};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tracing::trace;
 
 /// Read SOCKS authentication methods from the given reader.
 ///
@@ -39,7 +38,7 @@ where
     W: AsyncWrite + Unpin,
 {
     writer
-        .write_all(&[0x05, method])
+        .write_all(&[magics::VER_5, method])
         .await
         .map_err(|e| Error::ProcessSocksRequest("write auth method", e))?;
     writer
@@ -56,7 +55,7 @@ where
 /// # Errors
 /// Underlying I/O error with a description of the context.
 #[inline]
-pub async fn read_request<RW>(stream: &mut RW) -> Result<(u8, Bytes, u16), Error>
+pub async fn read_request<RW>(stream: &mut RW) -> Result<(u8, Vec<u8>, u16), Error>
 where
     RW: AsyncRead + AsyncWrite + Unpin,
 {
@@ -64,7 +63,7 @@ where
         .read_u8()
         .await
         .map_err(|e| Error::ProcessSocksRequest("read version", e))?;
-    if version != 0x05 {
+    if version != magics::VER_5 {
         return Err(Error::SocksVersion(version));
     }
     let command = stream
@@ -88,7 +87,7 @@ where
 /// # Errors
 /// Underlying I/O error with a description of the context.
 #[inline]
-async fn read_address<RW>(stream: &mut RW) -> Result<Bytes, Error>
+async fn read_address<RW>(stream: &mut RW) -> Result<Vec<u8>, Error>
 where
     RW: AsyncRead + AsyncWrite + Unpin,
 {
@@ -96,9 +95,8 @@ where
         .read_u8()
         .await
         .map_err(|e| Error::ProcessSocksRequest("read address type", e))?;
-    trace!("address type: {address_type}");
     match address_type {
-        0x01 => {
+        magics::ATYP_IPV4 => {
             // IPv4
             let mut addr = [0; 4];
             stream
@@ -107,7 +105,7 @@ where
                 .map_err(|e| Error::ProcessSocksRequest("read address", e))?;
             Ok(Ipv4Addr::from(addr).to_string().into())
         }
-        0x03 => {
+        magics::ATYP_DOMAIN => {
             // Domain name
             let len = stream
                 .read_u8()
@@ -118,9 +116,9 @@ where
                 .read_exact(&mut addr)
                 .await
                 .map_err(|e| Error::ProcessSocksRequest("read domain address", e))?;
-            Ok(Bytes::from(addr))
+            Ok(addr)
         }
-        0x04 => {
+        magics::ATYP_IPV6 => {
             // IPv6
             let mut addr = [0; 16];
             stream
@@ -132,7 +130,18 @@ where
         _ => {
             // Unsupported address type
             stream
-                .write_all(&[0x05, 0x08, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+                .write_all(&[
+                    magics::VER_5,
+                    magics::REP_ATYPUNSUP,
+                    magics::RESERVED,
+                    magics::ATYP_IPV4,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                ])
                 .await
                 .map_err(|e| Error::ProcessSocksRequest("write unsupported address type", e))?;
             stream
@@ -158,7 +167,7 @@ where
             // 4 bytes header + 4 bytes address + 2 bytes port
             let total_len = 4 + 4 + 2;
             let mut buf = vec![0; total_len];
-            buf[3] = 0x01; // address type
+            buf[3] = magics::ATYP_IPV4;
             buf[4..8].copy_from_slice(&addr.ip().octets());
             buf
         }
@@ -166,14 +175,14 @@ where
             // 4 bytes header + 16 bytes address + 2 bytes port
             let total_len = 4 + 16 + 2;
             let mut buf = vec![0; total_len];
-            buf[3] = 0x04; // address type
+            buf[3] = magics::ATYP_IPV6;
             buf[4..20].copy_from_slice(&addr.ip().octets());
             buf
         }
     };
-    buf[0] = 0x05; // version
+    buf[0] = magics::VER_5;
     buf[1] = response; // response code
-    buf[2] = 0x00; // reserved
+    buf[2] = magics::RESERVED; // reserved
     let port = local.port();
     let len = buf.len();
     buf[len - 2..len].copy_from_slice(&port.to_be_bytes());
@@ -199,7 +208,16 @@ where
 {
     writer
         .write_all(&[
-            0x05, response, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            magics::VER_5,
+            response,
+            magics::RESERVED,
+            magics::ATYP_IPV4,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
         ])
         .await
         .map_err(|e| Error::ProcessSocksRequest("write response", e))?;
@@ -210,6 +228,86 @@ where
     Ok(())
 }
 
+/// Parse a UDP relay request.
+///
+/// # Returns
+/// Returns a tuple of (destination address, destination port, remaining data).
+///
+/// # Errors
+/// Returns
+/// - `Error::ParseAssociate` if the request cannot be parsed.
+/// - `Error::FragmentedUdp` if the request is a fragmented UDP packet.
+/// - `Error::UnknownAddressType` if the request has an unknown address type.
+pub fn parse_udp_relay_header(mut buf: Bytes) -> Result<(Bytes, u16, Bytes), Error> {
+    if buf.remaining() < 4 {
+        return Err(Error::ParseAssociate);
+    }
+    let _reserved = buf.get_u16();
+    let frag = buf.get_u8();
+    if frag != 0 {
+        return Err(Error::FragmentedUdp);
+    }
+    let atyp = buf.get_u8();
+    let (dst, port) = match atyp {
+        magics::ATYP_IPV4 => {
+            // IPv4
+            if buf.remaining() < 6 {
+                return Err(Error::ParseAssociate);
+            }
+            let addr = buf.get_u32();
+            let dst = Ipv4Addr::from(addr).to_string();
+            let port = buf.get_u16();
+            (dst.into(), port)
+        }
+        magics::ATYP_DOMAIN => {
+            // Domain name
+            if buf.remaining() < 1 {
+                return Err(Error::ParseAssociate);
+            }
+            let len = usize::from(buf.get_u8());
+            if buf.remaining() < len + 2 {
+                return Err(Error::ParseAssociate);
+            }
+            let dst = buf.split_to(len);
+            let port = buf.get_u16();
+            (dst, port)
+        }
+        magics::ATYP_IPV6 => {
+            // IPv6
+            if buf.remaining() < 18 {
+                return Err(Error::ParseAssociate);
+            }
+            let addr = buf.get_u128();
+            let dst = Ipv6Addr::from(addr).to_string();
+            let port = buf.get_u16();
+            (dst.into(), port)
+        }
+        y => return Err(Error::UnknownAddressType(y)),
+    };
+    Ok((dst, port, buf))
+}
+
+/// Prepare a UDP relay response to `target` with the given `data`.
+#[inline]
+#[must_use]
+pub fn udp_relay_response(target: SocketAddr, data: &[u8]) -> Vec<u8> {
+    // Write the header
+    let mut content = vec![0; 3];
+    match target.ip() {
+        IpAddr::V4(ip) => {
+            content.extend(ip.octets());
+            content.extend([magics::ATYP_IPV4]);
+        }
+        IpAddr::V6(ip) => {
+            content.extend(ip.octets());
+            content.extend([magics::ATYP_IPV6]);
+        }
+    }
+    content.extend(&target.port().to_be_bytes());
+    content.extend(data);
+    content
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,7 +315,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_auth_methods() {
-        crate::tests::setup_logging();
         let mut reader = Cursor::new(vec![0x02, 0x00, 0x01]);
         let methods = read_auth_methods(&mut reader).await.unwrap();
         assert_eq!(methods, vec![0x00, 0x01]);
@@ -225,7 +322,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_auth_method() {
-        crate::tests::setup_logging();
         let mut writer = Cursor::new(vec![]);
         write_auth_method(&mut writer, 0x00).await.unwrap();
         assert_eq!(writer.get_ref(), &[0x05, 0x00]);
@@ -233,52 +329,47 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_request_v4() {
-        crate::tests::setup_logging();
         let mut reader = Cursor::new(vec![
             0x05, 0x01, 0x00, 0x01, 0x7f, 0x00, 0x00, 0x01, 0x00, 0x50,
         ]);
         let (command, address, port) = read_request(&mut reader).await.unwrap();
         assert_eq!(command, 0x01);
-        assert_eq!(address, "127.0.0.1");
+        assert_eq!(address, "127.0.0.1".as_bytes());
         assert_eq!(port, 0x50);
     }
 
     #[tokio::test]
     async fn test_read_request_v6() {
-        crate::tests::setup_logging();
         let mut reader = Cursor::new(vec![
             0x05, 0x01, 0x00, 0x04, 0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x50,
         ]);
         let (command, address, port) = read_request(&mut reader).await.unwrap();
         assert_eq!(command, 0x01);
-        assert_eq!(address, "2001:db8::1");
+        assert_eq!(address, "2001:db8::1".as_bytes());
         assert_eq!(port, 0x50);
     }
 
     #[tokio::test]
     async fn test_read_request_domain() {
-        crate::tests::setup_logging();
         let mut reader = Cursor::new(vec![
             0x05, 0x01, 0x00, 0x03, 0x0f, 0x77, 0x77, 0x77, 0x2e, 0x65, 0x78, 0x61, 0x6d, 0x70,
             0x6c, 0x65, 0x2e, 0x63, 0x6f, 0x6d, 0x00, 0x50,
         ]);
         let (command, address, port) = read_request(&mut reader).await.unwrap();
         assert_eq!(command, 0x01);
-        assert_eq!(address, "www.example.com");
+        assert_eq!(address, "www.example.com".as_bytes());
         assert_eq!(port, 0x50);
     }
 
     #[tokio::test]
     async fn test_read_request_invalid_address_type() {
-        crate::tests::setup_logging();
         let mut reader = Cursor::new(vec![0x05, 0x01, 0x00, 0x02, 0x00, 0x50]);
         read_request(&mut reader).await.unwrap_err();
     }
 
     #[tokio::test]
     async fn test_write_response() {
-        crate::tests::setup_logging();
         let mut writer = Cursor::new(vec![]);
         write_response(&mut writer, 0x00, ([127, 0, 0, 1], 80).into())
             .await
@@ -291,7 +382,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_response_unspecified() {
-        crate::tests::setup_logging();
         let mut writer = Cursor::new(vec![]);
         write_response_unspecified(&mut writer, 0x00).await.unwrap();
         assert_eq!(

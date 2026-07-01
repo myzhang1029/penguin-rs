@@ -1614,6 +1614,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "penguin-socks"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2022,6 +2031,7 @@ dependencies = [
  "nohash-hasher",
  "parking_lot",
  "penguin-mux",
+ "penguin-socks",
  "rand 0.10.1",
  "rcgen",
  "rustls",

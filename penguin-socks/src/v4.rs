@@ -2,20 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use super::Error;
-use bytes::Bytes;
+use crate::{Error, magics};
 use std::net::Ipv4Addr;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tracing::trace;
 
-/// Read a SOCKS4/a request from the given reader. Returns the command, address, and port.
-/// Writes an `Address type not supported` response to the given writer if the address type is not
-/// valid. We expect the version byte to have already been read.
+/// Read a SOCKS4/a request from the given reader.
+///
+/// We expect the version byte to have already been read.
+///
+/// The user should write an `Address type not supported` response to the
+/// given writer if the address type is not valid.
+///
+/// # Returns
+/// (the command, address, and port).
 ///
 /// # Errors
 /// Underlying I/O error with a description of the context.
 #[inline]
-pub async fn read_request<R>(reader: &mut R) -> Result<(u8, Bytes, u16), Error>
+pub async fn read_request<R>(reader: &mut R) -> Result<(u8, Vec<u8>, u16), Error>
 where
     R: AsyncBufRead + Unpin,
 {
@@ -38,7 +42,6 @@ where
         .map_err(|e| Error::ProcessSocksRequest("read user id", e))?;
     // Remove the null byte
     user_id.pop();
-    trace!("User ID: {user_id:?}");
     let rhost = if ip >> 24 == 0 {
         let mut domain = Vec::new();
         reader
@@ -47,7 +50,7 @@ where
             .map_err(|e| Error::ProcessSocksRequest("read domain", e))?;
         // Remove the null byte
         domain.pop();
-        Bytes::from(domain)
+        domain
     } else {
         Ipv4Addr::from(ip).to_string().into()
     };
@@ -63,7 +66,16 @@ pub async fn write_response<W>(writer: &mut W, response: u8) -> Result<(), Error
 where
     W: AsyncWrite + Unpin,
 {
-    let buf = [0x00, response, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+    let buf = [
+        magics::VER_REP_4,
+        response,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+    ];
     writer
         .write_all(&buf)
         .await
@@ -82,30 +94,27 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_request_ip() {
-        crate::tests::setup_logging();
         let mut reader = Cursor::new([0x01, 0x00, 0x50, 0x7f, 0x00, 0x00, 0x01, 0x61, 0x00]);
         let (command, rhost, rport) = read_request(&mut reader).await.unwrap();
         assert_eq!(command, 0x01);
-        assert_eq!(rhost, "127.0.0.1");
+        assert_eq!(rhost, "127.0.0.1".as_bytes());
         assert_eq!(rport, 0x50);
     }
 
     #[tokio::test]
     async fn test_read_request_domain() {
-        crate::tests::setup_logging();
         let mut reader = Cursor::new([
             0x01, 0x00, 0x50, 0x00, 0x00, 0x00, 0x01, 0x61, 0x00, 0x77, 0x77, 0x77, 0x2e, 0x65,
             0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2e, 0x63, 0x6f, 0x6d, 0x00,
         ]);
         let (command, rhost, rport) = read_request(&mut reader).await.unwrap();
         assert_eq!(command, 0x01);
-        assert_eq!(rhost, "www.example.com");
+        assert_eq!(rhost, "www.example.com".as_bytes());
         assert_eq!(rport, 0x50);
     }
 
     #[tokio::test]
     async fn test_write_response() {
-        crate::tests::setup_logging();
         let mut writer = Cursor::new(Vec::new());
         write_response(&mut writer, 0x5a).await.unwrap();
         assert_eq!(
