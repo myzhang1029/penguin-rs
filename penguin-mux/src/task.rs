@@ -25,7 +25,11 @@ use nohash_hasher::IntMap;
 #[cfg(not(feature = "nohash"))]
 use std::collections::HashMap as IntMap;
 
-/// Internal type used for spawning the multiplexor task
+/// Data owned by the multiplexor task.
+///
+/// The user should typically call `TaskData::spawn` to spawn the multiplexor task in
+/// the background using the `tokio` runtime (requires the `rt-tokio` feature),
+/// or [`TaskData::into_task`] to get a future to be spawned using the executor of their choice.
 #[derive(Debug)]
 pub struct TaskData<S: WebSocket> {
     pub(crate) task: Task<S>,
@@ -38,9 +42,15 @@ pub struct TaskData<S: WebSocket> {
 }
 
 impl<S: WebSocket> TaskData<S> {
-    /// Create the multiplexor task.
+    /// Convert the `TaskData` into the multiplexor task.
+    ///
+    /// The user should typically pass this future to the `spawn` function of the executor
+    /// that the program is using so that the task runs in the background.
+    ///
+    /// # Errors
+    /// The future returns the last error encountered by the multiplexor task, if any.
     #[inline]
-    pub async fn create_task(self) -> Result<()> {
+    pub async fn into_task(self) -> Result<()> {
         let Self {
             task,
             tx_frame_rx,
@@ -59,7 +69,7 @@ impl<S: WebSocket> TaskData<S> {
             .map_or_else(|| "0".to_string(), tokio::task::Id::to_string);
         let future = async move {
             debug!("spawning mux task {} from {parent_id}", tokio::task::id());
-            let result = self.create_task().await;
+            let result = self.into_task().await;
             if let Err(e) = &result {
                 tracing::error!("Multiplexor task exited with error: {e}");
             }
@@ -141,7 +151,7 @@ impl<S: WebSocket> Task<S> {
             }
         };
         self.wind_down(should_drain_frame_rx, &mut tx_frame_rx)
-            .await?;
+            .await;
         res
     }
 
@@ -283,7 +293,7 @@ impl<S: WebSocket> Task<S> {
         &self,
         should_drain_frame_rx: bool,
         tx_frame_rx: &mut mpsc::UnboundedReceiver<FinalizedFrame>,
-    ) -> Result<()> {
+    ) {
         debug!("closing all connections");
         // We first make sure the streams can no longer send
         for stream_data in self.flows.write().values() {
@@ -328,13 +338,12 @@ impl<S: WebSocket> Task<S> {
         // we dispatch the remaining frames in the `Source` to our streams.
         while let Some(Ok(msg)) = poll_fn(|cx| self.ws.lock().poll_next_unpin(cx)).await {
             debug!("processing remaining message after closure {msg:?}");
-            self.process_message(msg, true).await?;
+            self.process_message(msg, true).await.ok();
         }
         // Finally, we send EOF to all established streams.
         self.flows.write().drain().for_each(|(flow_id, slot)| {
             self.close_port_local(slot, flow_id, true);
         });
-        Ok(())
     }
 
     /// Process an incoming message
