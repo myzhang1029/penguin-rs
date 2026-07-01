@@ -3,6 +3,7 @@
 
 use super::{FatalError, HandlerResources, common::request_tcp_channel};
 use bytes::Bytes;
+use futures_util::TryFutureExt;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream, UdpSocket, lookup_host};
@@ -155,7 +156,7 @@ pub(super) async fn handle_tproxy_tcp(
         // This way, the backpressure is propagated to the TCP listener.
         // Not being able to accept a TCP connection is a fatal error.
         let (tcp_stream, _) = listener.accept().await.map_err(FatalError::ClientIo)?;
-        let (mut tcp_stream, orig_dst) =
+        let (tcp_stream, orig_dst) =
             get_tcp_orig_addr(tcp_stream, domain).map_err(FatalError::ClientIo)?;
         let Some(orig_dst) = orig_dst else {
             warn!("Could not get original destination address; dropping connection");
@@ -163,18 +164,18 @@ pub(super) async fn handle_tproxy_tcp(
         };
         debug!("Transparent TCP connection to {orig_dst}");
         // `expect`: the main loop should either hold the sender or send a channel
-        let mut channel = request_tcp_channel(
+        let channel = request_tcp_channel(
             stream_command_tx_permit,
             Bytes::from(orig_dst.ip().to_string()),
             orig_dst.port(),
         )
         .await
         .expect("Main loop dropped sender before sending a channel (this is a bug)");
-        tokio::spawn(async move {
-            if let Err(error) = tokio::io::copy_bidirectional(&mut channel, &mut tcp_stream).await {
-                warn!("TCP forwarder failed: {error}");
-            }
-        });
+        tokio::spawn(
+            channel
+                .into_copy_bidirectional(tcp_stream)
+                .inspect_err(|e| warn!("TCP forwarder failed: {e}")),
+        );
     }
 }
 
