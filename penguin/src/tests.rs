@@ -1,10 +1,9 @@
 #![allow(unused_imports)]
 
 use crate::{arg, config};
-use crate::{
-    arg::{Remote, ServerUrl},
-    tls::make_tls_identity,
-};
+#[cfg(feature = "client")]
+use crate::arg::{Remote, ServerUrl};
+use crate::tls::make_tls_identity;
 use ::http::HeaderValue;
 use penguin_mux::timing::OptionalDuration;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -1066,6 +1065,7 @@ async fn test_socks5_udp_v4v4() {
 }
 
 #[tokio::test]
+#[cfg(all(feature = "client", feature = "server"))]
 #[cfg(feature = "tests-udp")]
 async fn test_socks5_udp_v4v6() {
     static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
@@ -1171,6 +1171,7 @@ async fn test_socks5_udp_v4v6() {
 }
 
 #[tokio::test]
+#[cfg(all(feature = "client", feature = "server"))]
 #[cfg(feature = "tests-udp")]
 async fn test_socks5_udp_v6v6() {
     static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
@@ -1273,6 +1274,7 @@ async fn test_socks5_udp_v6v6() {
 }
 
 #[tokio::test]
+#[cfg(all(feature = "client", feature = "server"))]
 #[cfg(feature = "tests-udp")]
 async fn test_socks5_udp_client_prune() {
     static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
@@ -1487,6 +1489,7 @@ async fn test_socks4_works() {
     client_task.abort();
 }
 
+#[cfg(all(feature = "client", feature = "server"))]
 #[cfg(all(feature = "tests-real-internet4", feature = "tests-udp"))]
 #[tokio::test]
 async fn test_it_works_dns_v4() {
@@ -1531,6 +1534,7 @@ async fn test_it_works_dns_v4() {
     client_task.abort();
 }
 
+#[cfg(all(feature = "client", feature = "server"))]
 #[cfg(all(feature = "tests-real-internet6", feature = "tests-udp"))]
 #[tokio::test]
 async fn test_it_works_dns_v6() {

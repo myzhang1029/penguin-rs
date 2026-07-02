@@ -20,7 +20,7 @@ path = "src/lib.rs"
 
 [dependencies]
 arc-swap = "1"
-async-acceptor = { version = "0.1", path = "../async-acceptor" }
+async-acceptor = { version = "0.1", path = "../async-acceptor", optional = true }
 base64 = { version = "0.22", optional = true }
 bytes = "^1, >=1.11.1"
 clap = { version = "4", features = ["cargo", "derive", "string"] }
@@ -39,7 +39,7 @@ log = { version = "0.4", optional = true }
 nohash-hasher = { version = "0.2", optional = true }
 parking_lot = "0.12"
 penguin-mux = { version = "0.8", path = "../penguin-mux", features = ["tungstenite"] }
-penguin-socks = { version = "0.1", path = "../penguin-socks" }
+penguin-socks = { version = "0.1", path = "../penguin-socks", optional = true }
 rand = "0.10"
 rustls = { version = "^0.23, >=0.23.18", features = ["brotli", "logging", "std", "tls12"], default-features = false, optional = true }
 rustls-native-certs = { version = "0.8", optional = true }
@@ -106,7 +106,7 @@ nohash = ["dep:nohash-hasher", "penguin-mux/nohash"]
 # `penguin` binary -- server
 server = ["dep:base64", "dep:sha1", "dep:http-body-util", "dep:hyper", "dep:hyper-util"]
 # `penguin` binary -- client
-client = ["tokio/io-std"]
+client = ["dep:async-acceptor", "dep:penguin-socks"]
 # `penguin` binary
 # Building both is the default and recommended in most cases.
 # Only building the client or server binary is supported on a best-effort basis.
