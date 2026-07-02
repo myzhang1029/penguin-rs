@@ -9,7 +9,7 @@ mod io_with_timeout;
 mod service;
 mod websocket;
 
-use self::service::State;
+pub use self::service::State;
 use crate::arg::ServerArgs;
 #[cfg(unix)]
 use crate::tls::reload_tls_identity;
@@ -198,7 +198,7 @@ fn arg_to_sockaddrs(arg: &ServerArgs) -> Result<Vec<SocketAddr>, Error> {
 
 /// Runs a listener.
 #[tracing::instrument(skip_all, level = "debug", fields(tls = %tls_config.is_some()))]
-async fn run_listener(
+pub async fn run_listener(
     listener: TcpListener,
     tls_config: Option<crate::tls::TlsIdentity>,
     state: State,
@@ -226,7 +226,11 @@ async fn run_listener(
 }
 
 /// Serves a single connection from a client with TLS, ignoring errors.
-async fn serve_connection_tls(stream: TcpStream, state: State, tls_config: Arc<TlsIdentityInner>) {
+pub async fn serve_connection_tls(
+    stream: TcpStream,
+    state: State,
+    tls_config: Arc<TlsIdentityInner>,
+) {
     let tls_timeout = state.tls_timeout;
     #[cfg(feature = "__rustls")]
     let stream_future = tokio_rustls::TlsAcceptor::from(tls_config).accept(stream);
@@ -250,7 +254,7 @@ async fn serve_connection_tls(stream: TcpStream, state: State, tls_config: Arc<T
 
 /// Serves a single connection from a client, ignoring errors.
 #[tracing::instrument(skip_all, level = "debug")]
-async fn serve_connection(stream: MaybeTlsStream<TcpStream>, state: State) {
+pub async fn serve_connection(stream: MaybeTlsStream<TcpStream>, state: State) {
     let stream_with_timeout = io_with_timeout::IoWithTimeout::new(stream, state.http_timeout);
     let hyper_io = TokioIo::new(stream_with_timeout);
     let exec = auto::Builder::new(TokioExecutor::new());

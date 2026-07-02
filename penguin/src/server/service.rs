@@ -56,7 +56,7 @@ fn make_sec_websocket_accept(key: &HeaderValue) -> HeaderValue {
 /// Possible errors when processing requests
 /// None of these should ever actually happen.
 #[derive(Debug, Error)]
-pub(super) enum Error {
+pub enum Error {
     #[error(transparent)]
     Http(#[from] http::Error),
     #[error(transparent)]
@@ -67,7 +67,7 @@ pub(super) enum Error {
 
 /// Required state for each request.
 #[derive(Clone, Debug)]
-pub(super) struct State {
+pub struct State {
     /// Backend URL
     backend: Option<&'static BackendUrl>,
     /// Websocket PSK
