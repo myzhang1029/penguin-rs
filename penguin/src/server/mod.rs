@@ -92,9 +92,10 @@ pub async fn server_main(
 ) -> Result<(), Error> {
     if args.backend.is_none() {
         // No backend at all, set to `false` here to catch bugs
-        http2_support
-            .set(false)
-            .expect("`http2_support` already set (this is a bug)");
+        assert!(
+            !http2_support.get_or_init(|| false),
+            "bad pre-set `http2_support`"
+        );
     }
     let state = State::new(
         args.backend.as_ref(),
