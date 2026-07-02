@@ -41,6 +41,7 @@ parking_lot = "0.12"
 penguin-mux = { version = "0.8", path = "../penguin-mux", features = ["tungstenite"] }
 penguin-socks = { version = "0.1", path = "../penguin-socks", optional = true }
 rand = "0.10"
+rcgen = { version = "0.14", features = ["pem"], default-features = false, optional = true }
 rustls = { version = "^0.23, >=0.23.18", features = ["brotli", "logging", "std", "tls12"], default-features = false, optional = true }
 rustls-native-certs = { version = "0.8", optional = true }
 rustls-pemfile = { version = "2", optional = true }
@@ -58,8 +59,6 @@ webpki-roots = { version = "1", optional = true }
 
 [dev-dependencies]
 divan = "0.1"
-rand = "0.10"
-rcgen = { version = "0.14", features = ["crypto", "pem"], default-features = false }
 tempfile = "3"
 # Hack; https://stackoverflow.com/q/73015087
 rusty-penguin = { path = ".", default-features = false, features = ["__dev-dependencies"] }
@@ -79,11 +78,11 @@ rustls-native-roots = ["dep:rustls-native-certs", "__rustls"]
 __rustls = ["dep:rustls", "dep:rustls-pemfile", "dep:tokio-rustls", "dep:hyper-rustls"]
 nativetls = ["dep:tokio-native-tls", "dep:hyper-tls"]
 # Use ring or aws-lc-rs
-ring = ["instant-acme?/ring", "rustls/ring"]
-aws-lc-rs = ["instant-acme?/aws-lc-rs", "rustls/aws-lc-rs", "rustls/prefer-post-quantum", "rustls-webpki/aws-lc-rs"]
+ring = ["instant-acme?/ring", "rcgen?/ring", "rustls/ring"]
+aws-lc-rs = ["instant-acme?/aws-lc-rs", "rcgen?/aws_lc_rs", "rustls/aws-lc-rs", "rustls/prefer-post-quantum", "rustls-webpki/aws-lc-rs"]
 
 # Dependencies for testing
-__dev-dependencies = ["tracing-subscriber/env-filter", "tokio/process"]
+__dev-dependencies = ["dep:rcgen", "tracing-subscriber/env-filter", "tokio/process"]
 # Allow some tests that require real internet connection
 tests-real-internet4 = []
 tests-real-internet6 = []
