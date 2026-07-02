@@ -12,6 +12,8 @@ bytes = "^1, >=1.11.1"
 libfuzzer-sys = "0.4"
 rusty-penguin = { version = "0.8", path = "../penguin" }
 penguin-mux = { version = "0.8", path = "../penguin-mux", features = ["tungstenite"] }
+rcgen = { version = "0.14", features = ["crypto", "pem"], default-features = false }
+tempfile = "3"
 tokio = { version = "^1, >=1.23.1", features = ["io-util"] }
 tokio-tungstenite = { version = "0.29", default-features = false }
 
@@ -32,6 +34,20 @@ bench = false
 [[bin]]
 name = "remote_parser"
 path = "fuzz_targets/remote_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "http_server_input"
+path = "fuzz_targets/http_server_input.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "http_server_input_tls"
+path = "fuzz_targets/http_server_input_tls.rs"
 test = false
 doc = false
 bench = false
