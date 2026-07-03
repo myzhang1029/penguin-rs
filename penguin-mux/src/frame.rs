@@ -223,7 +223,7 @@ impl<'data> Frame<'data> {
         let payload = Payload::Connect(ConnectPayload {
             rwnd,
             target_port,
-            target_host: CowBytes::Borrowed(target_host),
+            target_host: CowBytes::Temporary(target_host),
         });
         Self { id, payload }
     }
@@ -274,7 +274,7 @@ impl<'data> Frame<'data> {
     pub const fn new_push(id: u32, data: &'data [u8]) -> Self {
         Self {
             id,
-            payload: Payload::Push(CowBytes::Borrowed(data)),
+            payload: Payload::Push(CowBytes::Temporary(data)),
         }
     }
 
@@ -284,7 +284,7 @@ impl<'data> Frame<'data> {
     pub const fn new_push_owned(id: u32, data: Bytes) -> Self {
         Self {
             id,
-            payload: Payload::Push(CowBytes::Owned(data)),
+            payload: Payload::Push(CowBytes::Static(data)),
         }
     }
 
@@ -306,7 +306,7 @@ impl<'data> Frame<'data> {
         let payload = Payload::Bind(BindPayload {
             bind_type,
             target_port,
-            target_host: CowBytes::Borrowed(target_host),
+            target_host: CowBytes::Temporary(target_host),
         });
         Self { id, payload }
     }
@@ -327,9 +327,9 @@ impl<'data> Frame<'data> {
         data: &'data [u8],
     ) -> Self {
         let payload = Payload::Datagram(DatagramPayload {
-            target_host: CowBytes::Borrowed(target_host),
+            target_host: CowBytes::Temporary(target_host),
             target_port,
-            data: CowBytes::Borrowed(data),
+            data: CowBytes::Temporary(data),
         });
         Self { id, payload }
     }
@@ -344,9 +344,9 @@ impl<'data> Frame<'data> {
         data: Bytes,
     ) -> Self {
         let payload = Payload::Datagram(DatagramPayload {
-            target_host: CowBytes::Owned(target_host),
+            target_host: CowBytes::Static(target_host),
             target_port,
-            data: CowBytes::Owned(data),
+            data: CowBytes::Static(data),
         });
         Self { id, payload }
     }
@@ -437,7 +437,7 @@ impl TryFrom<Bytes> for Frame<'_> {
 
     #[inline]
     fn try_from(data: Bytes) -> Result<Self, Self::Error> {
-        Frame::try_from(CowBytes::Owned(data))
+        Frame::try_from(CowBytes::Static(data))
     }
 }
 
@@ -446,7 +446,7 @@ impl<'data> TryFrom<&'data [u8]> for Frame<'data> {
 
     #[inline]
     fn try_from(data: &'data [u8]) -> Result<Self, Self::Error> {
-        Frame::try_from(CowBytes::Borrowed(data))
+        Frame::try_from(CowBytes::Temporary(data))
     }
 }
 
@@ -615,9 +615,9 @@ mod tests {
         let frame = Frame {
             id: 5678,
             payload: Payload::Datagram(DatagramPayload {
-                target_host: CowBytes::Borrowed(&[1, 2, 3, 4]),
+                target_host: CowBytes::Temporary(&[1, 2, 3, 4]),
                 target_port: 1234,
-                data: CowBytes::Borrowed(&[1, 2, 3, 4]),
+                data: CowBytes::Temporary(&[1, 2, 3, 4]),
             }),
         };
         let bytes = Bytes::from(&frame);

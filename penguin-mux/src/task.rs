@@ -410,8 +410,13 @@ impl<S: WebSocket> Task<S> {
                 target_port,
             }) => {
                 // In this case, `target_host` is always owned already
-                self.con_recv_new_stream(flow_id, target_host.into_owned(), target_port, peer_rwnd)
-                    .await?;
+                self.con_recv_new_stream(
+                    flow_id,
+                    target_host.into_static(),
+                    target_port,
+                    peer_rwnd,
+                )
+                .await?;
             }
             Payload::Acknowledge(payload) => {
                 // Three cases:
@@ -484,7 +489,7 @@ impl<S: WebSocket> Task<S> {
                     .flows
                     .read()
                     .get(&flow_id)
-                    .and_then(|slot| slot.dispatch(data.into_owned()));
+                    .and_then(|slot| slot.dispatch(data.into_static()));
                 // This part is refactored out so that we don't have a deadlock
                 match result {
                     Some(Ok(())) => (),
@@ -538,9 +543,9 @@ impl<S: WebSocket> Task<S> {
                 // It is UDP, after all.
                 let datagram = Datagram {
                     flow_id,
-                    target_host: payload.target_host.into_owned(),
+                    target_host: payload.target_host.into_static(),
                     target_port: payload.target_port,
-                    data: payload.data.into_owned(),
+                    data: payload.data.into_static(),
                 };
                 if let Err(e) = self.datagram_tx.try_send(datagram) {
                     match e {
