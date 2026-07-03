@@ -73,6 +73,27 @@ impl Default for CowBytes<'_> {
     }
 }
 
+macro_rules! impl_fn_by_delegate {
+    ($fn:ident, $self_ty:ty, $ret:ty, $field:ident$(,)? $($arg_name:ident: $arg_ty:ty),*) => {
+        #[inline]
+        fn $fn(
+            self: $self_ty,
+            $($arg_name: $arg_ty),*
+        ) -> $ret {
+            match self {
+                Self::Borrowed(data) => data.$fn($($arg_name),*),
+                Self::Owned(bytes) => bytes.$fn($($arg_name),*),
+            }
+        }
+    };
+}
+
+impl Buf for CowBytes<'_> {
+    impl_fn_by_delegate!(advance, &mut Self, (), self, cnt: usize);
+    impl_fn_by_delegate!(remaining, &Self, usize, self);
+    impl_fn_by_delegate!(chunk, &Self, &[u8], self);
+}
+
 impl CowBytes<'_> {
     /// Convert the `CowBytes` into an owned `Bytes` instance.
     #[inline]
@@ -89,6 +110,37 @@ impl CowBytes<'_> {
         match self {
             Self::Borrowed(data) => data.len(),
             Self::Owned(bytes) => bytes.len(),
+        }
+    }
+
+    /// Splits the bytes into two at the given index.
+    ///
+    /// See [`Bytes::split_to`] for more details. This is an `O(1)` operation.
+    #[inline]
+    pub fn split_to(&mut self, at: usize) -> Self {
+        match self {
+            Self::Borrowed(data) => {
+                let (left, right) = data.split_at(at);
+                *self = Self::Borrowed(right);
+                Self::Borrowed(left)
+            }
+            Self::Owned(bytes) => Self::Owned(bytes.split_to(at)),
+        }
+    }
+
+    /// Splits the bytes into two at the given index.
+    ///
+    /// See [`Bytes::split_off`] for more details. This is an `O(1)` operation.
+    #[inline]
+    #[must_use = "consider CowBytes::advance if you don't need the other half"]
+    pub fn split_off(&mut self, at: usize) -> Self {
+        match self {
+            Self::Borrowed(data) => {
+                let (left, right) = data.split_at(at);
+                *self = Self::Borrowed(left);
+                Self::Borrowed(right)
+            }
+            Self::Owned(bytes) => Self::Owned(bytes.split_off(at)),
         }
     }
 }
@@ -433,11 +485,11 @@ macro_rules! check_remaining {
     };
 }
 
-impl TryFrom<Bytes> for Frame<'static> {
+impl<'data> TryFrom<CowBytes<'data>> for Frame<'data> {
     type Error = Error;
 
     #[inline]
-    fn try_from(mut data: Bytes) -> Result<Self, Self::Error> {
+    fn try_from(mut data: CowBytes<'data>) -> Result<Self, Self::Error> {
         check_remaining!(data, size_of::<u8>() + size_of::<u32>());
         let firstbyte = data.get_u8();
         let ver = firstbyte >> 4;
@@ -455,7 +507,7 @@ impl TryFrom<Bytes> for Frame<'static> {
                 Payload::Connect(ConnectPayload {
                     rwnd,
                     target_port,
-                    target_host: CowBytes::Owned(target_host),
+                    target_host,
                 })
             }
             OpCode::Acknowledge => {
@@ -465,7 +517,7 @@ impl TryFrom<Bytes> for Frame<'static> {
             }
             OpCode::Reset => Payload::Reset,
             OpCode::Finish => Payload::Finish,
-            OpCode::Push => Payload::Push(CowBytes::Owned(data)),
+            OpCode::Push => Payload::Push(data),
             OpCode::Bind => {
                 check_remaining!(data, size_of::<u8>() + size_of::<u16>());
                 let bind_type = BindType::try_from(data.get_u8())?;
@@ -473,7 +525,7 @@ impl TryFrom<Bytes> for Frame<'static> {
                 Payload::Bind(BindPayload {
                     bind_type,
                     target_port,
-                    target_host: CowBytes::Owned(data),
+                    target_host: data,
                 })
             }
             OpCode::Datagram => {
@@ -484,12 +536,30 @@ impl TryFrom<Bytes> for Frame<'static> {
                 let target_host = data.split_to(host_len);
                 Payload::Datagram(DatagramPayload {
                     target_port,
-                    target_host: CowBytes::Owned(target_host),
-                    data: CowBytes::Owned(data),
+                    target_host,
+                    data,
                 })
             }
         };
         Ok(Self { id, payload })
+    }
+}
+
+impl TryFrom<Bytes> for Frame<'_> {
+    type Error = Error;
+
+    #[inline]
+    fn try_from(data: Bytes) -> Result<Self, Self::Error> {
+        Frame::try_from(CowBytes::Owned(data))
+    }
+}
+
+impl<'data> TryFrom<&'data [u8]> for Frame<'data> {
+    type Error = Error;
+
+    #[inline]
+    fn try_from(data: &'data [u8]) -> Result<Self, Self::Error> {
+        Frame::try_from(CowBytes::Borrowed(data))
     }
 }
 
@@ -676,8 +746,10 @@ mod tests {
             }
         );
         let bytes = Bytes::from(&frame);
-        let decoded = Frame::try_from(bytes).unwrap();
-        assert_eq!(frame, decoded);
+        let decoded1 = Frame::try_from(&*bytes).unwrap();
+        assert_eq!(frame, decoded1);
+        let decoded2 = Frame::try_from(bytes).unwrap();
+        assert_eq!(frame, decoded2);
 
         let frame = Frame {
             id: 5678,
@@ -688,8 +760,10 @@ mod tests {
             }),
         };
         let bytes = Bytes::from(&frame);
-        let decoded = Frame::try_from(bytes).unwrap();
-        assert_eq!(frame, decoded);
+        let decoded1 = Frame::try_from(&*bytes).unwrap();
+        assert_eq!(frame, decoded1);
+        let decoded2 = Frame::try_from(bytes).unwrap();
+        assert_eq!(frame, decoded2);
     }
 
     // These tests are to make sure that the binary representation of the
