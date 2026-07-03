@@ -9,8 +9,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use crate::{Dupe, proto_version};
+use crate::proto_version;
 use bytes::{Buf, BufMut, Bytes};
+use cow_bytes::CowBytes;
 use std::{fmt::Debug, mem::size_of};
 use thiserror::Error;
 
@@ -29,120 +30,6 @@ pub enum Error {
     /// Invalid type code in a `Bind` frame
     #[error("invalid `Bind` type `{0}`")]
     InvalidBindType(u8),
-}
-
-/// A special version of `std::borrow::Cow` using `Bytes`
-#[derive(Clone, Debug, Eq, derive_more::From)]
-pub(crate) enum CowBytes<'data> {
-    /// A borrowed slice of bytes
-    Borrowed(&'data [u8]),
-    /// An owned `Bytes` instance
-    Owned(Bytes),
-}
-
-impl PartialEq for CowBytes<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        self.as_ref() == other.as_ref()
-    }
-}
-
-impl Dupe for CowBytes<'_> {
-    #[inline]
-    fn dupe(&self) -> Self {
-        match self {
-            Self::Borrowed(data) => Self::Borrowed(data),
-            Self::Owned(bytes) => Self::Owned(bytes.dupe()),
-        }
-    }
-}
-
-impl AsRef<[u8]> for CowBytes<'_> {
-    #[inline]
-    fn as_ref(&self) -> &[u8] {
-        match self {
-            Self::Borrowed(data) => data,
-            Self::Owned(bytes) => bytes.as_ref(),
-        }
-    }
-}
-
-impl Default for CowBytes<'_> {
-    #[inline]
-    fn default() -> Self {
-        Self::Borrowed(&[])
-    }
-}
-
-macro_rules! impl_fn_by_delegate {
-    ($fn:ident, $self_ty:ty, $ret:ty, $field:ident$(,)? $($arg_name:ident: $arg_ty:ty),*) => {
-        #[inline]
-        fn $fn(
-            self: $self_ty,
-            $($arg_name: $arg_ty),*
-        ) -> $ret {
-            match self {
-                Self::Borrowed(data) => data.$fn($($arg_name),*),
-                Self::Owned(bytes) => bytes.$fn($($arg_name),*),
-            }
-        }
-    };
-}
-
-impl Buf for CowBytes<'_> {
-    impl_fn_by_delegate!(advance, &mut Self, (), self, cnt: usize);
-    impl_fn_by_delegate!(remaining, &Self, usize, self);
-    impl_fn_by_delegate!(chunk, &Self, &[u8], self);
-}
-
-impl CowBytes<'_> {
-    /// Convert the `CowBytes` into an owned `Bytes` instance.
-    #[inline]
-    pub fn into_owned(self) -> Bytes {
-        match self {
-            Self::Borrowed(data) => Bytes::from(data.to_vec()),
-            Self::Owned(bytes) => bytes,
-        }
-    }
-
-    /// Get the length of the data in the `CowBytes`.
-    #[inline]
-    pub const fn len(&self) -> usize {
-        match self {
-            Self::Borrowed(data) => data.len(),
-            Self::Owned(bytes) => bytes.len(),
-        }
-    }
-
-    /// Splits the bytes into two at the given index.
-    ///
-    /// See [`Bytes::split_to`] for more details. This is an `O(1)` operation.
-    #[inline]
-    pub fn split_to(&mut self, at: usize) -> Self {
-        match self {
-            Self::Borrowed(data) => {
-                let (left, right) = data.split_at(at);
-                *self = Self::Borrowed(right);
-                Self::Borrowed(left)
-            }
-            Self::Owned(bytes) => Self::Owned(bytes.split_to(at)),
-        }
-    }
-
-    /// Splits the bytes into two at the given index.
-    ///
-    /// See [`Bytes::split_off`] for more details. This is an `O(1)` operation.
-    #[inline]
-    #[must_use = "consider CowBytes::advance if you don't need the other half"]
-    pub fn split_off(&mut self, at: usize) -> Self {
-        match self {
-            Self::Borrowed(data) => {
-                let (left, right) = data.split_at(at);
-                *self = Self::Borrowed(left);
-                Self::Borrowed(right)
-            }
-            Self::Owned(bytes) => Self::Owned(bytes.split_off(at)),
-        }
-    }
 }
 
 /// Type codes for a `Bind` operation
@@ -281,9 +168,9 @@ impl Payload<'_> {
     }
 }
 
-impl<'data> From<&Payload<'data>> for OpCode {
+impl From<&Payload<'_>> for OpCode {
     #[inline]
-    fn from(payload: &Payload<'data>) -> Self {
+    fn from(payload: &Payload<'_>) -> Self {
         match payload {
             Payload::Connect { .. } => Self::Connect,
             Payload::Acknowledge(_) => Self::Acknowledge,
@@ -703,32 +590,6 @@ impl TryFrom<FinalizedFrame> for Frame<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_cow_bytes_eq() {
-        crate::tests::setup_logging();
-        let cow1 = CowBytes::Borrowed(b"1234");
-        let cow2 = CowBytes::Owned(Bytes::from_static(b"1234"));
-        assert_eq!(cow1, cow2);
-        let cow3 = CowBytes::Borrowed(b"12345");
-        assert_ne!(cow1, cow3);
-    }
-
-    #[test]
-    fn test_cow_bytes() {
-        crate::tests::setup_logging();
-        let cow1 = CowBytes::Borrowed(&[1, 2, 3]);
-        let cow2 = cow1.dupe();
-        assert_eq!(cow1, cow2);
-        assert_eq!(cow1.len(), 3);
-        assert_eq!(cow2.len(), 3);
-        let cow3 = cow1.into_owned();
-        assert_eq!(cow3.as_ref(), cow2.as_ref());
-        let bytes = Bytes::from(vec![4, 5, 6]);
-        let cow4 = CowBytes::Owned(bytes.clone());
-        assert_eq!(cow4.as_ref(), bytes.as_ref());
-        assert_eq!(cow4.len(), 3);
-    }
 
     #[test]
     fn test_frames() {

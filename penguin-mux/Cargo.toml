@@ -21,6 +21,7 @@ path = "src/lib.rs"
 
 [dependencies]
 bytes = "^1, >=1.11.1"
+cow-bytes = { path = "../cow-bytes" }
 derive_more = { version = "2", features = ["deref", "from", "into"] }
 futures-util = { version = "0.3", default-features = false }
 http = "1"

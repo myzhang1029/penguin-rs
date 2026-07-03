@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["penguin-mux", "penguin", "async-acceptor", "penguin-socks"]
+members = ["penguin-mux", "penguin", "async-acceptor", "penguin-socks", "cow-bytes"]
 exclude = ["fuzz"]
 
 [profile.release]
