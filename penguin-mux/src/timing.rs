@@ -63,7 +63,7 @@ impl Backoff {
 
 /// An optional duration: an empty duration means that there should be no timeout,
 /// or that an interval should be infinite.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, derive_more::Into, PartialEq, Eq)]
 pub struct OptionalDuration(Option<Duration>);
 
 impl OptionalDuration {
@@ -140,12 +140,6 @@ impl From<Duration> for OptionalDuration {
         } else {
             Self(Some(duration))
         }
-    }
-}
-
-impl From<OptionalDuration> for Option<Duration> {
-    fn from(opt_dur: OptionalDuration) -> Self {
-        opt_dur.0
     }
 }
 
@@ -232,9 +226,13 @@ mod tests {
         let std_dur = Duration::from_secs(0);
         let opt_dur = OptionalDuration::from(std_dur);
         assert_eq!(opt_dur, OptionalDuration::NONE);
+        let std_opt_dur: Option<Duration> = opt_dur.into();
+        assert_eq!(std_opt_dur, None);
         let std_dur = Duration::from_secs(10);
         let opt_dur = OptionalDuration::from(std_dur);
         assert_eq!(opt_dur, OptionalDuration::from_secs(10));
+        let std_opt_dur: Option<Duration> = opt_dur.into();
+        assert_eq!(std_opt_dur, Some(Duration::from_secs(10)));
         let dur = OptionalDuration::from_secs(10);
         assert_eq!(dur.to_string(), "10s");
         let dur_none = OptionalDuration::NONE;

@@ -1287,6 +1287,7 @@ name = "penguin-mux"
 version = "0.8.4"
 dependencies = [
  "bytes",
+ "derive_more",
  "futures-util",
  "http",
  "loom",
@@ -1637,6 +1638,7 @@ dependencies = [
  "penguin-mux",
  "penguin-socks",
  "rand 0.10.2",
+ "rcgen",
  "rustls",
  "rustls-native-certs",
  "rustls-pemfile",

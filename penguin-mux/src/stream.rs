@@ -106,7 +106,7 @@ impl AsyncWrite for MuxStream {
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         ready!(self.poll_obtain_write_permission(cx))?;
-        let frame = Frame::new_push(self.flow_id, buf).finalize();
+        let frame = Frame::new_push(self.flow_id, buf).into();
         self.frame_tx.send(frame).or(Err(BrokenPipe))?;
         trace!("sent a frame");
         Poll::Ready(Ok(buf.len()))
@@ -184,7 +184,7 @@ impl MuxStream {
             // Send an `Acknowledge` frame
             trace!("sending `Acknowledge` of {new} frames");
             self.frame_tx
-                .send(Frame::new_acknowledge(self.flow_id, new).finalize())
+                .send(Frame::new_acknowledge(self.flow_id, new).into())
                 .ok();
             // If the previous line fails, the task has exited.
             // In this case, we don't care about the `Acknowledge` frame and the
@@ -252,7 +252,7 @@ impl MuxStream {
             return Ok(());
         }
         self.frame_tx
-            .send(Frame::new_finish(self.flow_id).finalize())
+            .send(Frame::new_finish(self.flow_id).into())
             .or(Err(BrokenPipe))?;
         Ok(())
     }
@@ -391,7 +391,7 @@ where
                         break Poll::Ready(Ok(written_amt));
                     }
                     ready!(self.us.poll_obtain_write_permission(cx))?;
-                    let frame = Frame::new_push(self.us.flow_id, new_buf).finalize();
+                    let frame = Frame::new_push(self.us.flow_id, new_buf).into();
                     self.us.frame_tx.send(frame).or(Err(BrokenPipe))?;
                     let processed = new_buf.len();
                     Pin::new(&mut self.other).consume(processed);

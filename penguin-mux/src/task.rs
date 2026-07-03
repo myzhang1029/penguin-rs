@@ -399,9 +399,7 @@ impl<S: WebSocket> Task<S> {
         } = frame;
         tracing::Span::current().record("flow_id", format_args!("{flow_id:08x}"));
         let send_rst = || {
-            self.tx_frame_tx
-                .send(Frame::new_reset(flow_id).finalize())
-                .ok()
+            self.tx_frame_tx.send(Frame::new_reset(flow_id).into()).ok()
             // Error only happens if the `frame_tx` channel is closed, at which point
             // we don't care about sending a `Reset` frame anymore
         };
@@ -530,9 +528,7 @@ impl<S: WebSocket> Task<S> {
                     // Let the user decide what to reply using `BindRequest::reply`
                 } else {
                     info!("Received `Bind` request but configured to not accept such requests");
-                    self.tx_frame_tx
-                        .send(Frame::new_reset(flow_id).finalize())
-                        .ok();
+                    self.tx_frame_tx.send(Frame::new_reset(flow_id).into()).ok();
                 }
             }
             Payload::Datagram(payload) => {
@@ -611,9 +607,7 @@ impl<S: WebSocket> Task<S> {
             let mut streams = self.flows.write();
             if streams.contains_key(&flow_id) {
                 debug!("resetting `Connect` with in-use flow_id");
-                self.tx_frame_tx
-                    .send(Frame::new_reset(flow_id).finalize())
-                    .ok();
+                self.tx_frame_tx.send(Frame::new_reset(flow_id).into()).ok();
                 // On the other side, `process_frame` will pass the `Reset` frame to
                 // `close_port`, which takes the port out of the map and inform `Multiplexor::new_stream_channel`
                 // to retry.
@@ -635,7 +629,7 @@ impl<S: WebSocket> Task<S> {
         // so that the stream is `Established` when the user uses it.
         trace!("sending `Acknowledge`");
         self.tx_frame_tx
-            .send(Frame::new_acknowledge(flow_id, self.rwnd).finalize())
+            .send(Frame::new_acknowledge(flow_id, self.rwnd).into())
             .or(Err(Error::Closed))?;
         // At the con_recv side, we use `con_recv_stream_tx` to send the new stream to the
         // user.
@@ -690,9 +684,7 @@ impl<S: WebSocket> Task<S> {
                 if !finish_sent && !inhibit_rst {
                     // If the user did not call `poll_shutdown`, we send a `Reset` frame
                     debug!("stream dropped without `poll_shutdown`");
-                    self.tx_frame_tx
-                        .send(Frame::new_reset(flow_id).finalize())
-                        .ok();
+                    self.tx_frame_tx.send(Frame::new_reset(flow_id).into()).ok();
                     // Ignore the error because the other end will EOF everything anyway
                 }
                 // No need to send an empty `Bytes`. Dropping `sender`

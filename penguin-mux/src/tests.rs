@@ -669,7 +669,7 @@ async fn test_close_port_behaviour() {
     };
     client
         .send(Message::Binary(
-            frame::Frame::new_acknowledge(flow_id, 10).finalize().into(),
+            frame::Frame::new_acknowledge(flow_id, 10).into(),
         ))
         .await
         .unwrap();
@@ -689,9 +689,7 @@ async fn test_close_port_behaviour() {
     // Send a `Connect` frame to conn2
     client
         .send(Message::Binary(
-            frame::Frame::new_connect(&[], 0, 41352u32, 20)
-                .finalize()
-                .into(),
+            frame::Frame::new_connect(&[], 0, 41352u32, 20).into(),
         ))
         .await
         .unwrap();

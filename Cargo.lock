@@ -1599,6 +1599,7 @@ name = "penguin-mux"
 version = "0.8.4"
 dependencies = [
  "bytes",
+ "derive_more",
  "divan",
  "futures-util",
  "http",

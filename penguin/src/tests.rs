@@ -1,9 +1,9 @@
 #![allow(unused_imports)]
 
-use crate::{arg, config};
 #[cfg(feature = "client")]
 use crate::arg::{Remote, ServerUrl};
 use crate::tls::make_tls_identity;
+use crate::{arg, config};
 use ::http::HeaderValue;
 use penguin_mux::timing::OptionalDuration;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};

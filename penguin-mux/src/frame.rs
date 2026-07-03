@@ -32,9 +32,11 @@ pub enum Error {
 }
 
 /// A special version of `std::borrow::Cow` using `Bytes`
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, derive_more::From)]
 pub(crate) enum CowBytes<'data> {
+    /// A borrowed slice of bytes
     Borrowed(&'data [u8]),
+    /// An owned `Bytes` instance
     Owned(Bytes),
 }
 
@@ -43,8 +45,6 @@ impl PartialEq for CowBytes<'_> {
         self.as_ref() == other.as_ref()
     }
 }
-
-impl Eq for CowBytes<'_> {}
 
 impl Dupe for CowBytes<'_> {
     #[inline]
@@ -74,6 +74,7 @@ impl Default for CowBytes<'_> {
 }
 
 impl CowBytes<'_> {
+    /// Convert the `CowBytes` into an owned `Bytes` instance.
     #[inline]
     pub fn into_owned(self) -> Bytes {
         match self {
@@ -82,6 +83,7 @@ impl CowBytes<'_> {
         }
     }
 
+    /// Get the length of the data in the `CowBytes`.
     #[inline]
     pub const fn len(&self) -> usize {
         match self {
@@ -92,7 +94,7 @@ impl CowBytes<'_> {
 }
 
 /// Type codes for a `Bind` operation
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum BindType {
     /// Stream binding
@@ -114,7 +116,7 @@ impl TryFrom<u8> for BindType {
 }
 
 /// Operation codes
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum OpCode {
     /// Initiating stream connection by the client
@@ -409,13 +411,6 @@ impl<'data> Frame<'data> {
         });
         Self { id, payload }
     }
-
-    /// Copy the frame into a [`FinalizedFrame`]
-    #[must_use]
-    #[inline]
-    pub(crate) fn finalize(&self) -> FinalizedFrame {
-        FinalizedFrame(Bytes::from(self))
-    }
 }
 
 macro_rules! check_remaining {
@@ -498,8 +493,22 @@ impl TryFrom<Bytes> for Frame<'static> {
     }
 }
 
+impl From<Frame<'_>> for Vec<u8> {
+    /// Encode a [`Frame`] to bytes.
+    ///
+    /// Note that this operation involves allocating and copying data.
+    /// See the implementation of `<Vec<u8> as From<&Frame<'_>>>`.
+    #[inline]
+    fn from(frame: Frame<'_>) -> Self {
+        Self::from(&frame)
+    }
+}
+
 impl From<&Frame<'_>> for Vec<u8> {
-    /// Encode a [`Frame`] to bytes
+    /// Encode a [`Frame`] to bytes.
+    ///
+    /// This operation does not consume the frame because it involves copying
+    /// data from the frame's payload into a new `Vec<u8>`.
     ///
     /// # Panics
     /// Panics when the frame has [`OpCode::Datagram`]
@@ -559,15 +568,36 @@ impl From<&Frame<'_>> for Vec<u8> {
     }
 }
 
+impl From<Frame<'_>> for Bytes {
+    /// Encode a [`Frame`] to bytes.
+    ///
+    /// Note that this operation involves allocating and copying data.
+    /// See the implementation of `<Vec<u8> as From<&Frame<'_>>>`.
+    #[inline]
+    fn from(frame: Frame<'_>) -> Self {
+        Self::from(&frame)
+    }
+}
+
 impl From<&Frame<'_>> for Bytes {
+    /// Encode a [`Frame`] to bytes.
+    ///
+    /// Note that this operation involves allocating and copying data.
+    /// See the implementation of `<Vec<u8> as From<&Frame<'_>>>`.
     #[inline]
     fn from(frame: &Frame<'_>) -> Self {
         Self::from(Vec::from(frame))
     }
 }
 
-/// An owned and finalized frame for single-copy operations
-#[derive(Clone, PartialEq, Eq)]
+/// An owned and finalized frame for single-copy operations.
+/// This struct is used over `Bytes` mostly so that the `Debug` implementation
+/// would be more useful.
+#[derive(Clone, derive_more::From, derive_more::Into, PartialEq, Eq)]
+// Do not implement from Bytes, so that we can hopefully make sure that
+// all `FinalizedFrame` instances are valid frames.
+#[from(Frame<'_>, &Frame<'_>)]
+#[into(Bytes)]
 pub(crate) struct FinalizedFrame(Bytes);
 
 impl FinalizedFrame {
@@ -592,32 +622,11 @@ impl Debug for FinalizedFrame {
     }
 }
 
-impl<'data> From<&Frame<'data>> for FinalizedFrame {
-    #[inline]
-    fn from(frame: &Frame<'data>) -> Self {
-        Self(Bytes::from(frame))
-    }
-}
-
 impl TryFrom<FinalizedFrame> for Frame<'_> {
     type Error = Error;
     #[inline]
     fn try_from(frame: FinalizedFrame) -> Result<Self, Self::Error> {
         Frame::try_from(frame.0)
-    }
-}
-
-impl From<Bytes> for FinalizedFrame {
-    #[inline]
-    fn from(bytes: Bytes) -> Self {
-        Self(bytes)
-    }
-}
-
-impl From<FinalizedFrame> for Bytes {
-    #[inline]
-    fn from(frame: FinalizedFrame) -> Self {
-        frame.0
     }
 }
 
@@ -830,7 +839,7 @@ mod tests {
         crate::tests::setup_logging();
         let long_hostname = vec![0; 256];
         let frame = Frame::new_datagram(2134, &long_hostname, 1234, &[1, 2, 3, 4]);
-        let _ = frame.finalize();
+        let _ = FinalizedFrame::from(frame);
     }
 
     #[test]
@@ -839,7 +848,9 @@ mod tests {
         crate::tests::setup_logging();
         let frame = Frame::new_connect(&[0x01, 0x02, 0x03], 5678, 1234, 128);
         let payload_len = frame.payload.len();
-        let finalized = frame.finalize();
+        let finalized = FinalizedFrame::from(&frame);
+        assert_eq!(Bytes::from(&frame), Bytes::from(finalized.clone()));
+        assert_eq!(Bytes::from(&frame), finalized.0);
         assert_eq!(finalized.0.len(), COMMON_OVERHEAD_SIZE + payload_len);
         assert_eq!(finalized.opcode().unwrap(), OpCode::Connect);
         let decoded = Frame::try_from(finalized).unwrap();
@@ -847,7 +858,9 @@ mod tests {
 
         let frame = Frame::new_datagram(2134, &[1, 2, 3, 4], 1234, &[1, 2, 3, 4]);
         let payload_len = frame.payload.len();
-        let finalized = frame.finalize();
+        let finalized = FinalizedFrame::from(&frame);
+        assert_eq!(Bytes::from(&frame), Bytes::from(finalized.clone()));
+        assert_eq!(Bytes::from(&frame), finalized.0);
         assert_eq!(finalized.0.len(), COMMON_OVERHEAD_SIZE + payload_len);
         assert_eq!(finalized.opcode().unwrap(), OpCode::Datagram);
         let decoded = Frame::try_from(finalized).unwrap();

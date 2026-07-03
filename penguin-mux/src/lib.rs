@@ -242,7 +242,7 @@ impl Multiplexor {
             };
             trace!("sending `Connect`");
             self.tx_frame_tx
-                .send(Frame::new_connect(host, port, flow_id, self.rwnd).finalize())
+                .send(Frame::new_connect(host, port, flow_id, self.rwnd).into())
                 .or(Err(Error::Closed))?;
             trace!("sending stream to user");
             let stream = stream_rx
@@ -313,9 +313,7 @@ impl Multiplexor {
             datagram.target_port,
             datagram.data,
         );
-        self.tx_frame_tx
-            .send(frame.finalize())
-            .or(Err(Error::Closed))?;
+        self.tx_frame_tx.send(frame.into()).or(Err(Error::Closed))?;
         Ok(())
     }
 
@@ -344,7 +342,7 @@ impl Multiplexor {
             streams.insert(flow_id, FlowSlot::BindRequested(result_tx));
             flow_id
         };
-        let bnd_frame = Frame::new_bind(flow_id, bind_type, host, port).finalize();
+        let bnd_frame = Frame::new_bind(flow_id, bind_type, host, port).into();
         self.tx_frame_tx.send(bnd_frame).or(Err(Error::Closed))?;
         let result = result_rx.await.or(Err(Error::Closed))?;
         Ok(result)
@@ -546,10 +544,9 @@ impl BindRequest<'_> {
     pub fn reply(&self, accepted: bool) -> Result<()> {
         if accepted {
             self.tx_frame_tx
-                .send(Frame::new_finish(self.flow_id).finalize())
+                .send(Frame::new_finish(self.flow_id).into())
         } else {
-            self.tx_frame_tx
-                .send(Frame::new_reset(self.flow_id).finalize())
+            self.tx_frame_tx.send(Frame::new_reset(self.flow_id).into())
         }
         .or(Err(Error::Closed))
     }
