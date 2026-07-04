@@ -16,32 +16,41 @@ use tokio::io::{self as tio, AsyncRead, AsyncWrite, ReadBuf};
 
 /// A psudo-listener that repeatedly produces an `AsyncRead + AsyncWrite`
 /// using a factory function.
-#[derive(derive_more::Debug)]
-pub struct ReusableListener<R, W> {
+#[derive(Debug)]
+pub struct ReusableListener<F> {
     in_use: Arc<AtomicBool>,
     end_waker: Arc<AtomicWaker>,
-    #[debug(skip)]
-    factory: Box<dyn (Fn() -> (R, W)) + Send + Sync>,
+    factory: F,
 }
 
-impl ReusableListener<tio::Stdin, tio::Stdout> {
+impl<F> ReusableListener<F> {
+    /// Create a new `ReusableListener` with the given factory function.
+    #[must_use]
+    #[inline]
+    pub fn new(factory: F) -> Self {
+        Self {
+            in_use: Arc::new(AtomicBool::new(false)),
+            end_waker: Arc::new(AtomicWaker::new()),
+            factory,
+        }
+    }
+}
+
+impl ReusableListener<fn() -> (tio::Stdin, tio::Stdout)> {
     /// Produce a `ReusableListener` with [`tokio::io::stdin`] and [`tokio::io::stdout`]
     /// as the underlying streams.
     #[must_use]
     #[inline]
     pub fn new_stdio() -> Self {
-        Self {
-            in_use: Arc::new(AtomicBool::new(false)),
-            end_waker: Arc::new(AtomicWaker::new()),
-            factory: Box::new(|| (tio::stdin(), tio::stdout())),
-        }
+        Self::new(|| (tio::stdin(), tio::stdout()))
     }
 }
 
-impl<R, W> AsyncAcceptable for ReusableListener<R, W>
+impl<R, W, F> AsyncAcceptable for ReusableListener<F>
 where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send + 'static,
+    F: Fn() -> (R, W),
 {
     type Stream = ReusableListenerStream<R, W>;
 
@@ -77,7 +86,7 @@ macro_rules! impl_fn_by_pin_delegate {
             mut self: Pin<&mut Self>,
             cx: &mut Context<'_>,
             $($arg_name: $arg_ty),*
-        ) -> std::task::Poll<$ret> {
+        ) -> Poll<$ret> {
             Pin::new(&mut self.$field).$fn(cx, $($arg_name),*)
         }
     };
@@ -91,7 +100,7 @@ impl<R: Unpin, W: AsyncWrite + Unpin> AsyncWrite for ReusableListenerStream<R, W
     impl_fn_by_pin_delegate! { poll_write, io::Result<usize>, writer, buf: &[u8] }
     impl_fn_by_pin_delegate! { poll_flush, io::Result<()>, writer }
     impl_fn_by_pin_delegate! { poll_shutdown, io::Result<()>, writer }
-    impl_fn_by_pin_delegate! { poll_write_vectored, io::Result<usize>, writer, bufs: &[std::io::IoSlice<'_>] }
+    impl_fn_by_pin_delegate! { poll_write_vectored, io::Result<usize>, writer, bufs: &[io::IoSlice<'_>] }
     fn is_write_vectored(&self) -> bool {
         self.writer.is_write_vectored()
     }
@@ -115,7 +124,7 @@ mod tests {
         let listener = ReusableListener {
             in_use: Arc::new(AtomicBool::new(false)),
             end_waker: Arc::new(AtomicWaker::new()),
-            factory: Box::new(|| duplex(64)),
+            factory: || duplex(64),
         };
         let mut accepted_stream = listener.accept().await.expect("Failed to accept stream");
         let mut test_cx = Context::from_waker(futures_util::task::noop_waker_ref());

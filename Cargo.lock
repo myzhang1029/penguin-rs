@@ -150,7 +150,6 @@ name = "async-acceptor"
 version = "0.1.0"
 dependencies = [
  "async-acceptor",
- "derive_more",
  "futures-util",
  "tokio",
 ]
