@@ -8,12 +8,15 @@
 #![no_std]
 
 extern crate alloc;
+#[cfg(feature = "std")]
+extern crate std;
 
 mod macros;
 
 use alloc::borrow::Borrow;
+use alloc::vec::Vec;
 use bytes::{Buf, Bytes};
-use core::{fmt, ops::Deref};
+use core::{cmp::Ordering, fmt, ops::Deref};
 use macros::{impl_by_as_ref, impl_by_delegate};
 
 /// A special version of `std::borrow::Cow` whose owned variant is [`Bytes`].
@@ -34,17 +37,36 @@ impl_by_as_ref! {
     impl PartialEq {
         #[inline] fn eq(&Self, [other]) -> bool
     }
+    impl PartialOrd {
+        #[inline] fn partial_cmp(&Self, [other]) -> Option<Ordering>
+    }
+    impl PartialEq<[u8]> {
+        #[inline] fn eq(&Self, other: &[u8]) -> bool
+    }
+    impl PartialOrd<[u8]> {
+        #[inline] fn partial_cmp(&Self, other: &[u8]) -> Option<Ordering>
+    }
     impl Borrow<[u8]> {
         #[inline] fn borrow(&Self) -> &[u8]
     }
     impl core::hash::Hash {
         #[inline] fn hash<H: core::hash::Hasher>(&Self, state: &mut H)
     }
+    #[cfg(feature = "std")]
+    impl std::io::Read {
+        #[inline] fn read(&mut Self, buf: &mut [u8]) -> std::io::Result<usize>
+    }
 }
 
 impl_by_delegate! {
     impl PartialEq<Bytes> {
         #[inline] fn eq(&Self, other: &Bytes) -> bool
+    }
+    impl PartialOrd<Bytes> {
+        #[inline] fn partial_cmp(&Self, other: &Bytes) -> Option<Ordering>
+    }
+    impl PartialEq<Vec<u8>> {
+        #[inline] fn eq(&Self, other: &Vec<u8>) -> bool
     }
     impl AsRef<[u8]> {
         #[inline] fn as_ref(&Self) -> &[u8]
@@ -259,5 +281,36 @@ mod tests {
         let a: CowBytes<'static> = (&b"xyz"[..]).into();
         let b: CowBytes<'static> = Bytes::from_static(b"xyz").into();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_lower_upper_hex() {
+        let cow = CowBytes::Temporary(b"\x01\x02\xab\xcd");
+        assert_eq!(alloc::format!("{cow:x}"), "0102abcd");
+        assert_eq!(alloc::format!("{cow:X}"), "0102ABCD");
+        let cow_static = CowBytes::Static(Bytes::from_static(b"\x0f\x10\x99\xff"));
+        assert_eq!(alloc::format!("{cow_static:x}"), "0f1099ff");
+        assert_eq!(alloc::format!("{cow_static:X}"), "0F1099FF");
+    }
+
+    #[test]
+    fn test_truncate() {
+        let mut cow = CowBytes::Temporary(b"abcdef");
+        cow.truncate(4);
+        assert_eq!(cow.as_ref(), b"abcd");
+        let mut cow_static = CowBytes::Static(Bytes::from_static(b"123456"));
+        cow_static.truncate(3);
+        assert_eq!(cow_static.as_ref(), b"123");
+    }
+
+    #[test]
+    fn test_ord() {
+        let cow1 = CowBytes::Temporary(b"abc");
+        let cow2 = CowBytes::Temporary(b"abd");
+        assert!(cow1 < cow2);
+        let cow3 = CowBytes::Static(Bytes::from_static(b"abc"));
+        let vec4 = b"abcd".to_vec();
+        assert!(cow3 < *vec4);
+        assert!(cow3 < *vec4.as_slice());
     }
 }
