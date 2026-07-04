@@ -8,7 +8,7 @@ readme = "README.md"
 repository = "https://github.com/myzhang1029/penguin-rs"
 license = "Apache-2.0 OR GPL-3.0-or-later"
 keywords = ["cli", "web", "websocket"]
-categories = ["asynchronous", "command-line-utilities", "network-programming"]
+categories = ["asynchronous", "command-line-utilities", "network-programming", "web-programming::websocket"]
 
 [[bin]]
 name = "penguin"

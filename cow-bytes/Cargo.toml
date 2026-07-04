@@ -8,7 +8,7 @@ readme = "README.md"
 repository = "https://github.com/myzhang1029/penguin-rs"
 license = "Apache-2.0 OR GPL-3.0-or-later"
 keywords = ["buffers", "zero-copy", "io"]
-categories = ["network-programming", "data-structures"]
+categories = ["network-programming", "data-structures", "no-std"]
 
 
 [dependencies]

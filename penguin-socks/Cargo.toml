@@ -8,7 +8,7 @@ readme = "README.md"
 repository = "https://github.com/myzhang1029/penguin-rs"
 license = "Apache-2.0 OR GPL-3.0-or-later"
 keywords = ["async", "socks", "socks4", "socks5"]
-categories = ["network-programming", "protocol-implementation"]
+categories = ["network-programming"]
 
 [dependencies]
 bytes = "^1, >=1.11.1"
