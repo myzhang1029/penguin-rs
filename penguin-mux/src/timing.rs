@@ -76,6 +76,16 @@ impl OptionalDuration {
         Self(Some(Duration::from_secs(duration)))
     }
 
+    /// Whether the duration is finite
+    pub const fn is_some(&self) -> bool {
+        self.0.is_some()
+    }
+
+    /// Whether the duration is indefinite
+    pub const fn is_none(&self) -> bool {
+        self.0.is_none()
+    }
+
     /// Use the optional duration to timeout a future
     ///
     /// # Errors

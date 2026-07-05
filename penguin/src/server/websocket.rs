@@ -30,7 +30,7 @@ pub async fn handle_websocket(
     } else {
         0
     });
-    let mux = Multiplexor::new(ws_stream, Some(options), None);
+    let mux = Multiplexor::new_with_opt(ws_stream, options, None);
     let mut udp_clients: HashMap<u32, mpsc::Sender<Datagram>, IntHasher> =
         HashMap::with_hasher(IntHasher::default());
     debug!("WebSocket connection established");

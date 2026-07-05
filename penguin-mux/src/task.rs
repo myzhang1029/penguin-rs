@@ -10,9 +10,9 @@ use crate::{BindRequest, Datagram, Error, EstablishedStreamData, FlowSlot, MuxSt
 #[cfg(feature = "tokio-rt")]
 use alloc::{boxed::Box, string::ToString};
 use bytes::Bytes;
-use futures_util::FutureExt;
 use core::future::poll_fn;
 use core::task::{Context, Poll, ready};
+use futures_util::FutureExt;
 use hashbrown::HashMap;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, watch};

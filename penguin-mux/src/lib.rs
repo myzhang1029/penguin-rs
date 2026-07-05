@@ -107,6 +107,15 @@ pub enum Error {
 pub type Result<T> = core::result::Result<T, Error>;
 
 /// A multiplexor over a `WebSocket` connection.
+///
+/// The normal way to use this struct is with [`Multiplexor::new`], which will
+/// spawn a background task. For finer control over the task and options, see
+/// [`Multiplexor::new_detailed`]. The former requires a `tokio` runtime, while
+/// the latter works in any async runtime.
+///
+/// For builtin keepalive to work, the `tokio-time` feature must be enabled.
+/// Otherwise, the user can periodically call [`Multiplexor::send_datagram`] to
+/// an arbitrary host and port to emulate keepalive.
 #[derive(derive_more::Debug)]
 pub struct Multiplexor<R = SmallRng> {
     /// Open stream channels: `flow_id` -> `FlowSlot`
@@ -136,6 +145,19 @@ pub struct Multiplexor<R = SmallRng> {
 impl Multiplexor<SmallRng> {
     /// Create a new `Multiplexor`.
     ///
+    /// See [`Multiplexor::new_with_opt`] for more details.
+    #[inline]
+    #[cfg(all(feature = "tokio-rt", feature = "std"))]
+    pub fn new<S: WebSocket>(ws: S) -> Self {
+        let rng = SmallRng::from_rng(&mut rand::rng());
+        let (mux, taskdata) =
+            Self::new_detailed::<_, std::time::Instant>(ws, config::Options::default(), rng);
+        taskdata.spawn(None);
+        mux
+    }
+
+    /// Create a new `Multiplexor` with custom options.
+    ///
     /// The random number generator will be [`SmallRng`] seeded from the system's random number generator.
     ///
     /// # Arguments
@@ -143,37 +165,21 @@ impl Multiplexor<SmallRng> {
     /// * `ws`: The `WebSocket` connection to multiplex over.
     ///
     /// * `options`: Multiplexor options. See [`config::Options`] for more details.
-    ///   If `None`, the default options will be used.
     ///
     /// * `task_joinset`: A [`tokio::task::JoinSet`] to spawn the multiplexor task into so
     ///   that the caller can notice if the task exits. If it is `None`, the
     ///   task will be spawned by `tokio::spawn` and errors will be logged.
     #[inline]
     #[cfg(all(feature = "tokio-rt", feature = "std"))]
-    pub fn new<S: WebSocket>(
+    pub fn new_with_opt<S: WebSocket>(
         ws: S,
-        options: Option<config::Options>,
+        options: config::Options,
         task_joinset: Option<&mut tokio::task::JoinSet<Result<()>>>,
     ) -> Self {
-        let (mux, taskdata) =
-            Self::new_from_seeder::<_, std::time::Instant, _>(ws, options, &mut rand::rng());
+        let rng = SmallRng::from_rng(&mut rand::rng());
+        let (mux, taskdata) = Self::new_detailed::<_, std::time::Instant>(ws, options, rng);
         taskdata.spawn(task_joinset);
         mux
-    }
-}
-
-impl<R: Rng + SeedableRng + Send> Multiplexor<R> {
-    /// Create a new `Multiplexor`, without starting the task.
-    ///
-    /// See [`Multiplexor::new_detailed`].
-    #[inline]
-    pub fn new_from_seeder<S: WebSocket, T: TimestampProvider, SR: Rng>(
-        ws: S,
-        options: Option<config::Options>,
-        seeder: &mut SR,
-    ) -> (Self, TaskData<S, T>) {
-        let rng = R::from_rng(seeder);
-        Self::new_detailed::<S, T>(ws, options, rng)
     }
 }
 
@@ -191,10 +197,15 @@ impl<R: Rng + Send> Multiplexor<R> {
     #[inline]
     pub fn new_detailed<S: WebSocket, T: TimestampProvider>(
         ws: S,
-        options: Option<config::Options>,
+        options: config::Options,
         rng: R,
     ) -> (Self, TaskData<S, T>) {
-        let options = options.unwrap_or_default();
+        #[cfg(not(feature = "tokio-time"))]
+        if options.keepalive_interval.is_some() || options.keepalive_timeout.is_some() {
+            warn!(
+                "`keepalive_interval` and `keepalive_timeout` are ignored because the `tokio-time` feature is not enabled"
+            );
+        }
         let (datagram_tx, datagram_rx) = mpsc::channel(options.datagram_buffer_size);
         let (con_recv_stream_tx, con_recv_stream_rx) = mpsc::channel(options.stream_buffer_size);
         // This one is unbounded because the protocol provides its own flow control for `Push` frames

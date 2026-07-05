@@ -393,7 +393,7 @@ async fn on_connected(
     let options = penguin_mux::config::Options::new()
         .keepalive_interval(args.keepalive)
         .keepalive_timeout(args.keepalive_timeout);
-    let mux = Multiplexor::new(ws_stream, Some(options), Some(&mut mux_task_joinset));
+    let mux = Multiplexor::new_with_opt(ws_stream, options, Some(&mut mux_task_joinset));
     info!("Connected to server");
     // If we have a failed stream request, try it first
     if let Some(sender) = failed_stream_request.take() {

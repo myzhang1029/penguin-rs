@@ -15,7 +15,7 @@ fuzz_target!(|data: &[u8]| {
         let data = data.to_vec();
         let (alice, mut eve) = tokio::io::duplex(1024);
         let ws = WebSocketStream::from_raw_socket(alice, Role::Server, None).await;
-        let mux = Multiplexor::new(ws, None, None);
+        let mux = Multiplexor::new(ws);
         eve.write_all(&data).await.unwrap();
         let flow_id = <Vec<u8> as AsRef<[u8]>>::as_ref(&data)
             .try_get_u32()
