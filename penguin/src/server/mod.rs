@@ -16,7 +16,6 @@ use crate::tls::reload_tls_identity;
 use crate::tls::{MaybeTlsStream, TlsIdentity, TlsIdentityInner, make_tls_identity};
 use hyper_util::rt::{TokioIo, tokio::TokioExecutor};
 use hyper_util::server::conn::auto;
-use penguin_mux::Dupe;
 use std::net::SocketAddr;
 use std::sync::{Arc, OnceLock};
 use thiserror::Error;
@@ -69,7 +68,12 @@ async fn check_start_tls(args: &'static ServerArgs) -> Result<Option<TlsIdentity
         trace!("Enabling TLS");
         let tls_config = make_tls_identity(tls_cert, tls_key, args.tls_ca.as_deref()).await?;
         #[cfg(unix)]
-        register_signal_handler(tls_config.dupe(), tls_cert, tls_key, args.tls_ca.as_deref())?;
+        register_signal_handler(
+            tls_config.clone(), // cheap
+            tls_cert,
+            tls_key,
+            args.tls_ca.as_deref(),
+        )?;
         return Ok(Some(tls_config));
     }
     // `clap` ensures that tls-key or tls-domain are mutually exclusive.
@@ -119,8 +123,8 @@ pub async fn server_main(
             info!("Listening on wss://{actual_addr}/ws");
             listening_tasks.spawn(run_listener(
                 listener,
-                Some(tls_config.dupe()),
-                state.dupe(),
+                Some(tls_config.clone()), // cheap
+                state.clone(),            // cheap
             ));
         }
     } else {
@@ -128,7 +132,7 @@ pub async fn server_main(
             let listener = TcpListener::bind(sockaddr).await?;
             let actual_addr = listener.local_addr()?;
             info!("Listening on ws://{actual_addr}/ws");
-            listening_tasks.spawn(run_listener(listener, None, state.dupe()));
+            listening_tasks.spawn(run_listener(listener, None, state.clone())); // cheap
         }
     }
     loop {
@@ -204,7 +208,7 @@ pub async fn run_listener(
     state: State,
 ) {
     loop {
-        let new_state = state.dupe();
+        let new_state = state.clone(); // cheap
         let (stream, peer) = match listener.accept().await {
             Ok((stream, peer)) => (stream, peer),
             Err(err) => {

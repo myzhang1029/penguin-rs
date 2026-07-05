@@ -6,7 +6,7 @@ use super::FatalError;
 use crate::client::HandlerResources;
 use crate::config;
 use bytes::Bytes;
-use penguin_mux::{Datagram, Dupe};
+use penguin_mux::Datagram;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::UdpSocket;
@@ -40,7 +40,11 @@ pub(super) async fn handle_udp(
             .map_err(FatalError::ClientIo)?;
         buf.truncate(len);
         trace!("received {len} bytes from {addr}");
-        let client_id = hr.add_udp_client(addr, socket.dupe(), false);
+        let client_id = hr.add_udp_client(
+            addr,
+            socket.clone(), // cheap
+            false,
+        );
         let frame = Datagram {
             target_host: Bytes::from(rhost),
             target_port: rport,
@@ -101,7 +105,7 @@ mod tests {
         let hr = HandlerResources {
             datagram_tx,
             stream_command_tx,
-            udp_client_map: udp_client_map.dupe(),
+            udp_client_map: udp_client_map.clone(),
         };
         let forwarding_task =
             tokio::spawn(async move { handle_udp(LHOST, 14196, RHOST, 255, &hr).await });

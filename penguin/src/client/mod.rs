@@ -15,7 +15,7 @@ use bytes::Bytes;
 use futures_util::TryFutureExt;
 use parking_lot::Mutex;
 use penguin_mux::timing::{Backoff, OptionalDuration};
-use penguin_mux::{Datagram, Dupe, IntKey, Multiplexor, MuxStream};
+use penguin_mux::{Datagram, IntKey, Multiplexor, MuxStream};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, OnceLock};
@@ -111,7 +111,7 @@ impl HandlerResources {
             Self {
                 stream_command_tx,
                 datagram_tx,
-                udp_client_map: udp_client_map.dupe(),
+                udp_client_map: udp_client_map.clone(), // cheap
             },
             stream_command_rx,
             datagram_rx,
@@ -217,7 +217,11 @@ impl ClientIdMaps {
             } = &mut *lock_self.lock();
             let entry = client_id_map.get_mut(&client_id)?;
             entry.refresh();
-            (entry.socket.dupe(), entry.peer_addr, entry.socks5)
+            (
+                entry.socket.clone(), // cheap
+                entry.peer_addr,
+                entry.socks5,
+            )
         };
         let send_result = if socks5 {
             handle_remote::socks::send_udp_relay_response(&socket, peer_addr, data).await
@@ -243,18 +247,6 @@ pub struct ClientIdMapEntry {
     pub socks5: bool,
     /// When this entry should be removed
     pub expires: time::Instant,
-}
-
-impl Dupe for ClientIdMapEntry {
-    fn dupe(&self) -> Self {
-        Self {
-            peer_addr: self.peer_addr,
-            our_addr: self.our_addr,
-            socket: self.socket.dupe(),
-            socks5: self.socks5,
-            expires: self.expires,
-        }
-    }
 }
 
 impl ClientIdMapEntry {
@@ -507,12 +499,12 @@ mod tests {
         let stub_socket = Arc::new(UdpSocket::bind(("127.0.0.1", 0)).await.unwrap());
         let client_id = hr.add_udp_client(
             (IpAddr::from([127, 0, 0, 1]), 1234).into(),
-            stub_socket.dupe(),
+            stub_socket.clone(),
             false,
         );
         let client_id2 = hr.add_udp_client(
             (IpAddr::from([127, 0, 0, 1]), 1234).into(),
-            stub_socket.dupe(),
+            stub_socket.clone(),
             false,
         );
         // We should get the same client ID for the same client address and socket
@@ -527,7 +519,7 @@ mod tests {
         assert_ne!(client_id, client_id2);
         let client_id2 = hr.add_udp_client(
             (IpAddr::from([127, 0, 0, 1]), 1235).into(),
-            stub_socket.dupe(),
+            stub_socket.clone(),
             false,
         );
         // We should get a different client ID for a different client address
@@ -547,7 +539,7 @@ mod tests {
         let stub_socket = Arc::new(UdpSocket::bind(("127.0.0.1", 0)).await.unwrap());
         let _ = hr.add_udp_client(
             (IpAddr::from([127, 0, 0, 1]), 1234).into(),
-            stub_socket.dupe(),
+            stub_socket.clone(),
             false,
         );
         tokio::time::sleep(config::UDP_PRUNE_TIMEOUT).await;

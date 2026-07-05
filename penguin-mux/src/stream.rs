@@ -423,7 +423,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Dupe, tests::setup_logging};
+    use crate::tests::setup_logging;
     use alloc::vec;
     use core::pin::pin;
     use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadBuf};
@@ -650,7 +650,7 @@ mod tests {
         assert!(matches!(rs, Poll::Pending));
 
         // Send data to the MuxStream
-        rx_frame_tx.send(TX1.dupe()).await.unwrap();
+        rx_frame_tx.send(TX1.clone()).await.unwrap();
         let size = check_side.read(&mut buf).await.unwrap();
         // Should be ready
         assert_eq!(size, TX1.len());
@@ -673,7 +673,7 @@ mod tests {
 
         // Send some partial data before we go away to check that the
         // data isn't lost in the process
-        rx_frame_tx.send(TX2.dupe()).await.unwrap();
+        rx_frame_tx.send(TX2.clone()).await.unwrap();
         drop(rx_frame_tx);
         // Check that the data is not lost
         let read = check_side.read(&mut buf).await.unwrap();

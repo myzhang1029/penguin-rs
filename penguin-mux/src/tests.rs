@@ -507,14 +507,14 @@ async fn test_contention() {
 
     let payload: Bytes = (0..(1024 * 1024)).map(|_| rand::random::<u8>()).collect();
     let len = payload.len();
-    let s_payload = payload.dupe();
+    let s_payload = payload.clone(); // cheap
 
     let mut jobs = tokio::task::JoinSet::new();
     jobs.spawn(async move {
         let mut server_jobs = tokio::task::JoinSet::new();
         for _ in 0..NUM_CONCURRENT {
             let mut stream = server_mux.accept_stream_channel().await.unwrap();
-            let s_payload = s_payload.dupe();
+            let s_payload = s_payload.clone(); // cheap
             server_jobs.spawn(async move {
                 let mut buf = vec![0; len];
                 for _ in 0..EACH_JOB_WRITES {
@@ -565,7 +565,7 @@ async fn test_with_tcpsocket_inner() {
     let all_payload: Bytes = (0..SINGLE_WRITE_LEN * ITERATIONS)
         .map(|_| rand::random::<u8>())
         .collect();
-    let mut s_payload = all_payload.dupe();
+    let mut s_payload = all_payload.clone(); // cheap
     tokio::spawn(async move {
         let tcpstream = s_socket.accept().await.unwrap().0;
         let server = WebSocketStream::from_raw_socket(tcpstream, Role::Server, None).await;

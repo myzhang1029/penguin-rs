@@ -8,7 +8,7 @@ use crate::client::StreamCommand;
 use crate::config;
 use async_acceptor::{AsyncAcceptable, AsyncAcceptableExt};
 use bytes::Bytes;
-use penguin_mux::{Datagram, Dupe};
+use penguin_mux::Datagram;
 use penguin_socks::{Error as SocksError, magics, v4, v5};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -251,7 +251,11 @@ async fn udp_relay(hr: &HandlerResources, socket: UdpSocket) -> Result<(), Error
         else {
             continue;
         };
-        let client_id = hr.add_udp_client((src, sport).into(), socket.dupe(), true);
+        let client_id = hr.add_udp_client(
+            (src, sport).into(),
+            socket.clone(), // cheap
+            true,
+        );
         let datagram_frame = Datagram {
             target_host,
             target_port,

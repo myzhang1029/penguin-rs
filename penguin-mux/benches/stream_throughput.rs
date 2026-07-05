@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use divan::{Bencher, counter::BytesCount};
-use penguin_mux::{Dupe, Multiplexor};
+use penguin_mux::Multiplexor;
 use std::sync::LazyLock;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -61,7 +61,7 @@ fn baseline_tcp(b: Bencher<'_, '_>, num_writes: usize) {
             TOKIO_RT.block_on(async {
                 let s_socket = TcpListener::bind(("::1", 0)).await.unwrap();
                 let s_addr = s_socket.local_addr().unwrap();
-                let s_payload = payload.dupe();
+                let s_payload = payload.clone(); //cheap
                 let len = payload.len();
                 tokio::spawn(async move {
                     let mut stream = s_socket.accept().await.unwrap().0;
@@ -90,7 +90,7 @@ fn baseline_tcp_bidir(b: Bencher<'_, '_>, num_writes: usize) {
             TOKIO_RT.block_on(async {
                 let s_socket = TcpListener::bind(("::1", 0)).await.unwrap();
                 let s_addr = s_socket.local_addr().unwrap();
-                let s_payload = payload.dupe();
+                let s_payload = payload.clone(); // cheap
                 let len = payload.len();
                 tokio::spawn(async move {
                     let mut stream = s_socket.accept().await.unwrap().0;
@@ -122,7 +122,7 @@ fn bench_stream_throughput(b: Bencher<'_, '_>, num_writes: usize) {
             TOKIO_RT.block_on(async {
                 let s_socket = TcpListener::bind(("::1", 0)).await.unwrap();
                 let s_addr = s_socket.local_addr().unwrap();
-                let s_payload = payload.dupe();
+                let s_payload = payload.clone(); // cheap
                 let len = payload.len();
                 tokio::spawn(async move {
                     let tcpstream = s_socket.accept().await.unwrap().0;
@@ -158,7 +158,7 @@ fn bench_stream_throughput_bidir(b: Bencher<'_, '_>, num_writes: usize) {
             TOKIO_RT.block_on(async {
                 let s_socket = TcpListener::bind(("::1", 0)).await.unwrap();
                 let s_addr = s_socket.local_addr().unwrap();
-                let s_payload = payload.dupe();
+                let s_payload = payload.clone(); // cheap
                 let len = payload.len();
                 tokio::spawn(async move {
                     let tcpstream = s_socket.accept().await.unwrap().0;
@@ -201,7 +201,7 @@ fn bench_stream_throughput_with_contention(b: Bencher<'_, '_>, num_concurrent: u
                 let mut jobs = tokio::task::JoinSet::new();
                 let s_socket = TcpListener::bind(("::1", 0)).await.unwrap();
                 let s_addr = s_socket.local_addr().unwrap();
-                let s_payload = payload.dupe();
+                let s_payload = payload.clone(); // cheap
                 let len = payload.len();
                 jobs.spawn(async move {
                     let mut server_jobs = tokio::task::JoinSet::new();
@@ -211,7 +211,7 @@ fn bench_stream_throughput_with_contention(b: Bencher<'_, '_>, num_concurrent: u
                     let mux = Multiplexor::new(server, None, None);
                     for _ in 0..num_concurrent {
                         let mut stream = mux.accept_stream_channel().await.unwrap();
-                        let s_payload = s_payload.dupe();
+                        let s_payload = s_payload.clone(); // cheap
                         server_jobs.spawn(async move {
                             let mut buf = vec![0; len];
                             for _ in 0..EACH_JOB_WRITES {

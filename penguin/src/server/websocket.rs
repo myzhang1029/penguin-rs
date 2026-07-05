@@ -6,7 +6,7 @@ use super::WebSocket;
 use super::forwarder::tcp_forwarder_on_channel;
 use super::forwarder::udp_forward_on;
 use crate::config;
-use penguin_mux::{Datagram, Dupe, Multiplexor};
+use penguin_mux::{Datagram, Multiplexor};
 use std::collections::HashMap;
 use tokio::{sync::mpsc, task::JoinSet};
 use tracing::{debug, error, trace, warn};
@@ -79,7 +79,13 @@ pub async fn handle_websocket(
                 } else {
                     let (sender, receiver) = mpsc::channel::<Datagram>(config::INCOMING_DATAGRAM_BUFFER_SIZE);
                     udp_clients.insert(flow_id, sender);
-                    jobs.spawn(udp_forward_on(datagram_frame, receiver, datagram_send_tx.dupe(), outgoing_from_v4, outgoing_from_v6));
+                    jobs.spawn(udp_forward_on(
+                        datagram_frame,
+                        receiver,
+                        datagram_send_tx.clone(), // cheap
+                        outgoing_from_v4,
+                        outgoing_from_v6
+                    ));
                 }
             }
             // Check if any of the listeners have sent a UDP datagram

@@ -25,7 +25,6 @@ cow-bytes = { path = "../cow-bytes", default-features = false }
 derive_more = { version = "2", features = ["deref", "from", "into"], default-features = false }
 futures-util = { version = "0.3", default-features = false }
 hashbrown = { version = "0.17", features = ["default-hasher"], default-features = false }
-http = { version = "1", default-features = false }
 nohash-hasher = { version = "0.2", default-features = false , optional = true }
 parking_lot = "0.12"
 rand = "0.10"
@@ -44,7 +43,7 @@ loom = { version = "0.7", features = ["checkpoint", "futures"] }
 
 [features]
 default = ["std", "tungstenite", "rt-tokio"]
-std = ["http/std"]
+std = []
 # Expect the tokio runtime to be available
 rt-tokio = ["std", "tokio/rt"]
 # use tungstenite as the WebSocket implementation

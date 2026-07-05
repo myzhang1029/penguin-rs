@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use super::Error;
-use penguin_mux::Dupe;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::CryptoProvider;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
@@ -60,7 +59,7 @@ async fn make_server_config_from_mem(
     key: PrivateKeyDer<'static>,
     client_ca_path: Option<&str>,
 ) -> Result<TlsIdentityInner, Error> {
-    let provider = get_crypto_provider().dupe();
+    let provider = get_crypto_provider().clone(); // cheap
     let config =
         ServerConfig::builder_with_provider(provider).with_safe_default_protocol_versions()?;
     let mut config = if let Some(client_ca_path) = client_ca_path {
@@ -98,7 +97,7 @@ pub async fn make_client_config(
     tls_skip_verify: bool,
     tls_alpn: Option<&[&str]>,
 ) -> Result<ClientConfig, Error> {
-    let provider = get_crypto_provider().dupe();
+    let provider = get_crypto_provider().clone(); // cheap
     #[cfg(feature = "aws-lc-rs")]
     let config = ClientConfig::builder_with_provider(provider).with_ech(grease_ech_config()?)?;
     #[cfg(all(feature = "ring", not(feature = "aws-lc-rs")))]

@@ -5,7 +5,7 @@
 use crate::arg::ClientArgs;
 use crate::tls::{MaybeTlsStream, tls_connect};
 use http::header::HeaderValue;
-use penguin_mux::{Dupe, PROTOCOL_VERSION};
+use penguin_mux::PROTOCOL_VERSION;
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, handshake::client::Request};
 use tokio_tungstenite::{WebSocketStream, client_async};
@@ -44,7 +44,7 @@ async fn handshake_inner(
     let mut tls_server_name = host;
 
     // Use a request to allow additional headers
-    let mut req: Request = args.server.0.dupe().into_client_request()?;
+    let mut req: Request = args.server.0.clone().into_client_request()?; // cheap clone
     let req_headers = req.headers_mut();
     // Add protocol version
     req_headers.insert(
@@ -53,11 +53,11 @@ async fn handshake_inner(
     );
     // Add PSK
     if let Some(ref ws_psk) = args.ws_psk {
-        req_headers.insert("x-penguin-psk", ws_psk.dupe());
+        req_headers.insert("x-penguin-psk", ws_psk.clone()); //cheap clone
     }
     // Add potentially custom hostname
     if let Some(ref hostname) = args.hostname {
-        req_headers.insert("host", hostname.dupe());
+        req_headers.insert("host", hostname.clone()); // cheap clone
         tls_server_name = hostname.to_str().map_err(super::Error::InvalidDomainName)?;
     }
     if let Some(tls_sni) = args.tls_server_name.as_deref() {
@@ -65,7 +65,7 @@ async fn handshake_inner(
     }
     // Now add custom headers
     for header in &args.header {
-        req_headers.insert(&header.name, header.value.dupe());
+        req_headers.insert(&header.name, header.value.clone()); // cheap clone
     }
 
     let tcp_stream = tokio::net::TcpStream::connect((host, port))

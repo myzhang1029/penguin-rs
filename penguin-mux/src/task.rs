@@ -6,9 +6,7 @@ use crate::frame::{ConnectPayload, FinalizedFrame, Frame, Payload};
 use crate::loom::{Arc, AtomicBool, AtomicU32, AtomicWaker, Mutex, RwLock};
 use crate::timing::{OptionalDuration, OptionalInterval};
 use crate::ws::{Message, WebSocket};
-use crate::{
-    BindRequest, Datagram, Dupe, Error, EstablishedStreamData, FlowSlot, MuxStream, Result,
-};
+use crate::{BindRequest, Datagram, Error, EstablishedStreamData, FlowSlot, MuxStream, Result};
 #[cfg(feature = "rt-tokio")]
 use alloc::{boxed::Box, string::ToString};
 use bytes::Bytes;
@@ -530,7 +528,7 @@ impl<S: WebSocket> Task<S> {
                     let request = BindRequest {
                         flow_id,
                         payload,
-                        tx_frame_tx: self.tx_frame_tx.dupe(),
+                        tx_frame_tx: self.tx_frame_tx.clone(), // cheap
                     };
                     if let Err(e) = sender.send(request).await {
                         warn!("Failed to return `Bind` request: {e}");
@@ -578,9 +576,9 @@ impl<S: WebSocket> Task<S> {
         let writer_waker = Arc::new(AtomicWaker::new());
         let stream_data = EstablishedStreamData {
             sender: Some(frame_tx),
-            finish_sent: finish_sent.dupe(),
-            psh_send_remaining: psh_send_remaining.dupe(),
-            writer_waker: writer_waker.dupe(),
+            finish_sent: finish_sent.clone(),               // cheap
+            psh_send_remaining: psh_send_remaining.clone(), // cheap
+            writer_waker: writer_waker.clone(),             // cheap
         };
         // Save the TX end of the stream so we can write to it when subsequent frames arrive
         let stream = MuxStream {
@@ -593,8 +591,8 @@ impl<S: WebSocket> Task<S> {
             psh_recvd_since: 0,
             writer_waker,
             buf: Bytes::new(),
-            frame_tx: self.tx_frame_tx.dupe(),
-            dropped_ports_tx: self.dropped_ports_tx.dupe(),
+            frame_tx: self.tx_frame_tx.clone(), // cheap
+            dropped_ports_tx: self.dropped_ports_tx.clone(), // cheap
             rwnd_threshold: self.default_rwnd_threshold.min(peer_rwnd),
         };
         (stream, stream_data)

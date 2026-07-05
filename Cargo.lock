@@ -1621,7 +1621,6 @@ dependencies = [
  "divan",
  "futures-util",
  "hashbrown",
- "http",
  "loom",
  "nohash-hasher",
  "parking_lot",

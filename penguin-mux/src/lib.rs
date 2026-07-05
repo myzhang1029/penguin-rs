@@ -17,7 +17,6 @@ extern crate std;
 pub mod config;
 #[cfg(feature = "deadlock-detection")]
 pub mod deadlock_detection;
-mod dupe;
 pub mod frame;
 mod loom;
 mod proto_version;
@@ -53,7 +52,6 @@ type IntHasher = std::collections::hash_map::RandomState;
 #[cfg(all(not(feature = "nohash"), not(feature = "std")))]
 type IntHasher = hashbrown::DefaultHashBuilder;
 
-pub use crate::dupe::Dupe;
 pub use crate::proto_version::{PROTOCOL_VERSION, PROTOCOL_VERSION_NUMBER};
 pub use crate::stream::MuxStream;
 pub use crate::task::TaskData;
@@ -184,9 +182,9 @@ impl Multiplexor {
         let flows = Arc::new(RwLock::new(HashMap::with_hasher(IntHasher::default())));
 
         let mux = Self {
-            tx_frame_tx: tx_frame_tx.dupe(),
-            flows: flows.dupe(),
-            dropped_ports_tx: dropped_ports_tx.dupe(),
+            tx_frame_tx: tx_frame_tx.clone(),           // cheap
+            flows: flows.clone(),                       // cheap
+            dropped_ports_tx: dropped_ports_tx.clone(), // cheap
             datagram_rx: Mutex::new(datagram_rx),
             con_recv_stream_rx: Mutex::new(con_recv_stream_rx),
             bnd_request_rx: bnd_request_rx.map(Mutex::new),

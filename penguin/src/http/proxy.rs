@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use http::{HeaderMap, HeaderName, HeaderValue, header};
-use penguin_mux::Dupe;
 use std::net::SocketAddr;
 
 const X_FORWARDED_FOR: HeaderName = HeaderName::from_static("x-forwarded-for");
@@ -16,7 +15,7 @@ pub fn add_headers(headers: &mut HeaderMap, client_addr: Option<SocketAddr>) {
     };
     let client_ip = client_addr.ip().to_string();
     if let Some(host) = headers.get(header::HOST) {
-        headers.append(X_FORWARDED_HOST, host.dupe());
+        headers.append(X_FORWARDED_HOST, host.clone()); // cheap
     }
     headers.append(X_FORWARDED_PROTO, HeaderValue::from_static("http"));
     add_x_forwarded_for(headers, &client_ip);

@@ -4,7 +4,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use crate::config;
-use penguin_mux::{Datagram, Dupe, MuxStream};
+use penguin_mux::{Datagram, MuxStream};
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use thiserror::Error;
@@ -124,7 +124,7 @@ pub(super) async fn udp_forward_on(
                 buf.truncate(len);
                 trace!("got UDP response from {addr}");
                 let frame = Datagram {
-                    target_host: rhost.dupe(),
+                    target_host: rhost.clone(), // cheap
                     target_port: rport,
                     flow_id,
                     data: buf.into(),

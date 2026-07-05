@@ -4,7 +4,7 @@ use self::challenge_helper::Action;
 use crate::arg::ServerArgs;
 use crate::tls::{TlsIdentity, make_tls_identity_from_pem, reload_tls_identity_from_pem};
 use instant_acme::{Account, AuthorizationStatus, Identifier, NewAccount, NewOrder, OrderStatus};
-use penguin_mux::{Dupe, timing::Backoff};
+use penguin_mux::timing::Backoff;
 use std::sync::OnceLock;
 use std::time::Duration;
 use thiserror::Error;
@@ -132,7 +132,7 @@ impl Client {
                 }
             }
         });
-        self.tls_config.dupe()
+        self.tls_config.clone() // cheap
     }
 }
 

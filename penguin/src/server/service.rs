@@ -17,7 +17,7 @@ use hyper::upgrade::OnUpgrade;
 use hyper_util::client::legacy::{Client as HyperClient, Error as HyperClientError};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::upgrade::{Parts, downcast};
-use penguin_mux::{Dupe, PROTOCOL_VERSION, timing::OptionalDuration};
+use penguin_mux::{PROTOCOL_VERSION, timing::OptionalDuration};
 use sha1::{Digest, Sha1};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::pin::Pin;
@@ -93,25 +93,6 @@ pub struct State {
     pub http_timeout: OptionalDuration,
 }
 
-impl Dupe for State {
-    fn dupe(&self) -> Self {
-        Self {
-            backend: self.backend,
-            ws_psk: self.ws_psk,
-            not_found_resp: self.not_found_resp,
-            obfs: self.obfs,
-            reverse: self.reverse,
-            outgoing_from_v4: self.outgoing_from_v4,
-            outgoing_from_v6: self.outgoing_from_v6,
-            // `hyper` client is designed to be cheaply cloned.
-            client: self.client.clone(),
-            http2_support: self.http2_support,
-            tls_timeout: self.tls_timeout,
-            http_timeout: self.http_timeout,
-        }
-    }
-}
-
 impl State {
     /// Create a new `State`
     #[expect(clippy::too_many_arguments)]
@@ -177,8 +158,9 @@ impl State {
                 let (parts, body) = req.into_parts();
                 let body = body.collect().await?.to_bytes();
                 let saved_parts = parts.clone();
-                let saved_body = body.dupe();
-                let old_req = Request::from_parts(parts, IncomingOrFullBody::new_full(body.dupe()));
+                let saved_body = body.clone(); // cheap
+                let old_req =
+                    Request::from_parts(parts, IncomingOrFullBody::new_full(body.clone())); // cheap
                 let resp = self.exec_request_inner(old_req, false).await;
                 match resp {
                     Ok(resp) => {
@@ -243,8 +225,8 @@ impl State {
 
             let uri = Uri::builder()
                 // `expect`: `BackendUrl` is validated by clap.
-                .scheme(scheme.dupe())
-                .authority(authority.dupe())
+                .scheme(scheme.clone()) // cheap
+                .authority(authority.clone()) // cheap
                 .path_and_query(new_path)
                 .build()?;
             *req.uri_mut() = uri;
@@ -371,7 +353,8 @@ impl Service<Request<IncomingOrFullBody>> for State {
         }
         // If `/ws`, handle WebSocket
         if req.uri().path() == "/ws" {
-            return Box::pin(self.dupe().ws_handler(
+            return Box::pin(self.clone().ws_handler(
+                // cheap
                 req,
                 self.reverse,
                 self.outgoing_from_v4,
@@ -379,7 +362,10 @@ impl Service<Request<IncomingOrFullBody>> for State {
             ));
         }
         // Else, proxy to backend or return 404
-        Box::pin(self.dupe().backend_or_404_handler(req))
+        Box::pin(
+            self.clone() // cheap
+                .backend_or_404_handler(req),
+        )
     }
 }
 
