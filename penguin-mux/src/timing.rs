@@ -189,6 +189,25 @@ impl From<OptionalDuration> for OptionalInterval {
     }
 }
 
+/// Something that allows us to track time.
+pub trait TimestampProvider: Copy {
+    /// Get the current time.
+    fn now() -> Self;
+    /// Compute the duration since the given timestamp.
+    fn duration_since(&self, earlier: Self) -> Duration;
+}
+
+#[cfg(feature = "std")]
+impl TimestampProvider for std::time::Instant {
+    fn now() -> Self {
+        std::time::Instant::now()
+    }
+
+    fn duration_since(&self, earlier: Self) -> Duration {
+        self.duration_since(earlier)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

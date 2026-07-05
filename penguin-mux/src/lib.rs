@@ -31,12 +31,12 @@ pub mod ws;
 use crate::frame::{BindPayload, BindType, FinalizedFrame, Frame};
 use crate::loom::{Arc, AtomicBool, AtomicU32, AtomicWaker, Mutex, Ordering, RwLock};
 use crate::task::Task;
+use crate::timing::TimestampProvider;
 use crate::ws::WebSocket;
 use alloc::boxed::Box;
 use bytes::Bytes;
 use core::future::poll_fn;
 use hashbrown::HashMap;
-use std::time::Instant;
 use thiserror::Error;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -144,24 +144,24 @@ impl Multiplexor {
     /// * `task_joinset`: A [`JoinSet`] to spawn the multiplexor task into so
     ///   that the caller can notice if the task exits. If it is `None`, the
     ///   task will be spawned by `tokio::spawn` and errors will be logged.
-    #[cfg(feature = "rt-tokio")]
+    #[cfg(all(feature = "rt-tokio", feature = "std"))]
     #[inline]
     pub fn new<S: WebSocket>(
         ws: S,
         options: Option<config::Options>,
         task_joinset: Option<&mut JoinSet<Result<()>>>,
     ) -> Self {
-        let (mux, taskdata) = Self::new_no_task(ws, options);
+        let (mux, taskdata) = Self::new_no_task::<S, std::time::Instant>(ws, options);
         taskdata.spawn(task_joinset);
         mux
     }
 
     /// Create a new `Multiplexor`, without starting the task.
-    #[tracing::instrument(skip_all, level = "debug")]
-    pub fn new_no_task<S: WebSocket>(
+    #[inline]
+    pub fn new_no_task<S: WebSocket, T: TimestampProvider>(
         ws: S,
         options: Option<config::Options>,
-    ) -> (Self, TaskData<S>) {
+    ) -> (Self, TaskData<S, T>) {
         let options = options.unwrap_or_default();
         let (datagram_tx, datagram_rx) = mpsc::channel(options.datagram_buffer_size);
         let (con_recv_stream_tx, con_recv_stream_rx) = mpsc::channel(options.stream_buffer_size);
@@ -171,7 +171,7 @@ impl Multiplexor {
         let (tx_frame_tx, tx_frame_rx) = mpsc::unbounded_channel();
         // This one cannot be bounded because it needs to be used in Drop
         let (dropped_ports_tx, dropped_ports_rx) = mpsc::unbounded_channel();
-        let (last_pong_timestamp_tx, last_pong_timestamp_rx) = watch::channel(Instant::now());
+        let (last_pong_timestamp_tx, last_pong_timestamp_rx) = watch::channel(T::now());
 
         let (bnd_request_tx, bnd_request_rx) = if options.bind_buffer_size > 0 {
             let (tx, rx) = mpsc::channel(options.bind_buffer_size);

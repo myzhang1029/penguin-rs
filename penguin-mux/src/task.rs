@@ -4,7 +4,7 @@
 
 use crate::frame::{ConnectPayload, FinalizedFrame, Frame, Payload};
 use crate::loom::{Arc, AtomicBool, AtomicU32, AtomicWaker, Mutex, RwLock};
-use crate::timing::{OptionalDuration, OptionalInterval};
+use crate::timing::{OptionalDuration, OptionalInterval, TimestampProvider};
 use crate::ws::{Message, WebSocket};
 use crate::{BindRequest, Datagram, Error, EstablishedStreamData, FlowSlot, MuxStream, Result};
 #[cfg(feature = "rt-tokio")]
@@ -13,7 +13,6 @@ use bytes::Bytes;
 use core::future::poll_fn;
 use core::task::{Context, Poll, ready};
 use hashbrown::HashMap;
-use std::time::Instant;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, watch};
 #[cfg(feature = "rt-tokio")]
@@ -34,17 +33,21 @@ type IntHasher = hashbrown::DefaultHashBuilder;
 /// the background using the `tokio` runtime (requires the `rt-tokio` feature),
 /// or [`TaskData::into_task`] to get a future to be spawned using the executor of their choice.
 #[derive(Debug)]
-pub struct TaskData<S: WebSocket> {
-    pub(crate) task: Task<S>,
+pub struct TaskData<S: WebSocket, T: TimestampProvider> {
+    pub(crate) task: Task<S, T>,
     // To be taken out when the task is spawned
     pub(crate) tx_frame_rx: mpsc::UnboundedReceiver<FinalizedFrame>,
     // To be taken out when the task is spawned
     pub(crate) dropped_ports_rx: mpsc::UnboundedReceiver<u32>,
     // To be taken out when the task is spawned
-    pub(crate) last_pong_timestamp_rx: watch::Receiver<Instant>,
+    pub(crate) last_pong_timestamp_rx: watch::Receiver<T>,
 }
 
-impl<S: WebSocket> TaskData<S> {
+impl<S, T> TaskData<S, T>
+where
+    S: WebSocket,
+    T: TimestampProvider + Send + Sync + 'static,
+{
     /// Convert the `TaskData` into the multiplexor task.
     ///
     /// The user should typically pass this future to the `spawn` function of the executor
@@ -90,7 +93,7 @@ impl<S: WebSocket> TaskData<S> {
 /// Data owned by the multiplexor task.
 // Not `Clone` because cloning it makes no sense.
 #[derive(Debug)]
-pub struct Task<S: WebSocket> {
+pub struct Task<S: WebSocket, T: TimestampProvider> {
     /// Underlying WebSocket
     pub ws: Mutex<S>,
     /// Open stream channels: `flow_id` -> `FlowSlot`
@@ -105,7 +108,7 @@ pub struct Task<S: WebSocket> {
     pub dropped_ports_tx: mpsc::UnboundedSender<u32>,
     pub con_recv_stream_tx: mpsc::Sender<MuxStream>,
     /// Channel for notifying the `Ping` task that a `Pong` has been received.
-    pub last_pong_timestamp_tx: watch::Sender<Instant>,
+    pub last_pong_timestamp_tx: watch::Sender<T>,
     /// Default threshold for `Acknowledge` replies. See [`config::Options`] for more details.
     pub default_rwnd_threshold: u32,
     /// Our rwnd. See [`config::Options`] for more details.
@@ -118,7 +121,7 @@ pub struct Task<S: WebSocket> {
     pub keepalive_timeout: OptionalDuration,
 }
 
-impl<S: WebSocket> Task<S> {
+impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
     /// Processing task
     /// Does the following:
     /// - Receives messages from `WebSocket` and processes them
@@ -137,7 +140,7 @@ impl<S: WebSocket> Task<S> {
         self,
         mut dropped_ports_rx: mpsc::UnboundedReceiver<u32>,
         mut tx_frame_rx: mpsc::UnboundedReceiver<FinalizedFrame>,
-        mut last_pong_timestamp_rx: watch::Receiver<Instant>,
+        mut last_pong_timestamp_rx: watch::Receiver<T>,
     ) -> Result<()> {
         let (should_drain_frame_rx, res) = tokio::select! {
             r = self.process_dropped_ports_task(&mut dropped_ports_rx) => {
@@ -203,14 +206,14 @@ impl<S: WebSocket> Task<S> {
     async fn process_frame_recv_task(
         &self,
         tx_frame_rx: &mut mpsc::UnboundedReceiver<FinalizedFrame>,
-        last_pong_timestamp_rx: &mut watch::Receiver<Instant>,
+        last_pong_timestamp_rx: &mut watch::Receiver<T>,
     ) -> Result<()> {
         let mut interval = OptionalInterval::from(self.keepalive_interval);
         // If we missed a tick, it is probably doing networking, so we don't need to
         // make up for it.
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-        let mut last_pong_timestamp = Instant::now();
-        let mut last_ping_sent = Instant::now();
+        let mut last_pong_timestamp = T::now();
+        let mut last_ping_sent = T::now();
 
         loop {
             tokio::select! {
@@ -223,7 +226,7 @@ impl<S: WebSocket> Task<S> {
                     // The sender is inside `self`
                     if r.is_ok() {
                         last_pong_timestamp = *last_pong_timestamp_rx.borrow();
-                        debug!("ping/pong round trip time: {:?}", Instant::now().duration_since(last_ping_sent));
+                        debug!("ping/pong round trip time: {:?}", T::now().duration_since(last_ping_sent));
                     } else {
                         debug_assert!(false, "last pong timestamp sender should not be closed (this is a bug)");
                         return Err(Error::ChannelClosed("last_pong_timestamp_rx"));
@@ -232,13 +235,13 @@ impl<S: WebSocket> Task<S> {
                 _ = interval.tick() => {
                     trace!("sending keepalive ping");
                     // Check if we have received a pong recently enough
-                    let elapsed_since_last_pong = Instant::now().duration_since(last_pong_timestamp);
+                    let elapsed_since_last_pong = T::now().duration_since(last_pong_timestamp);
                     if self.keepalive_timeout.cmp_duration(&elapsed_since_last_pong) == core::cmp::Ordering::Less {
                         warn!("No pong received for {elapsed_since_last_pong:?}");
                         return Err(Error::KeepaliveTimeout);
                     }
                     poll_fn(|cx| self.ws.lock().poll_ready_unpin(cx)).await?;
-                    last_ping_sent = Instant::now();
+                    last_ping_sent = T::now();
                     self.ws.lock().start_send_unpin(Message::Ping)?;
                 }
             }
@@ -365,7 +368,7 @@ impl<S: WebSocket> Task<S> {
             // respond to `Ping` messages automatically.
             Message::Ping => Ok(false),
             Message::Pong => {
-                self.last_pong_timestamp_tx.send(Instant::now()).ok();
+                self.last_pong_timestamp_tx.send(T::now()).ok();
                 // Fails only if the receiver is dropped. This may happen
                 // after `process_frame_recv_task` exits and we receive some
                 // late `Pong`s inside `wind_down`. We can safely ignore them.
