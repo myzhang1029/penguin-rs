@@ -10,7 +10,7 @@ use crate::{
     frame,
     ws::{Message, WebSocket},
 };
-use std::future::poll_fn;
+use core::future::poll_fn;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[cfg(feature = "tungstenite")]
 use tokio_tungstenite::WebSocketStream;
@@ -60,7 +60,7 @@ use mock::{MockWebSocketStream as WebSocketStream, get_pair};
 
 mod mock {
     use crate::ws::{Message, WebSocket};
-    use std::task::{Context, Poll};
+    use core::task::{Context, Poll};
     use tokio::sync::mpsc;
 
     pub struct MockWebSocketStream(
@@ -581,7 +581,10 @@ async fn test_with_tcpsocket_inner() {
     let mut stream = mux.new_stream_channel(&[], 0).await.unwrap();
     stream.shutdown().await.unwrap();
     // Make sure any mishandling of half-close pop up in the test
-    tokio::time::sleep(std::time::Duration::from_millis(rand::random_range(0..500))).await;
+    tokio::time::sleep(core::time::Duration::from_millis(rand::random_range(
+        0..500,
+    )))
+    .await;
     for i in 0..ITERATIONS {
         let mut buf = vec![0; SINGLE_WRITE_LEN];
         stream.read_exact(&mut buf).await.unwrap();
@@ -853,7 +856,7 @@ async fn test_flow_id_contention_can_succeed() {
     assert_eq!(
         stream1
             .psh_send_remaining
-            .load(std::sync::atomic::Ordering::Relaxed),
+            .load(core::sync::atomic::Ordering::Relaxed),
         10
     );
     debug!("Waiting for server task to finish");
@@ -933,9 +936,12 @@ async fn test_timeout_if_no_pong_1() {
     };
     let client_mux = Multiplexor::new(client, Some(keepalive_config), None);
     let _server_mux = Multiplexor::new(server, None, None);
-    let r = tokio::time::timeout(std::time::Duration::from_secs(3), client_mux.get_datagram())
-        .await
-        .expect("Expected the timeout to produce `Ok`");
+    let r = tokio::time::timeout(
+        core::time::Duration::from_secs(3),
+        client_mux.get_datagram(),
+    )
+    .await
+    .expect("Expected the timeout to produce `Ok`");
     // Expect an error instead of elapsed timeout
     let res = r.expect_err("Expected `get_datagram` to error out due to no Pong");
     assert!(matches!(res, Error::Closed));
@@ -956,7 +962,7 @@ async fn test_timeout_if_no_pong_2() {
     let client_mux = Multiplexor::new(client, Some(keepalive_config), None);
     let _server_mux = Multiplexor::new(server, None, None);
     let r = tokio::time::timeout(
-        std::time::Duration::from_secs(4),
+        core::time::Duration::from_secs(4),
         client_mux.accept_stream_channel(),
     )
     .await
@@ -976,8 +982,11 @@ async fn test_no_timeout_if_no_keepalive() {
     let client_mux = Multiplexor::new(client, None, None);
     let _server_mux = Multiplexor::new(server, None, None);
     // Default is no keepalive
-    let r = tokio::time::timeout(std::time::Duration::from_secs(5), client_mux.get_datagram())
-        .await
-        .expect_err("Expected the timeout to timeout");
+    let r = tokio::time::timeout(
+        core::time::Duration::from_secs(5),
+        client_mux.get_datagram(),
+    )
+    .await
+    .expect_err("Expected the timeout to timeout");
     assert!(matches!(r, tokio::time::error::Elapsed { .. }));
 }

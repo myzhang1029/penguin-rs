@@ -1,6 +1,10 @@
 #[cfg(all(loom, test))]
 pub use self::lock::{AtomicWaker, Mutex, RwLock};
 #[cfg(not(all(loom, test)))]
+pub use alloc::sync::Arc;
+#[cfg(not(all(loom, test)))]
+pub use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+#[cfg(not(all(loom, test)))]
 pub use futures_util::task::AtomicWaker;
 #[cfg(all(loom, test))]
 pub use loom::sync::{
@@ -9,11 +13,6 @@ pub use loom::sync::{
 };
 #[cfg(not(all(loom, test)))]
 pub use parking_lot::{Mutex, RwLock};
-#[cfg(not(all(loom, test)))]
-pub use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicU32, Ordering},
-};
 
 #[cfg(all(loom, test))]
 mod lock {
@@ -48,7 +47,7 @@ mod lock {
         pub fn new() -> Self {
             Self(loom::future::AtomicWaker::new())
         }
-        pub fn register(&self, waker: &std::task::Waker) {
+        pub fn register(&self, waker: &core::task::Waker) {
             self.0.register_by_ref(waker)
         }
         pub fn wake(&self) {

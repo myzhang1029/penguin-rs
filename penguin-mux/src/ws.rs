@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use bytes::Bytes;
-use std::task::{Context, Poll};
+use core::fmt;
+use core::task::{Context, Poll};
 
 /// Types of messages we need
 #[derive(Clone, PartialEq, Eq)]
@@ -18,8 +19,8 @@ pub enum Message {
     Close,
 }
 
-impl std::fmt::Debug for Message {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for Message {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Binary(data) => f.debug_struct("Binary").field("len", &data.len()).finish(),
             Self::Ping => f.debug_struct("Ping").finish(),
@@ -69,9 +70,9 @@ pub trait WebSocket: Send + 'static {
 mod tokio_tungstenite {
     use super::{Message, WebSocket};
     use bytes::Bytes;
+    use core::pin::Pin;
+    use core::task::{Context, Poll};
     use futures_util::{Sink, Stream};
-    use std::pin::Pin;
-    use std::task::{Context, Poll};
     use tokio::io::{AsyncRead, AsyncWrite};
     use tokio_tungstenite::tungstenite;
     use tracing::error;

@@ -5,10 +5,11 @@
 use crate::frame::{FinalizedFrame, Frame};
 use crate::loom::{Arc, AtomicBool, AtomicU32, AtomicWaker, Ordering};
 use bytes::{Buf, Bytes};
+use core::fmt;
+use core::pin::Pin;
+use core::task::{Context, Poll, ready};
 use std::io;
 use std::io::ErrorKind::BrokenPipe;
-use std::pin::Pin;
-use std::task::{Context, Poll, ready};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, BufReader};
 use tokio::sync::mpsc;
 use tracing::{debug, trace, warn};
@@ -44,8 +45,8 @@ pub struct MuxStream {
     pub(super) rwnd_threshold: u32,
 }
 
-impl std::fmt::Debug for MuxStream {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for MuxStream {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MuxStream")
             .field("flow_id", &format_args!("{:08x}", self.flow_id))
             .field("dest_host", &self.dest_host)
@@ -86,7 +87,7 @@ impl AsyncRead for MuxStream {
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         let got = ready!(self.as_mut().poll_fill_buf(cx))?;
-        let amt = std::cmp::min(got.len(), buf.remaining());
+        let amt = core::cmp::min(got.len(), buf.remaining());
         buf.put_slice(&got[..amt]);
         self.consume(amt);
         Poll::Ready(Ok(()))
@@ -423,7 +424,7 @@ where
 mod tests {
     use super::*;
     use crate::{Dupe, tests::setup_logging};
-    use std::pin::pin;
+    use core::pin::pin;
     use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadBuf};
 
     const DEFAULT_RWND_THRESHOLD: u32 = 4;

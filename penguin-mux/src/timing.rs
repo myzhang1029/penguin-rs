@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use std::{
+use core::{
     cmp,
     fmt::{self, Debug},
     time::Duration,
@@ -94,7 +94,7 @@ impl OptionalDuration {
     pub async fn sleep(self) {
         match self.0 {
             Some(duration) => tokio::time::sleep(duration).await,
-            None => std::future::pending().await,
+            None => core::future::pending().await,
         }
     }
 
@@ -104,15 +104,15 @@ impl OptionalDuration {
         Self(self.0.map(f))
     }
 
-    /// Compare with a [`std::time::Duration`]
+    /// Compare with a [`core::time::Duration`]
     #[must_use]
     pub fn cmp_duration(&self, other: &Duration) -> cmp::Ordering {
         self.0.map_or(cmp::Ordering::Greater, |d| d.cmp(other))
     }
 }
 
-impl std::str::FromStr for OptionalDuration {
-    type Err = std::num::ParseIntError;
+impl core::str::FromStr for OptionalDuration {
+    type Err = core::num::ParseIntError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let value = s.parse::<u64>()?;
@@ -178,7 +178,7 @@ impl OptionalInterval {
             interval.tick().await
         } else {
             // We shall never resolve
-            std::future::pending::<tokio::time::Instant>().await
+            core::future::pending::<tokio::time::Instant>().await
         }
     }
 }

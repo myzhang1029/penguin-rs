@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use crate::{Error, magics};
-use std::net::Ipv4Addr;
+use core::net::Ipv4Addr;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 /// Read a SOCKS4/a request from the given reader.

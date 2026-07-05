@@ -39,7 +39,7 @@ impl_dupe_as_clone! {
     // `Uri` is the combination of the above.
     http::Uri => (),
     // `Arc` is a reference-counted type.
-    std::sync::Arc<T> => (T),
+    alloc::sync::Arc<T> => (T),
     // `Sender` is designed to be cheaply cloned.
     tokio::sync::mpsc::Sender<T> => (T),
     // `UnboundedSender` is designed to be cheaply cloned.

@@ -9,6 +9,8 @@
 #![deny(clippy::pedantic, clippy::cargo, clippy::nursery, clippy::unwrap_used)]
 #![allow(clippy::multiple_crate_versions)]
 
+extern crate alloc;
+
 pub mod config;
 #[cfg(feature = "deadlock-detection")]
 pub mod deadlock_detection;
@@ -28,9 +30,9 @@ use crate::loom::{Arc, AtomicBool, AtomicU32, AtomicWaker, Mutex, Ordering, RwLo
 use crate::task::Task;
 use crate::ws::WebSocket;
 use bytes::Bytes;
+use core::future::poll_fn;
+use core::hash::{BuildHasher, Hash};
 use rand::distr::uniform::SampleUniform;
-use std::future::poll_fn;
-use std::hash::{BuildHasher, Hash};
 use std::time::Instant;
 use thiserror::Error;
 use tokio::sync::mpsc::error::TrySendError;
@@ -75,7 +77,7 @@ pub enum Error {
 
     /// WebSocket errors
     #[error("unspecified `WebSocket` error: {0}")]
-    WebSocket(Box<dyn std::error::Error + Send>),
+    WebSocket(Box<dyn core::error::Error + Send>),
 
     // These are the ones that shouldn't normally happen
     /// A `Datagram` frame with a target host longer than 255 octets
@@ -96,8 +98,8 @@ pub enum Error {
     ChannelClosed(&'static str),
 }
 
-/// A variant of [`std::result::Result`] with [`enum@Error`] as the error type.
-pub type Result<T> = std::result::Result<T, Error>;
+/// A variant of [`core::result::Result`] with [`enum@Error`] as the error type.
+pub type Result<T> = core::result::Result<T, Error>;
 
 /// A multiplexor over a `WebSocket` connection.
 #[derive(Debug)]
@@ -461,7 +463,7 @@ impl FlowSlot {
             error!("establishing an established or invalid slot");
             return None;
         }
-        let sender = match std::mem::replace(self, Self::Established(data)) {
+        let sender = match core::mem::replace(self, Self::Established(data)) {
             Self::Requested(sender) => sender,
             Self::Established(_) | Self::BindRequested(_) => unreachable!(),
         };
@@ -470,7 +472,7 @@ impl FlowSlot {
 
     /// If the slot is established, send data. Otherwise, return `None`.
     #[inline]
-    fn dispatch(&self, data: Bytes) -> Option<std::result::Result<(), TrySendError<()>>> {
+    fn dispatch(&self, data: Bytes) -> Option<core::result::Result<(), TrySendError<()>>> {
         if let Self::Established(stream_data) = self {
             let r = stream_data
                 .sender

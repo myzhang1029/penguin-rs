@@ -11,8 +11,11 @@
 
 use crate::proto_version;
 use bytes::{Buf, BufMut, Bytes};
+use core::{
+    fmt::{self, Debug},
+    mem::size_of,
+};
 use cow_bytes::CowBytes;
-use std::{fmt::Debug, mem::size_of};
 use thiserror::Error;
 
 /// Errors that can occur when parsing a frame.
@@ -195,7 +198,7 @@ pub struct Frame<'data> {
 }
 
 impl Debug for Frame<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Frame")
             .field("opcode", &OpCode::from(&self.payload))
             .field("id", &format_args!("{:08x}", self.id))
@@ -571,7 +574,7 @@ impl FinalizedFrame {
 }
 
 impl Debug for FinalizedFrame {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FinalizedFrame")
             .field("opcode", &self.opcode())
             .field("encoded_len", &self.0.len())

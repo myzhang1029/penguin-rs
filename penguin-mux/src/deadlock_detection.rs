@@ -20,7 +20,7 @@ pub fn try_spawn_deadlock_detection() {
         thread::spawn(move || {
             info!("Deadlock detection thread started");
             loop {
-                thread::sleep(std::time::Duration::from_secs(10));
+                thread::sleep(core::time::Duration::from_secs(10));
                 let deadlocks = parking_lot::deadlock::check_deadlock();
                 if deadlocks.is_empty() {
                     continue;

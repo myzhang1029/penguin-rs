@@ -10,8 +10,8 @@ use crate::{
     BindRequest, Datagram, Dupe, Error, EstablishedStreamData, FlowSlot, MuxStream, Result,
 };
 use bytes::Bytes;
-use std::future::poll_fn;
-use std::task::{Context, Poll, ready};
+use core::future::poll_fn;
+use core::task::{Context, Poll, ready};
 use std::time::Instant;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, watch};
@@ -230,7 +230,7 @@ impl<S: WebSocket> Task<S> {
                     trace!("sending keepalive ping");
                     // Check if we have received a pong recently enough
                     let elapsed_since_last_pong = Instant::now().duration_since(last_pong_timestamp);
-                    if self.keepalive_timeout.cmp_duration(&elapsed_since_last_pong) == std::cmp::Ordering::Less {
+                    if self.keepalive_timeout.cmp_duration(&elapsed_since_last_pong) == core::cmp::Ordering::Less {
                         warn!("No pong received for {elapsed_since_last_pong:?}");
                         return Err(Error::KeepaliveTimeout);
                     }

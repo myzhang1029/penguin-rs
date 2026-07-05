@@ -140,7 +140,7 @@ fn bench_stream_throughput(b: Bencher<'_, '_>, num_writes: usize) {
                 let mux = Multiplexor::new(client, None, None);
                 let mut stream = mux.new_stream_channel(&[], 0).await.unwrap();
                 stream.shutdown().await.unwrap();
-                //tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                //tokio::time::sleep(core::time::Duration::from_secs(1)).await;
                 let mut buf = vec![0; len];
                 for _ in 0..num_writes {
                     stream.read_exact(&mut buf).await.unwrap();
@@ -178,7 +178,7 @@ fn bench_stream_throughput_bidir(b: Bencher<'_, '_>, num_writes: usize) {
                 let client = WebSocketStream::from_raw_socket(tcpstream, Role::Client, None).await;
                 let mux = Multiplexor::new(client, None, None);
                 let mut stream = mux.new_stream_channel(&[], 0).await.unwrap();
-                //tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                //tokio::time::sleep(core::time::Duration::from_secs(1)).await;
                 let mut buf = vec![0; len];
                 for _ in 0..num_writes {
                     stream.read_exact(&mut buf).await.unwrap();

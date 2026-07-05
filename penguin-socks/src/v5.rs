@@ -4,7 +4,7 @@
 
 use crate::{Error, magics};
 use bytes::{Buf, Bytes};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use core::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 /// Read SOCKS authentication methods from the given reader.

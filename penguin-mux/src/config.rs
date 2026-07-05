@@ -150,7 +150,7 @@ impl Options {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
+    use core::time::Duration;
 
     #[test]
     fn test_options() {
