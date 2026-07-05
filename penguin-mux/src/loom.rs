@@ -11,8 +11,10 @@ pub use loom::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU32, Ordering},
 };
-#[cfg(not(all(loom, test)))]
+#[cfg(all(not(all(loom, test)), feature = "std"))]
 pub use parking_lot::{Mutex, RwLock};
+#[cfg(all(not(all(loom, test)), not(feature = "std")))]
+pub use spin::lock_api::{Mutex, RwLock};
 
 #[cfg(all(loom, test))]
 mod lock {

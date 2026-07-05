@@ -1626,6 +1626,7 @@ dependencies = [
  "parking_lot",
  "penguin-mux",
  "rand 0.10.2",
+ "spin",
  "thiserror",
  "tokio",
  "tokio-tungstenite",
@@ -2264,6 +2265,15 @@ checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "spin"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd5231412d905519dca6a5deb0327d407be68d6c941feec004533401d3a0a715"
+dependencies = [
+ "lock_api",
 ]
 
 [[package]]
