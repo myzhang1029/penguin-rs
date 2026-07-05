@@ -12,6 +12,7 @@ use crate::{
 use bytes::Bytes;
 use core::future::poll_fn;
 use core::task::{Context, Poll, ready};
+use std::collections::HashMap;
 use std::time::Instant;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, watch};
@@ -21,9 +22,9 @@ use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, trace, warn};
 
 #[cfg(feature = "nohash")]
-use nohash_hasher::IntMap;
+type IntHasher = nohash_hasher::BuildNoHashHasher<u32>;
 #[cfg(not(feature = "nohash"))]
-use std::collections::HashMap as IntMap;
+type IntHasher = std::collections::hash_map::RandomState;
 
 /// Data owned by the multiplexor task.
 ///
@@ -91,7 +92,7 @@ pub struct Task<S: WebSocket> {
     /// Underlying WebSocket
     pub ws: Mutex<S>,
     /// Open stream channels: `flow_id` -> `FlowSlot`
-    pub flows: Arc<RwLock<IntMap<u32, FlowSlot>>>,
+    pub flows: Arc<RwLock<HashMap<u32, FlowSlot, IntHasher>>>,
     /// Where tasks queue frames to be sent
     pub tx_frame_tx: mpsc::UnboundedSender<FinalizedFrame>,
     /// Channel for notifying the task of a dropped `MuxStream` (to send the flow ID)

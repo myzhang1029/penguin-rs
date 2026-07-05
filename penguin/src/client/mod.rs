@@ -29,9 +29,9 @@ use tokio::time;
 use tracing::{debug, error, info, trace, warn};
 
 #[cfg(feature = "nohash")]
-use nohash_hasher::IntMap;
+type IntHasher = nohash_hasher::BuildNoHashHasher<u32>;
 #[cfg(not(feature = "nohash"))]
-use std::collections::HashMap as IntMap;
+type IntHasher = std::collections::hash_map::RandomState;
 
 /// Errors
 #[derive(Debug, Error)]
@@ -184,7 +184,7 @@ impl HandlerResources {
 #[expect(clippy::module_name_repetitions)]
 pub struct ClientIdMaps {
     /// Client ID -> Client ID map entry
-    client_id_map: IntMap<u32, ClientIdMapEntry>,
+    client_id_map: HashMap<u32, ClientIdMapEntry, IntHasher>,
     /// (client address, our address) -> client ID
     /// We need our address to make sure we send replies with the correct source address
     /// because different remotes and socks5 associations use different listeners
@@ -195,7 +195,7 @@ impl ClientIdMaps {
     #[must_use]
     fn new() -> Self {
         Self {
-            client_id_map: IntMap::default(),
+            client_id_map: HashMap::with_hasher(IntHasher::default()),
             client_addr_map: HashMap::new(),
         }
     }

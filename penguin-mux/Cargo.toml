@@ -25,7 +25,7 @@ cow-bytes = { path = "../cow-bytes" }
 derive_more = { version = "2", features = ["deref", "from", "into"] }
 futures-util = { version = "0.3", default-features = false }
 http = "1"
-nohash-hasher = { version = "0.2", optional = true }
+nohash-hasher = { version = "0.2", default-features = false , optional = true }
 parking_lot = "0.12"
 rand = "0.10"
 thiserror = "2"
