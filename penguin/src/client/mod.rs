@@ -142,7 +142,7 @@ impl HandlerResources {
             *client_id
         } else {
             // The client doesn't exist, add it to the maps
-            let client_id = client_id_map.next_available_key();
+            let client_id = client_id_map.next_available_key(&mut rand::rng());
             client_id_map.insert(
                 client_id,
                 ClientIdMapEntry::new(addr, our_addr, socket, socks5),

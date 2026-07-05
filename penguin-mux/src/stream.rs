@@ -4,8 +4,9 @@
 
 use crate::frame::{FinalizedFrame, Frame};
 use crate::loom::{Arc, AtomicBool, AtomicU32, AtomicWaker, Ordering};
-use bytes::{Buf, Bytes};
+use bytes::Bytes;
 use core::fmt;
+#[cfg(feature = "std")]
 use core::pin::Pin;
 use core::task::{Context, Poll, ready};
 #[cfg(feature = "std")]
@@ -152,6 +153,7 @@ impl AsyncBufRead for MuxStream {
 
     #[inline]
     fn consume(mut self: Pin<&mut Self>, amt: usize) {
+        use bytes::Buf;
         self.buf.advance(amt);
     }
 }
@@ -478,13 +480,14 @@ mod tests {
     use super::*;
     use crate::tests::setup_logging;
     use alloc::vec;
-    use core::pin::pin;
+    use core::pin::{Pin, pin};
     use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadBuf};
 
     const DEFAULT_RWND_THRESHOLD: u32 = 4;
 
     #[tokio::test]
     #[cfg(not(loom))]
+    #[cfg(feature = "std")]
     async fn test_mux_stream_read() {
         setup_logging();
         test_mux_stream_read_inner().await;
@@ -492,12 +495,14 @@ mod tests {
 
     #[test]
     #[cfg(loom)]
+    #[cfg(feature = "std")]
     fn test_mux_stream_read_loom() {
         loom::model(|| {
             loom::future::block_on(test_mux_stream_read_inner());
         })
     }
 
+    #[cfg(feature = "std")]
     async fn test_mux_stream_read_inner() {
         let (rx_frame_tx, rx_frame_rx) = mpsc::channel(10);
         let (tx_frame_tx, mut tx_frame_rx) = mpsc::unbounded_channel();
@@ -576,6 +581,7 @@ mod tests {
 
     #[tokio::test]
     #[cfg(not(loom))]
+    #[cfg(feature = "std")]
     async fn test_mux_stream_write() {
         setup_logging();
         test_mux_stream_write_inner().await;
@@ -583,12 +589,14 @@ mod tests {
 
     #[test]
     #[cfg(loom)]
+    #[cfg(feature = "std")]
     fn test_mux_stream_write_loom() {
         loom::model(|| {
             loom::future::block_on(test_mux_stream_write_inner());
         })
     }
 
+    #[cfg(feature = "std")]
     async fn test_mux_stream_write_inner() {
         let (_, rx_frame_rx) = mpsc::channel(DEFAULT_RWND_THRESHOLD as usize);
         let (tx_frame_tx, mut tx_frame_rx) = mpsc::unbounded_channel();
@@ -666,6 +674,7 @@ mod tests {
 
     #[tokio::test]
     #[cfg(not(loom))]
+    #[cfg(feature = "std")]
     async fn test_copy_bidirectional_normal() {
         const TX1: Bytes = Bytes::from_static(b"hello from mux");
         const RX1: Bytes = Bytes::from_static(b"hello from other");
@@ -769,6 +778,7 @@ mod tests {
 
     #[tokio::test]
     #[cfg(not(loom))]
+    #[cfg(feature = "std")]
     async fn test_flow_control() {
         const TEST_ACK_THRESHOLD: usize = 5;
         const TEST_ACK_THRESHOLD_U32: u32 = 5;
@@ -881,18 +891,21 @@ mod tests {
 
     #[tokio::test]
     #[cfg(not(loom))]
+    #[cfg(feature = "std")]
     async fn test_mux_stream_shutdown() {
         test_mux_stream_shutdown_inner().await;
     }
 
     #[test]
     #[cfg(loom)]
+    #[cfg(feature = "std")]
     fn test_mux_stream_shutdown_loom() {
         loom::model(|| {
             loom::future::block_on(test_mux_stream_shutdown_inner());
         })
     }
 
+    #[cfg(feature = "std")]
     async fn test_mux_stream_shutdown_inner() {
         setup_logging();
         let (_, rx_frame_rx) = mpsc::channel(10);

@@ -190,7 +190,7 @@ impl From<OptionalDuration> for OptionalInterval {
 }
 
 /// Something that allows us to track time.
-pub trait TimestampProvider: Copy {
+pub trait TimestampProvider: Copy + Send + Sync {
     /// Get the current time.
     fn now() -> Self;
     /// Compute the duration since the given timestamp.
@@ -200,7 +200,7 @@ pub trait TimestampProvider: Copy {
 #[cfg(feature = "std")]
 impl TimestampProvider for std::time::Instant {
     fn now() -> Self {
-        std::time::Instant::now()
+        Self::now()
     }
 
     fn duration_since(&self, earlier: Self) -> Duration {

@@ -22,7 +22,7 @@ path = "src/lib.rs"
 [dependencies]
 bytes = { version = "^1, >=1.11.1", default-features = false }
 cow-bytes = { path = "../cow-bytes", default-features = false }
-derive_more = { version = "2", features = ["deref", "from", "into"], default-features = false }
+derive_more = { version = "2", features = ["debug", "deref", "from", "into"], default-features = false }
 futures-util = { version = "0.3", default-features = false }
 hashbrown = { version = "0.17", features = ["default-hasher"], default-features = false }
 nohash-hasher = { version = "0.2", default-features = false , optional = true }
@@ -43,11 +43,11 @@ loom = { version = "0.7", features = ["checkpoint", "futures"] }
 
 [features]
 default = ["std", "tungstenite", "rt-tokio"]
-std = []
+std = ["rand/thread_rng"]
 # Expect the tokio runtime to be available
-rt-tokio = ["std", "tokio/rt"]
+rt-tokio = ["tokio/rt"]
 # use tungstenite as the WebSocket implementation
-tungstenite = ["std", "dep:tokio-tungstenite"]
+tungstenite = ["dep:tokio-tungstenite"]
 # Use nohash-hasher for flow_id hashmaps
 nohash = ["dep:nohash-hasher"]
 # Facility to launch `parking_lot`'s deadlock detection in a separate thread in tests

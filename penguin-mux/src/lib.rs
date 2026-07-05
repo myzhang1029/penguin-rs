@@ -18,7 +18,7 @@ pub mod config;
 #[cfg(feature = "deadlock-detection")]
 pub mod deadlock_detection;
 pub mod frame;
-mod int_key;
+mod hashmap;
 mod loom;
 mod proto_version;
 mod stream;
@@ -37,11 +37,11 @@ use alloc::boxed::Box;
 use bytes::Bytes;
 use core::future::poll_fn;
 use hashbrown::HashMap;
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 use thiserror::Error;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot, watch};
-#[cfg(feature = "rt-tokio")]
-use tokio::task::JoinSet;
 use tracing::{error, trace, warn};
 
 #[cfg(feature = "nohash")]
@@ -51,7 +51,7 @@ type IntHasher = std::collections::hash_map::RandomState;
 #[cfg(all(not(feature = "nohash"), not(feature = "std")))]
 type IntHasher = hashbrown::DefaultHashBuilder;
 
-pub use crate::int_key::HashMapLike;
+pub use crate::hashmap::HashMapLike;
 pub use crate::proto_version::{PROTOCOL_VERSION, PROTOCOL_VERSION_NUMBER};
 pub use crate::stream::MuxStream;
 pub use crate::task::TaskData;
@@ -107,8 +107,8 @@ pub enum Error {
 pub type Result<T> = core::result::Result<T, Error>;
 
 /// A multiplexor over a `WebSocket` connection.
-#[derive(Debug)]
-pub struct Multiplexor {
+#[derive(derive_more::Debug)]
+pub struct Multiplexor<R = SmallRng> {
     /// Open stream channels: `flow_id` -> `FlowSlot`
     flows: Arc<RwLock<HashMap<u32, FlowSlot, IntHasher>>>,
     /// Where tasks queue frames to be sent
@@ -129,10 +129,14 @@ pub struct Multiplexor {
     /// Number of `StreamFrame`s to buffer in `MuxStream`'s channels before blocking
     /// See [`config::Options`] for more details.
     rwnd: u32,
+    /// Random number generator for generating flow IDs
+    rng: Mutex<R>,
 }
 
-impl Multiplexor {
+impl Multiplexor<SmallRng> {
     /// Create a new `Multiplexor`.
+    ///
+    /// The random number generator will be [`SmallRng`] seeded from the system's random number generator.
     ///
     /// # Arguments
     ///
@@ -144,23 +148,51 @@ impl Multiplexor {
     /// * `task_joinset`: A [`JoinSet`] to spawn the multiplexor task into so
     ///   that the caller can notice if the task exits. If it is `None`, the
     ///   task will be spawned by `tokio::spawn` and errors will be logged.
-    #[cfg(all(feature = "rt-tokio", feature = "std"))]
     #[inline]
+    #[cfg(feature = "std")]
     pub fn new<S: WebSocket>(
         ws: S,
         options: Option<config::Options>,
-        task_joinset: Option<&mut JoinSet<Result<()>>>,
+        task_joinset: Option<&mut tokio::task::JoinSet<Result<()>>>,
     ) -> Self {
-        let (mux, taskdata) = Self::new_no_task::<S, std::time::Instant>(ws, options);
+        let (mux, taskdata) =
+            Self::new_from_seeder::<_, std::time::Instant, _>(ws, options, &mut rand::rng());
         taskdata.spawn(task_joinset);
         mux
     }
+}
 
+impl<R: Rng + SeedableRng + Send> Multiplexor<R> {
     /// Create a new `Multiplexor`, without starting the task.
+    ///
+    /// See [`Multiplexor::new_detailed`].
     #[inline]
-    pub fn new_no_task<S: WebSocket, T: TimestampProvider>(
+    pub fn new_from_seeder<S: WebSocket, T: TimestampProvider, SR: Rng>(
         ws: S,
         options: Option<config::Options>,
+        seeder: &mut SR,
+    ) -> (Self, TaskData<S, T>) {
+        let rng = R::from_rng(seeder);
+        Self::new_detailed::<S, T>(ws, options, rng)
+    }
+}
+
+impl<R: Rng + Send> Multiplexor<R> {
+    /// Create a new `Multiplexor`, without starting the task and with a custom random number generator.
+    ///
+    /// The `T` type parameter is a timestamp provider for the keepalive mechanism.
+    /// In the worst case, its `now()` function can return a constant value, in which case
+    /// no keepalive `Ping` will be sent. However, it is unlikely that a system without a working
+    /// clock will be able to maintain a TCP connection anyway.
+    ///
+    /// The random number generator is used to generate flow IDs for flows initiated by this side
+    /// of the connection. It is not necessary to use a cryptographically secure RNG, but its
+    /// statistical properties should be good to reduce collisions.
+    #[inline]
+    pub fn new_detailed<S: WebSocket, T: TimestampProvider>(
+        ws: S,
+        options: Option<config::Options>,
+        rng: R,
     ) -> (Self, TaskData<S, T>) {
         let options = options.unwrap_or_default();
         let (datagram_tx, datagram_rx) = mpsc::channel(options.datagram_buffer_size);
@@ -190,6 +222,7 @@ impl Multiplexor {
             bnd_request_rx: bnd_request_rx.map(Mutex::new),
             max_flow_id_retries: options.max_flow_id_retries,
             rwnd: options.rwnd,
+            rng: Mutex::new(rng),
         };
         let taskdata = TaskData {
             task: Task {
@@ -242,7 +275,7 @@ impl Multiplexor {
             let flow_id = {
                 let mut streams = self.flows.write();
                 // Allocate a new port
-                let flow_id = streams.next_available_key();
+                let flow_id = streams.next_available_key(&mut self.rng.lock());
                 trace!("flow_id = {flow_id:08x}");
                 streams.insert(flow_id, FlowSlot::Requested(stream_tx));
                 flow_id
@@ -330,6 +363,7 @@ impl Multiplexor {
     /// * `host`: The local address or host to bind to. Hostname resolution might
     /// not be supported by the remote peer.
     /// * `port`: The local port to bind to.
+    /// * `bind_type`: The type of bind to request. See [`BindType`] for more details.
     ///
     /// # Cancel Safety
     /// This function is not cancel safe. If the task is cancelled while waiting
@@ -344,7 +378,7 @@ impl Multiplexor {
         let flow_id = {
             let mut streams = self.flows.write();
             // Allocate a new port
-            let flow_id = streams.next_available_key();
+            let flow_id = streams.next_available_key(&mut self.rng.lock());
             trace!("flow_id = {flow_id:08x}");
             streams.insert(flow_id, FlowSlot::BindRequested(result_tx));
             flow_id
@@ -377,7 +411,7 @@ impl Multiplexor {
     }
 }
 
-impl Drop for Multiplexor {
+impl<R> Drop for Multiplexor<R> {
     fn drop(&mut self) {
         if self.dropped_ports_tx.send(0).is_err() {
             error!("Failed to inform task of dropped multiplexor");

@@ -113,8 +113,54 @@ mod mock {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
+struct DummyTimer;
+
+impl crate::timing::TimestampProvider for DummyTimer {
+    fn now() -> Self {
+        DummyTimer
+    }
+
+    fn duration_since(&self, earlier: Self) -> core::time::Duration {
+        let _ = earlier;
+        core::time::Duration::from_secs(0)
+    }
+}
+
 #[tokio::test]
 #[cfg(not(loom))]
+#[cfg(feature = "rt-tokio")]
+async fn connect_succeeds_no_std_although_has_rt() {
+    use rand::{SeedableRng, rngs::SmallRng};
+
+    setup_logging();
+    let (client, server) = get_pair(None).await;
+    let mut rng = SmallRng::seed_from_u64(1);
+
+    let (client_mux, ctask) =
+        Multiplexor::<SmallRng>::new_from_seeder::<_, DummyTimer, _>(client, None, &mut rng);
+    ctask.spawn(None);
+    let (server_mux, stask) =
+        Multiplexor::<SmallRng>::new_from_seeder::<_, DummyTimer, _>(server, None, &mut rng);
+    stask.spawn(None);
+
+    let server_task = tokio::spawn(async move {
+        let stream = server_mux.accept_stream_channel().await.unwrap();
+        info!(
+            "flow_id = {:08x}, dest = {:?}:{}",
+            stream.flow_id, stream.dest_host, stream.dest_port
+        );
+    });
+
+    let stream = client_mux.new_stream_channel(&[], 0).await.unwrap();
+    info!("flow_id = {:08x}", stream.flow_id);
+    debug!("Waiting for server task to finish");
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+#[cfg(not(loom))]
+#[cfg(all(feature = "rt-tokio", feature = "std"))]
 async fn connect_succeeds() {
     setup_logging();
     let (client, server) = get_pair(None).await;
@@ -138,6 +184,7 @@ async fn connect_succeeds() {
 
 #[tokio::test]
 #[cfg(not(loom))]
+#[cfg(all(feature = "rt-tokio", feature = "std"))]
 async fn datagram_channel_passes_data_tiny_mtu() {
     setup_logging();
     // 8 bytes is the IPv4 minimum segment size. Let's try that
@@ -179,6 +226,7 @@ async fn datagram_channel_passes_data_tiny_mtu() {
 
 #[tokio::test]
 #[cfg(not(loom))]
+#[cfg(all(feature = "rt-tokio", feature = "std"))]
 async fn datagram_channel_passes_data() {
     setup_logging();
     let (client, server) = get_pair(None).await;
@@ -219,6 +267,7 @@ async fn datagram_channel_passes_data() {
 
 #[tokio::test]
 #[cfg(not(loom))]
+#[cfg(all(feature = "rt-tokio", feature = "std"))]
 async fn test_datagram_reject_long_host() {
     setup_logging();
     let (client, server) = get_pair(None).await;
@@ -257,6 +306,7 @@ async fn test_datagram_reject_long_host() {
 
 #[tokio::test]
 #[cfg(not(loom))]
+#[cfg(all(feature = "rt-tokio", feature = "std"))]
 async fn connected_stream_passes_data_tiny_mtu_rwndminusone() {
     setup_logging();
     let (client, server) = get_pair(Some(8)).await;
@@ -305,6 +355,7 @@ async fn connected_stream_passes_data_tiny_mtu_rwndminusone() {
 
 #[tokio::test]
 #[cfg(not(loom))]
+#[cfg(all(feature = "rt-tokio", feature = "std"))]
 async fn connected_stream_passes_data_tiny_mtu_with_keepalive() {
     setup_logging();
     let (client, server) = get_pair(Some(1)).await;
@@ -344,6 +395,7 @@ async fn connected_stream_passes_data_tiny_mtu_with_keepalive() {
 
 #[tokio::test]
 #[cfg(not(loom))]
+#[cfg(all(feature = "rt-tokio", feature = "std"))]
 async fn connected_stream_passes_data_tiny_mtu() {
     setup_logging();
     let (client, server) = get_pair(Some(8)).await;
@@ -388,6 +440,7 @@ async fn connected_stream_passes_data_tiny_mtu() {
 
 #[tokio::test]
 #[cfg(not(loom))]
+#[cfg(all(feature = "rt-tokio", feature = "std"))]
 async fn connected_stream_passes_data() {
     setup_logging();
     let (client, server) = get_pair(None).await;
@@ -432,6 +485,7 @@ async fn connected_stream_passes_data() {
 
 #[tokio::test]
 #[cfg(not(loom))]
+#[cfg(all(feature = "rt-tokio", feature = "std"))]
 async fn connected_stream_passes_data_one_sided_lots() {
     setup_logging();
     let (client, server) = get_pair(None).await;
@@ -475,6 +529,7 @@ async fn connected_stream_passes_data_one_sided_lots() {
 
 #[tokio::test]
 #[cfg(not(loom))]
+#[cfg(all(feature = "rt-tokio", feature = "std"))]
 async fn test_shutdown_has_effect() {
     setup_logging();
     let (client, server) = get_pair(None).await;
@@ -496,6 +551,7 @@ async fn test_shutdown_has_effect() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[cfg(not(loom))]
+#[cfg(all(feature = "rt-tokio", feature = "std"))]
 async fn test_contention() {
     const NUM_CONCURRENT: usize = 16;
     const EACH_JOB_WRITES: usize = 16;
@@ -548,6 +604,7 @@ async fn test_contention() {
 #[cfg(feature = "tungstenite")]
 #[tokio::test(flavor = "multi_thread")]
 #[cfg(not(loom))]
+#[cfg(all(feature = "rt-tokio", feature = "std"))]
 async fn test_with_tcpsocket() {
     setup_logging();
     for _ in 0..16 {
@@ -556,6 +613,7 @@ async fn test_with_tcpsocket() {
 }
 #[cfg(feature = "tungstenite")]
 #[cfg(not(loom))]
+#[cfg(all(feature = "rt-tokio", feature = "std"))]
 async fn test_with_tcpsocket_inner() {
     use tokio_tungstenite::tungstenite::protocol::Role;
     const SINGLE_WRITE_LEN: usize = 4096;
@@ -599,6 +657,7 @@ async fn test_with_tcpsocket_inner() {
 
 #[tokio::test]
 #[cfg(not(loom))]
+#[cfg(all(feature = "rt-tokio", feature = "std"))]
 async fn test_early_eof_detected() {
     setup_logging();
     for _ in 0..64 {
@@ -607,6 +666,7 @@ async fn test_early_eof_detected() {
 }
 
 #[cfg(not(loom))]
+#[cfg(all(feature = "rt-tokio", feature = "std"))]
 async fn test_early_eof_detected_inner() {
     let (client, server) = get_pair(None).await;
 
@@ -643,6 +703,7 @@ async fn test_early_eof_detected_inner() {
 
 #[tokio::test]
 #[cfg(not(loom))]
+#[cfg(all(feature = "rt-tokio", feature = "std"))]
 async fn test_close_port_behaviour() {
     setup_logging();
     let (mut client, server) = get_pair(None).await;
@@ -729,6 +790,7 @@ async fn test_close_port_behaviour() {
 
 #[tokio::test]
 #[cfg(not(loom))]
+#[cfg(all(feature = "rt-tokio", feature = "std"))]
 async fn test_several_channels() {
     setup_logging();
     let (client, server) = get_pair(None).await;
@@ -776,6 +838,7 @@ async fn test_several_channels() {
 
 #[tokio::test]
 #[cfg(not(loom))]
+#[cfg(all(feature = "rt-tokio", feature = "std"))]
 async fn test_flow_id_contention_will_give_up() {
     setup_logging();
     let (client, mut server) = get_pair(None).await;
@@ -790,7 +853,7 @@ async fn test_flow_id_contention_will_give_up() {
                 continue;
             };
             let frame = frame::Frame::try_from(payload).unwrap();
-            if matches!(frame.payload, crate::frame::Payload::Connect(_)) {
+            if matches!(frame.payload, frame::Payload::Connect(_)) {
                 debug!("Server received Connect frame, sending Reset");
                 let reset_frame = frame::Frame::new_reset(frame.id);
                 server
@@ -809,6 +872,7 @@ async fn test_flow_id_contention_will_give_up() {
 
 #[tokio::test]
 #[cfg(not(loom))]
+#[cfg(all(feature = "rt-tokio", feature = "std"))]
 async fn test_flow_id_contention_can_succeed() {
     setup_logging();
     let (client, mut server) = get_pair(None).await;
@@ -826,7 +890,7 @@ async fn test_flow_id_contention_can_succeed() {
         };
         let frame = frame::Frame::try_from(payload).unwrap();
         rx_flow_ids.0 = frame.id;
-        if matches!(frame.payload, crate::frame::Payload::Connect(_)) {
+        if matches!(frame.payload, frame::Payload::Connect(_)) {
             debug!("Server received the first Connect frame, sending Reset");
             let reset_frame = frame::Frame::new_reset(frame.id);
             server
@@ -841,7 +905,7 @@ async fn test_flow_id_contention_can_succeed() {
         };
         let frame = frame::Frame::try_from(payload).unwrap();
         rx_flow_ids.1 = frame.id;
-        if matches!(frame.payload, crate::frame::Payload::Connect(_)) {
+        if matches!(frame.payload, frame::Payload::Connect(_)) {
             debug!("Server received the second Connect frame, sending Acknowledge");
             let reset_frame = frame::Frame::new_acknowledge(frame.id, 10);
             server
@@ -867,6 +931,7 @@ async fn test_flow_id_contention_can_succeed() {
 
 #[tokio::test]
 #[cfg(not(loom))]
+#[cfg(all(feature = "rt-tokio", feature = "std"))]
 async fn test_bind_request() {
     setup_logging();
     let (client, server) = get_pair(None).await;
@@ -927,6 +992,7 @@ async fn test_bind_request() {
 
 #[tokio::test]
 #[cfg(not(loom))]
+#[cfg(all(feature = "rt-tokio", feature = "std"))]
 async fn test_timeout_if_no_pong_1() {
     setup_logging();
     // use the mock websocket for this test because tungstenite always auto-Pongs for us
@@ -952,6 +1018,7 @@ async fn test_timeout_if_no_pong_1() {
 
 #[tokio::test]
 #[cfg(not(loom))]
+#[cfg(all(feature = "rt-tokio", feature = "std"))]
 async fn test_timeout_if_no_pong_2() {
     setup_logging();
     // use the mock websocket for this test because tungstenite always auto-Pongs for us
@@ -977,6 +1044,7 @@ async fn test_timeout_if_no_pong_2() {
 
 #[tokio::test]
 #[cfg(not(loom))]
+#[cfg(all(feature = "rt-tokio", feature = "std"))]
 async fn test_no_timeout_if_no_keepalive() {
     // Make sure that if keepalive is disabled, no Pong timeout occurs
     setup_logging();
