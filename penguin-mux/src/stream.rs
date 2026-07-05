@@ -126,7 +126,8 @@ impl AsyncWrite for MuxStream {
     #[tracing::instrument(skip(_cx), level = "trace", fields(flow_id = self.flow_id))]
     #[inline]
     fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Poll::Ready(self.shutdown_inner())
+        self.do_shutdown();
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -241,8 +242,13 @@ impl MuxStream {
 
     /// Send a [`Finish`](crate::frame::OpCode::Finish) frame to the remote peer
     /// and disallow further writes.
+    ///
+    /// This method is named `do_shutdown` to avoid conflict with `AsyncWriteExt::shutdown`.
+    ///
+    /// Returns `None` if the task has exited, in which case the stream is already closed
+    /// and it is safe to ignore the error.
     #[inline]
-    fn shutdown_inner(&self) -> io::Result<()> {
+    pub fn do_shutdown(&self) -> Option<()> {
         // There is no need to send a `Finish` frame if the mux task has already removed the stream
         // because either:
         // 1. `MuxStream` was dropped before `poll_shutdown` is completed and the mux task should
@@ -250,12 +256,11 @@ impl MuxStream {
         // 2. The entire mux task has been dropped, so we will only get `BrokenPipe` error.
         // Atomic ordering: see `inner.rs` -> `close_port_local`.
         if self.finish_sent.swap(true, Ordering::AcqRel) {
-            return Ok(());
+            return Some(());
         }
         self.frame_tx
-            .send(Frame::new_finish(self.flow_id).into())
-            .or(Err(BrokenPipe))?;
-        Ok(())
+            .send(Frame::new_finish(self.flow_id).into()).ok()?;
+        Some(())
     }
 
     /// A specialized version of [`tokio::io::copy_bidirectional`] that
@@ -387,7 +392,7 @@ where
                     };
                     if new_buf.is_empty() {
                         // The other side is EOF'd
-                        self.us.shutdown_inner()?;
+                        self.us.do_shutdown();
                         self.write_state = WriteState::Done(written_amt);
                         break Poll::Ready(Ok(written_amt));
                     }
