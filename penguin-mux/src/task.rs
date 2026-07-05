@@ -4,10 +4,10 @@
 
 use crate::frame::{ConnectPayload, FinalizedFrame, Frame, Payload};
 use crate::loom::{Arc, AtomicBool, AtomicU32, AtomicWaker, Mutex, RwLock};
-use crate::timing::{OptionalDuration, OptionalInterval, TimestampProvider};
+use crate::timing::{OptionalDuration, TimestampProvider};
 use crate::ws::{Message, WebSocket};
 use crate::{BindRequest, Datagram, Error, EstablishedStreamData, FlowSlot, MuxStream, Result};
-#[cfg(feature = "rt-tokio")]
+#[cfg(feature = "tokio-rt")]
 use alloc::{boxed::Box, string::ToString};
 use bytes::Bytes;
 use core::future::poll_fn;
@@ -15,9 +15,8 @@ use core::task::{Context, Poll, ready};
 use hashbrown::HashMap;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, watch};
-#[cfg(feature = "rt-tokio")]
+#[cfg(feature = "tokio-rt")]
 use tokio::task::JoinSet;
-use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, trace, warn};
 
 #[cfg(feature = "nohash")]
@@ -30,7 +29,7 @@ type IntHasher = hashbrown::DefaultHashBuilder;
 /// Data owned by the multiplexor task.
 ///
 /// The user should typically call `TaskData::spawn` to spawn the multiplexor task in
-/// the background using the `tokio` runtime (requires the `rt-tokio` feature),
+/// the background using the `tokio` runtime (requires the `tokio-rt` feature),
 /// or [`TaskData::into_task`] to get a future to be spawned using the executor of their choice.
 #[derive(Debug)]
 pub struct TaskData<S: WebSocket, T: TimestampProvider> {
@@ -68,7 +67,7 @@ where
     }
 
     /// Spawn the multiplexor task in the background using the `tokio` runtime.
-    #[cfg(feature = "rt-tokio")]
+    #[cfg(feature = "tokio-rt")]
     pub fn spawn(self, task_joinset: Option<&mut JoinSet<Result<()>>>) {
         let parent_id = tokio::task::try_id()
             .as_ref()
@@ -131,9 +130,9 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
     // It doesn't make sense to return a `Result` here because we can't propagate
     // the error to the user from a spawned task.
     // Instead, the user will notice when `rx` channels return `None`.
-    #[cfg_attr(feature = "rt-tokio", tracing::instrument(skip_all, level = "debug", fields(task_id = %tokio::task::id())))]
+    #[cfg_attr(feature = "tokio-rt", tracing::instrument(skip_all, level = "debug", fields(task_id = %tokio::task::id())))]
     #[cfg_attr(
-        not(feature = "rt-tokio"),
+        not(feature = "tokio-rt"),
         tracing::instrument(skip_all, level = "debug")
     )]
     async fn start(
@@ -208,10 +207,11 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
         tx_frame_rx: &mut mpsc::UnboundedReceiver<FinalizedFrame>,
         last_pong_timestamp_rx: &mut watch::Receiver<T>,
     ) -> Result<()> {
-        let mut interval = OptionalInterval::from(self.keepalive_interval);
+        let mut interval = crate::timing::OptionalInterval::from(self.keepalive_interval);
+        #[cfg(feature = "tokio-time")]
         // If we missed a tick, it is probably doing networking, so we don't need to
         // make up for it.
-        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut last_pong_timestamp = T::now();
         let mut last_ping_sent = T::now();
 
@@ -310,7 +310,7 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
         // Let the tasks do some work now
         // Note that this is not a guarantee, so we may still have some streams that wake up
         // later but only to see a `BrokenPipe`.
-        #[cfg(feature = "rt-tokio")]
+        #[cfg(feature = "tokio-rt")]
         tokio::task::yield_now().await;
         // Further ensure no more frames can be sent. This should cause all further attempts at
         // `AsyncWrite::poll_write` to return `BrokenPipe`.

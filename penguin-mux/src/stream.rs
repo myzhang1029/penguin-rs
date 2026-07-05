@@ -12,7 +12,7 @@ use core::task::{Context, Poll, ready};
 #[cfg(feature = "std")]
 use std::io::{self, ErrorKind::BrokenPipe};
 #[cfg(feature = "std")]
-use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, BufReader};
+use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tracing::{debug, trace, warn};
 
@@ -321,12 +321,15 @@ impl MuxStream {
     /// This function is not cancel safe. Cancelling the future might cause
     /// data loss.
     #[inline]
-    #[cfg(feature = "std")]
-    pub fn into_copy_bidirectional<RW>(self, other: RW) -> CopyBidirectional<BufReader<RW>>
+    #[cfg(all(feature = "std", feature = "tokio-io-util"))]
+    pub fn into_copy_bidirectional<RW>(
+        self,
+        other: RW,
+    ) -> CopyBidirectional<tokio::io::BufReader<RW>>
     where
         RW: AsyncRead + AsyncWrite + Unpin,
     {
-        let other_bufreader = BufReader::new(other);
+        let other_bufreader = tokio::io::BufReader::new(other);
         self.into_copy_bidirectional_with_buf(other_bufreader)
     }
 

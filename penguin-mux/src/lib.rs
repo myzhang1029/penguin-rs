@@ -145,11 +145,11 @@ impl Multiplexor<SmallRng> {
     /// * `options`: Multiplexor options. See [`config::Options`] for more details.
     ///   If `None`, the default options will be used.
     ///
-    /// * `task_joinset`: A [`JoinSet`] to spawn the multiplexor task into so
+    /// * `task_joinset`: A [`tokio::task::JoinSet`] to spawn the multiplexor task into so
     ///   that the caller can notice if the task exits. If it is `None`, the
     ///   task will be spawned by `tokio::spawn` and errors will be logged.
     #[inline]
-    #[cfg(feature = "std")]
+    #[cfg(all(feature = "tokio-rt", feature = "std"))]
     pub fn new<S: WebSocket>(
         ws: S,
         options: Option<config::Options>,

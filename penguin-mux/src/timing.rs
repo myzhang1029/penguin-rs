@@ -80,6 +80,7 @@ impl OptionalDuration {
     ///
     /// # Errors
     /// Returns an `Err` variant if the future does not finish in the specified duration.
+    #[cfg(feature = "tokio-time")]
     pub async fn timeout<T: Future>(
         self,
         future: T,
@@ -91,6 +92,7 @@ impl OptionalDuration {
     }
 
     /// Use the optional duration to sleep
+    #[cfg(feature = "tokio-time")]
     pub async fn sleep(self) {
         match self.0 {
             Some(duration) => tokio::time::sleep(duration).await,
@@ -162,10 +164,11 @@ impl Ord for OptionalDuration {
 
 /// An optional interval
 #[derive(Debug, Default)]
-pub struct OptionalInterval(Option<tokio::time::Interval>);
+pub struct OptionalInterval(#[cfg(feature = "tokio-time")] Option<tokio::time::Interval>);
 
 impl OptionalInterval {
     /// Defines the behavior of the internal [`tokio::time::Interval`] when it misses a tick.
+    #[cfg(feature = "tokio-time")]
     pub fn set_missed_tick_behavior(&mut self, behavior: tokio::time::MissedTickBehavior) {
         if let Some(interval) = &mut self.0 {
             interval.set_missed_tick_behavior(behavior);
@@ -173,6 +176,7 @@ impl OptionalInterval {
     }
 
     /// Completes when the next instant in the interval has been reached.
+    #[cfg(feature = "tokio-time")]
     pub async fn tick(&mut self) -> tokio::time::Instant {
         if let Some(interval) = &mut self.0 {
             interval.tick().await
@@ -181,11 +185,22 @@ impl OptionalInterval {
             core::future::pending::<tokio::time::Instant>().await
         }
     }
+
+    /// Never resolves.
+    #[cfg(not(feature = "tokio-time"))]
+    pub async fn tick(&mut self) {
+        core::future::pending::<()>().await
+    }
 }
 
 impl From<OptionalDuration> for OptionalInterval {
+    #[cfg(feature = "tokio-time")]
     fn from(dur: OptionalDuration) -> Self {
         Self(dur.0.map(tokio::time::interval))
+    }
+    #[cfg(not(feature = "tokio-time"))]
+    fn from(_dur: OptionalDuration) -> Self {
+        Self()
     }
 }
 
@@ -295,6 +310,7 @@ mod tests {
 
     #[tokio::test]
     #[cfg(not(loom))]
+    #[cfg(feature = "tokio-time")]
     async fn test_optional_interval() {
         crate::tests::setup_logging();
         let dur = OptionalDuration::from_secs(2);
@@ -304,5 +320,14 @@ mod tests {
         tokio::time::sleep(Duration::from_secs(3)).await;
         let instant = interval.tick().now_or_never().unwrap();
         assert!(instant < tokio::time::Instant::now());
+    }
+
+    #[tokio::test]
+    #[cfg(not(feature = "tokio-time"))]
+    async fn test_optional_interval_noop() {
+        crate::tests::setup_logging();
+        let dur = OptionalDuration::from_secs(2);
+        let mut interval = OptionalInterval::from(dur);
+        assert!(interval.tick().now_or_never().is_none());
     }
 }
