@@ -8,8 +8,9 @@ use bytes::{Buf, Bytes};
 use core::fmt;
 use core::pin::Pin;
 use core::task::{Context, Poll, ready};
-use std::io;
-use std::io::ErrorKind::BrokenPipe;
+#[cfg(feature = "std")]
+use std::io::{self, ErrorKind::BrokenPipe};
+#[cfg(feature = "std")]
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, BufReader};
 use tokio::sync::mpsc;
 use tracing::{debug, trace, warn};
@@ -74,6 +75,7 @@ impl Drop for MuxStream {
     }
 }
 
+#[cfg(feature = "std")]
 impl AsyncRead for MuxStream {
     /// Read data from the stream.
     /// There are two cases where this function gives EOF:
@@ -94,21 +96,19 @@ impl AsyncRead for MuxStream {
     }
 }
 
+#[cfg(feature = "std")]
 impl AsyncWrite for MuxStream {
     /// Write data to the stream. Each invocation of this method will send a
     /// separate frame in a new [`Message`](crate::ws::Message), so it may be
     /// beneficial to wrap it in a [`BufWriter`](tokio::io::BufWriter) where
     /// appropriate.
-    #[tracing::instrument(skip_all, level = "trace", fields(flow_id = self.flow_id))]
     #[inline]
     fn poll_write(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        ready!(self.poll_obtain_write_permission(cx))?;
-        let frame = Frame::new_push(self.flow_id, buf).into();
-        self.frame_tx.send(frame).or(Err(BrokenPipe))?;
+        ready!(self.as_ref().poll_write_push(cx, buf)).ok_or(BrokenPipe)?;
         trace!("sent a frame");
         Poll::Ready(Ok(buf.len()))
     }
@@ -131,34 +131,19 @@ impl AsyncWrite for MuxStream {
     }
 }
 
+#[cfg(feature = "std")]
 impl AsyncBufRead for MuxStream {
     /// Poll for another `Push` frame to fill the internal buffer.
     /// Returns a reference to the internal buffer on success.
     /// See [`AsyncBufRead::poll_fill_buf`].
-    #[tracing::instrument(skip_all, level = "trace", fields(flow_id = self.flow_id))]
     #[inline]
     fn poll_fill_buf(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<&[u8]>> {
         if self.buf.is_empty() {
             trace!("polling the stream");
-            let Some(next) = ready!(self.frame_rx.poll_recv(cx)) else {
-                trace!("stream has been closed");
-                // See `tokio::sync::mpsc`#clean-shutdown
-                self.frame_rx.close();
-                // There should be no code path sending more frames after an EOF
-                // If this assertion fails, some code path is sending frames after EOF
-                // and thus causing loss of data.
-                // However, this is not an inconsistent state so we should not
-                // panic a production setup.
-                debug_assert!(self.frame_rx.try_recv().is_err());
+            if ready!(self.as_mut().poll_for_push(cx)) == 0 {
                 return Poll::Ready(Ok(&[]));
-            };
-            // Putting no data into the buffer is EOF, and other code should
-            // already ensure that such frames are filtered out.
-            debug_assert!(!next.is_empty());
-            self.buf = next;
-            self.increment_psh_recvd_since();
+            }
         } else {
-            // There is some data left in `self.buf`.
             trace!("using the remaining buffer");
         }
 
@@ -172,6 +157,57 @@ impl AsyncBufRead for MuxStream {
 }
 
 impl MuxStream {
+    /// Poll for another `Push` frame to fill the internal buffer.
+    ///
+    /// Returns the number of bytes read into the internal buffer.
+    /// If `0` is returned, the stream has been closed and the user should interpret this as an EOF.
+    ///
+    /// # Panics
+    /// This function will panic if the internal buffer still has data.
+    #[tracing::instrument(skip_all, level = "trace", fields(flow_id = self.flow_id))]
+    #[inline]
+    pub fn poll_for_push(&mut self, cx: &mut Context<'_>) -> Poll<usize> {
+        let Some(next) = ready!(self.frame_rx.poll_recv(cx)) else {
+            trace!("stream has been closed");
+            // See `tokio::sync::mpsc`#clean-shutdown
+            self.frame_rx.close();
+            // There should be no code path sending more frames after an EOF
+            // If this assertion fails, some code path is sending frames after EOF
+            // and thus causing loss of data.
+            // However, this is not an inconsistent state so we should not
+            // panic a production setup.
+            debug_assert!(self.frame_rx.try_recv().is_err());
+            return Poll::Ready(0);
+        };
+        // Putting no data into the buffer is EOF, and other code should
+        // already ensure that such frames are filtered out.
+        debug_assert!(!next.is_empty());
+        assert!(
+            self.buf.is_empty(),
+            "`poll_fill_buf_inner` should not be called unless the buffer is empty"
+        );
+        self.buf = next;
+        self.increment_psh_recvd_since();
+        Poll::Ready(self.buf.len())
+    }
+
+    /// Get a reference to the internal buffer.
+    #[inline]
+    pub fn buf(&self) -> Bytes {
+        self.buf.clone() // cheap
+    }
+
+    /// Write a `Push` frame to the stream.
+    #[tracing::instrument(skip_all, level = "trace", fields(flow_id = self.flow_id))]
+    #[inline]
+    pub fn poll_write_push(&self, cx: &Context<'_>, buf: &[u8]) -> Poll<Option<()>> {
+        let Some(()) = ready!(self.poll_obtain_write_permission(cx)) else {
+            return Poll::Ready(None);
+        };
+        let frame = Frame::new_push(self.flow_id, buf).into();
+        Poll::Ready(self.frame_tx.send(frame).ok())
+    }
+
     /// Increment the number of `Push` frames received since the last `Acknowledge`
     /// and send an `Acknowledge` frame if the threshold is reached.
     #[tracing::instrument(skip_all, level = "trace", fields(count = self.psh_recvd_since + 1))]
@@ -196,11 +232,15 @@ impl MuxStream {
     }
 
     /// Attempt to obtain permission to send a [`Push`](crate::frame::OpCode::Push) frame.
+    ///
     /// If we need an `Acknowledge` frame to continue, the task will be woken up
     /// once the `Acknowledge` frame is received.
+    ///
+    /// Returns `None` if the stream has been closed, and the user should interpret
+    /// this as a `BrokenPipe` error.
     #[tracing::instrument(skip_all, level = "trace")]
     #[inline]
-    fn poll_obtain_write_permission(&self, cx: &Context<'_>) -> Poll<io::Result<()>> {
+    pub fn poll_obtain_write_permission(&self, cx: &Context<'_>) -> Poll<Option<()>> {
         // Atomic ordering: if the operations around this line are reordered,
         // the sent frame will be `Rst`ed by the remote peer, which is harmless.
         // Both `close_port` and `shutdown` in `inner.rs` set this flag with
@@ -209,7 +249,7 @@ impl MuxStream {
         if self.finish_sent.load(Ordering::Relaxed) {
             // The stream has been closed. Return an error
             debug!("stream has been closed, returning `BrokenPipe`");
-            return Poll::Ready(Err(BrokenPipe.into()));
+            return Poll::Ready(None);
         }
         loop {
             // Atomic ordering: we don't really have a critical section here,
@@ -237,7 +277,7 @@ impl MuxStream {
             trace!("congestion window race condition, retrying");
         }
         // We have successfully decremented the congestion window
-        Poll::Ready(Ok(()))
+        Poll::Ready(Some(()))
     }
 
     /// Send a [`Finish`](crate::frame::OpCode::Finish) frame to the remote peer
@@ -259,7 +299,8 @@ impl MuxStream {
             return Some(());
         }
         self.frame_tx
-            .send(Frame::new_finish(self.flow_id).into()).ok()?;
+            .send(Frame::new_finish(self.flow_id).into())
+            .ok()?;
         Some(())
     }
 
@@ -278,6 +319,7 @@ impl MuxStream {
     /// This function is not cancel safe. Cancelling the future might cause
     /// data loss.
     #[inline]
+    #[cfg(feature = "std")]
     pub fn into_copy_bidirectional<RW>(self, other: RW) -> CopyBidirectional<BufReader<RW>>
     where
         RW: AsyncRead + AsyncWrite + Unpin,
@@ -289,6 +331,7 @@ impl MuxStream {
     /// See [`into_copy_bidirectional`](Self::into_copy_bidirectional). This version allows you to
     /// provide your own read buffer for the other side.
     #[inline]
+    #[cfg(feature = "std")]
     pub const fn into_copy_bidirectional_with_buf<BRW>(self, other: BRW) -> CopyBidirectional<BRW>
     where
         BRW: AsyncBufRead + AsyncWrite + Unpin,
@@ -302,6 +345,7 @@ impl MuxStream {
     }
 }
 
+#[cfg(feature = "std")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ReadState {
     // We have data
@@ -312,6 +356,7 @@ enum ReadState {
     Done(u64),
 }
 
+#[cfg(feature = "std")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WriteState {
     // Peer has more data
@@ -320,6 +365,7 @@ enum WriteState {
     Done(u64),
 }
 
+#[cfg(feature = "std")]
 #[derive(Debug)]
 pub struct CopyBidirectional<RW> {
     us: MuxStream,
@@ -328,6 +374,7 @@ pub struct CopyBidirectional<RW> {
     write_state: WriteState,
 }
 
+#[cfg(feature = "std")]
 impl<RW> CopyBidirectional<RW>
 where
     RW: AsyncBufRead + AsyncWrite + Unpin,
@@ -396,7 +443,7 @@ where
                         self.write_state = WriteState::Done(written_amt);
                         break Poll::Ready(Ok(written_amt));
                     }
-                    ready!(self.us.poll_obtain_write_permission(cx))?;
+                    ready!(self.us.poll_obtain_write_permission(cx)).ok_or(BrokenPipe)?;
                     let frame = Frame::new_push(self.us.flow_id, new_buf).into();
                     self.us.frame_tx.send(frame).or(Err(BrokenPipe))?;
                     let processed = new_buf.len();
@@ -410,6 +457,7 @@ where
     }
 }
 
+#[cfg(feature = "std")]
 impl<RW> Future for CopyBidirectional<RW>
 where
     RW: AsyncBufRead + AsyncWrite + Unpin,
