@@ -10,6 +10,7 @@ use crate::{BindRequest, Datagram, Error, EstablishedStreamData, FlowSlot, MuxSt
 #[cfg(feature = "tokio-rt")]
 use alloc::{boxed::Box, string::ToString};
 use bytes::Bytes;
+use futures_util::FutureExt;
 use core::future::poll_fn;
 use core::task::{Context, Poll, ready};
 use hashbrown::HashMap;
@@ -141,16 +142,16 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
         mut tx_frame_rx: mpsc::UnboundedReceiver<FinalizedFrame>,
         mut last_pong_timestamp_rx: watch::Receiver<T>,
     ) -> Result<()> {
-        let (should_drain_frame_rx, res) = tokio::select! {
-            r = self.process_dropped_ports_task(&mut dropped_ports_rx) => {
+        let (should_drain_frame_rx, res) = futures_util::select_biased! {
+            r = self.process_dropped_ports_task(&mut dropped_ports_rx).fuse() => {
                 debug!("mux dropped ports task finished: {r:?}");
                 (true, r)
             }
-            r = self.process_frame_recv_task(&mut tx_frame_rx, &mut last_pong_timestamp_rx) => {
+            r = self.process_frame_recv_task(&mut tx_frame_rx, &mut last_pong_timestamp_rx).fuse() => {
                 debug!("mux frame recv task finished: {r:?}");
                 (false, r)
             }
-            r = self.process_ws_next() => {
+            r = self.process_ws_next().fuse() => {
                 debug!("mux ws next task finished: {r:?}");
                 (false, r)
             }
@@ -216,12 +217,11 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
         let mut last_ping_sent = T::now();
 
         loop {
-            tokio::select! {
-                biased;
-                r = poll_fn(|cx| self.poll_reserve_space_recv_frame(cx, tx_frame_rx)) => {
+            futures_util::select_biased! {
+                r = poll_fn(|cx| self.poll_reserve_space_recv_frame(cx, tx_frame_rx)).fuse() => {
                     r?;
                 }
-                r = last_pong_timestamp_rx.changed() => {
+                r = last_pong_timestamp_rx.changed().fuse() => {
                     // `Err` when (sender dropped AND current value is read)
                     // The sender is inside `self`
                     if r.is_ok() {
@@ -232,7 +232,7 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
                         return Err(Error::ChannelClosed("last_pong_timestamp_rx"));
                     }
                 }
-                _ = interval.tick() => {
+                _ = interval.tick().fuse() => {
                     trace!("sending keepalive ping");
                     // Check if we have received a pong recently enough
                     let elapsed_since_last_pong = T::now().duration_since(last_pong_timestamp);
@@ -252,7 +252,6 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
     }
 
     /// Poll `frame_rx` and process the frame received in a way that is cancel safe.
-    /// Returns `true` if the user should follow the call with a `Sink::flush`.
     fn poll_reserve_space_recv_frame(
         &self,
         cx: &mut Context<'_>,
