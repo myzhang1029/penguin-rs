@@ -8,8 +8,11 @@
 #![deny(rust_2018_idioms, missing_docs, missing_debug_implementations)]
 #![deny(clippy::pedantic, clippy::cargo, clippy::nursery, clippy::unwrap_used)]
 #![allow(clippy::multiple_crate_versions)]
+#![no_std]
 
 extern crate alloc;
+#[cfg(feature = "std")]
+extern crate std;
 
 pub mod config;
 #[cfg(feature = "deadlock-detection")]
@@ -29,11 +32,12 @@ use crate::frame::{BindPayload, BindType, FinalizedFrame, Frame};
 use crate::loom::{Arc, AtomicBool, AtomicU32, AtomicWaker, Mutex, Ordering, RwLock};
 use crate::task::Task;
 use crate::ws::WebSocket;
+use alloc::boxed::Box;
 use bytes::Bytes;
 use core::future::poll_fn;
 use core::hash::{BuildHasher, Hash};
+use hashbrown::HashMap;
 use rand::distr::uniform::SampleUniform;
-use std::collections::HashMap;
 use std::time::Instant;
 use thiserror::Error;
 use tokio::sync::mpsc::error::TrySendError;
@@ -44,8 +48,10 @@ use tracing::{error, trace, warn};
 
 #[cfg(feature = "nohash")]
 type IntHasher = nohash_hasher::BuildNoHashHasher<u32>;
-#[cfg(not(feature = "nohash"))]
+#[cfg(all(not(feature = "nohash"), feature = "std"))]
 type IntHasher = std::collections::hash_map::RandomState;
+#[cfg(all(not(feature = "nohash"), not(feature = "std")))]
+type IntHasher = hashbrown::DefaultHashBuilder;
 
 pub use crate::dupe::Dupe;
 pub use crate::proto_version::{PROTOCOL_VERSION, PROTOCOL_VERSION_NUMBER};

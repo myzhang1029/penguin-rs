@@ -192,6 +192,7 @@ impl From<OptionalDuration> for OptionalInterval {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
     use futures_util::FutureExt;
 
     #[test]

@@ -10,6 +10,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
 use crate::proto_version;
+use alloc::vec::Vec;
 use bytes::{Buf, BufMut, Bytes};
 use core::{
     fmt::{self, Debug},
@@ -593,6 +594,7 @@ impl TryFrom<FinalizedFrame> for Frame<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
 
     #[test]
     fn test_frames() {

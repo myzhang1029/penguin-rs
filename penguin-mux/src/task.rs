@@ -9,10 +9,12 @@ use crate::ws::{Message, WebSocket};
 use crate::{
     BindRequest, Datagram, Dupe, Error, EstablishedStreamData, FlowSlot, MuxStream, Result,
 };
+#[cfg(feature = "rt-tokio")]
+use alloc::{boxed::Box, string::ToString};
 use bytes::Bytes;
 use core::future::poll_fn;
 use core::task::{Context, Poll, ready};
-use std::collections::HashMap;
+use hashbrown::HashMap;
 use std::time::Instant;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, watch};
@@ -23,8 +25,10 @@ use tracing::{debug, info, trace, warn};
 
 #[cfg(feature = "nohash")]
 type IntHasher = nohash_hasher::BuildNoHashHasher<u32>;
-#[cfg(not(feature = "nohash"))]
+#[cfg(all(not(feature = "nohash"), feature = "std"))]
 type IntHasher = std::collections::hash_map::RandomState;
+#[cfg(all(not(feature = "nohash"), not(feature = "std")))]
+type IntHasher = hashbrown::DefaultHashBuilder;
 
 /// Data owned by the multiplexor task.
 ///

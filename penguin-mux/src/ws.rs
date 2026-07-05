@@ -69,6 +69,7 @@ pub trait WebSocket: Send + 'static {
 #[cfg(feature = "tungstenite")]
 mod tokio_tungstenite {
     use super::{Message, WebSocket};
+    use alloc::boxed::Box;
     use bytes::Bytes;
     use core::pin::Pin;
     use core::task::{Context, Poll};

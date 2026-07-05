@@ -424,6 +424,7 @@ where
 mod tests {
     use super::*;
     use crate::{Dupe, tests::setup_logging};
+    use alloc::vec;
     use core::pin::pin;
     use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadBuf};
 

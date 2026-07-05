@@ -10,6 +10,8 @@ use crate::{
     frame,
     ws::{Message, WebSocket},
 };
+use alloc::vec;
+use alloc::vec::Vec;
 use core::future::poll_fn;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[cfg(feature = "tungstenite")]
