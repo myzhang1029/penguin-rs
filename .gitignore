@@ -1,3 +1,7 @@
 /target
 *.trace
+*.profraw
+lcov.info
+debug.info
+release.info
 /packages

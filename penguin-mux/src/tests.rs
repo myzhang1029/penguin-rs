@@ -13,6 +13,7 @@ use crate::{
 use alloc::vec;
 use alloc::vec::Vec;
 use core::future::poll_fn;
+#[cfg(feature = "tokio-io-util")]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[cfg(feature = "tungstenite")]
 use tokio_tungstenite::WebSocketStream;
@@ -306,7 +307,7 @@ async fn test_datagram_reject_long_host() {
 
 #[tokio::test]
 #[cfg(not(loom))]
-#[cfg(all(feature = "tokio-rt", feature = "std"))]
+#[cfg(all(feature = "tokio-rt", feature = "tokio-io-util", feature = "std"))]
 async fn connected_stream_passes_data_tiny_mtu_rwndminusone() {
     setup_logging();
     let (client, server) = get_pair(Some(8)).await;
@@ -355,7 +356,7 @@ async fn connected_stream_passes_data_tiny_mtu_rwndminusone() {
 
 #[tokio::test]
 #[cfg(not(loom))]
-#[cfg(all(feature = "tokio-rt", feature = "std"))]
+#[cfg(all(feature = "tokio-rt", feature = "tokio-io-util", feature = "std"))]
 async fn connected_stream_passes_data_tiny_mtu_with_keepalive() {
     setup_logging();
     let (client, server) = get_pair(Some(1)).await;
@@ -395,7 +396,7 @@ async fn connected_stream_passes_data_tiny_mtu_with_keepalive() {
 
 #[tokio::test]
 #[cfg(not(loom))]
-#[cfg(all(feature = "tokio-rt", feature = "std"))]
+#[cfg(all(feature = "tokio-rt", feature = "tokio-io-util", feature = "std"))]
 async fn connected_stream_passes_data_tiny_mtu() {
     setup_logging();
     let (client, server) = get_pair(Some(8)).await;
@@ -440,7 +441,7 @@ async fn connected_stream_passes_data_tiny_mtu() {
 
 #[tokio::test]
 #[cfg(not(loom))]
-#[cfg(all(feature = "tokio-rt", feature = "std"))]
+#[cfg(all(feature = "tokio-rt", feature = "tokio-io-util", feature = "std"))]
 async fn connected_stream_passes_data() {
     setup_logging();
     let (client, server) = get_pair(None).await;
@@ -485,7 +486,7 @@ async fn connected_stream_passes_data() {
 
 #[tokio::test]
 #[cfg(not(loom))]
-#[cfg(all(feature = "tokio-rt", feature = "std"))]
+#[cfg(all(feature = "tokio-rt", feature = "tokio-io-util", feature = "std"))]
 async fn connected_stream_passes_data_one_sided_lots() {
     setup_logging();
     let (client, server) = get_pair(None).await;
@@ -529,7 +530,7 @@ async fn connected_stream_passes_data_one_sided_lots() {
 
 #[tokio::test]
 #[cfg(not(loom))]
-#[cfg(all(feature = "tokio-rt", feature = "std"))]
+#[cfg(all(feature = "tokio-rt", feature = "tokio-io-util", feature = "std"))]
 async fn test_shutdown_has_effect() {
     setup_logging();
     let (client, server) = get_pair(None).await;
@@ -551,7 +552,7 @@ async fn test_shutdown_has_effect() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[cfg(not(loom))]
-#[cfg(all(feature = "tokio-rt", feature = "std"))]
+#[cfg(all(feature = "tokio-rt", feature = "tokio-io-util", feature = "std"))]
 async fn test_contention() {
     const NUM_CONCURRENT: usize = 16;
     const EACH_JOB_WRITES: usize = 16;
@@ -604,7 +605,7 @@ async fn test_contention() {
 #[cfg(feature = "tungstenite")]
 #[tokio::test(flavor = "multi_thread")]
 #[cfg(not(loom))]
-#[cfg(all(feature = "tokio-rt", feature = "std"))]
+#[cfg(all(feature = "tokio-rt", feature = "tokio-io-util", feature = "std"))]
 async fn test_with_tcpsocket() {
     setup_logging();
     for _ in 0..16 {
@@ -613,7 +614,7 @@ async fn test_with_tcpsocket() {
 }
 #[cfg(feature = "tungstenite")]
 #[cfg(not(loom))]
-#[cfg(all(feature = "tokio-rt", feature = "std"))]
+#[cfg(all(feature = "tokio-rt", feature = "tokio-io-util", feature = "std"))]
 async fn test_with_tcpsocket_inner() {
     use tokio_tungstenite::tungstenite::protocol::Role;
     const SINGLE_WRITE_LEN: usize = 4096;
@@ -657,7 +658,7 @@ async fn test_with_tcpsocket_inner() {
 
 #[tokio::test]
 #[cfg(not(loom))]
-#[cfg(all(feature = "tokio-rt", feature = "std"))]
+#[cfg(all(feature = "tokio-rt", feature = "tokio-io-util", feature = "std"))]
 async fn test_early_eof_detected() {
     setup_logging();
     for _ in 0..64 {
@@ -666,7 +667,7 @@ async fn test_early_eof_detected() {
 }
 
 #[cfg(not(loom))]
-#[cfg(all(feature = "tokio-rt", feature = "std"))]
+#[cfg(all(feature = "tokio-rt", feature = "tokio-io-util", feature = "std"))]
 async fn test_early_eof_detected_inner() {
     let (client, server) = get_pair(None).await;
 
@@ -703,7 +704,7 @@ async fn test_early_eof_detected_inner() {
 
 #[tokio::test]
 #[cfg(not(loom))]
-#[cfg(all(feature = "tokio-rt", feature = "std"))]
+#[cfg(all(feature = "tokio-rt", feature = "tokio-io-util", feature = "std"))]
 async fn test_close_port_behaviour() {
     setup_logging();
     let (mut client, server) = get_pair(None).await;
@@ -790,7 +791,7 @@ async fn test_close_port_behaviour() {
 
 #[tokio::test]
 #[cfg(not(loom))]
-#[cfg(all(feature = "tokio-rt", feature = "std"))]
+#[cfg(all(feature = "tokio-rt", feature = "tokio-io-util", feature = "std"))]
 async fn test_several_channels() {
     setup_logging();
     let (client, server) = get_pair(None).await;

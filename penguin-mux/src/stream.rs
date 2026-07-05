@@ -484,6 +484,7 @@ mod tests {
     use crate::tests::setup_logging;
     use alloc::vec;
     use core::pin::{Pin, pin};
+    #[cfg(feature = "tokio-io-util")]
     use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadBuf};
 
     const DEFAULT_RWND_THRESHOLD: u32 = 4;
@@ -677,7 +678,7 @@ mod tests {
 
     #[tokio::test]
     #[cfg(not(loom))]
-    #[cfg(feature = "std")]
+    #[cfg(all(feature = "tokio-io-util", feature = "std"))]
     async fn test_copy_bidirectional_normal() {
         const TX1: Bytes = Bytes::from_static(b"hello from mux");
         const RX1: Bytes = Bytes::from_static(b"hello from other");
@@ -781,7 +782,7 @@ mod tests {
 
     #[tokio::test]
     #[cfg(not(loom))]
-    #[cfg(feature = "std")]
+    #[cfg(all(feature = "tokio-io-util", feature = "std"))]
     async fn test_flow_control() {
         const TEST_ACK_THRESHOLD: usize = 5;
         const TEST_ACK_THRESHOLD_U32: u32 = 5;

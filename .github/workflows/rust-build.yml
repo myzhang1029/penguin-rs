@@ -41,8 +41,17 @@ jobs:
     - name: Check penguin-mux only
       run: cargo check --verbose --no-default-features --package penguin-mux
 
+    - name: Check penguin-mux with tokio-io-util support
+      run: cargo check --verbose --features tokio-io-util --no-default-features --package penguin-mux
+
     - name: Check penguin-mux with tokio-rt support
       run: cargo check --verbose --features tokio-rt --no-default-features --package penguin-mux
+
+    - name: Check penguin-mux with tokio-time support
+      run: cargo check --verbose --features tokio-time --no-default-features --package penguin-mux
+
+    - name: Check penguin-mux with all optional tokio support
+      run: cargo check --verbose --features tokio-io-util,tokio-rt,tokio-time --no-default-features --package penguin-mux
 
     - name: Check penguin-mux with tungstenite support
       run: cargo check --verbose --features tungstenite --no-default-features --package penguin-mux

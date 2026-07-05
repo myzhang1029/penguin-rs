@@ -43,9 +43,10 @@ tracing-subscriber = { version = "^0.3, >=0.3.20", features = ["env-filter"] }
 loom = { version = "0.7", features = ["checkpoint", "futures"] }
 
 [features]
-default = ["std", "tokio-io-util", "tokio-rt", "tungstenite"]
+default = ["std", "tokio", "tungstenite"]
 std = ["dep:parking_lot", "rand/thread_rng", "tokio/parking_lot"]
 # Expect the tokio runtime to be available
+tokio = ["tokio-rt", "tokio-io-util", "tokio-time"]
 tokio-rt = ["tokio/rt"]
 tokio-io-util = ["tokio/io-util"]
 tokio-time = ["tokio/time"]

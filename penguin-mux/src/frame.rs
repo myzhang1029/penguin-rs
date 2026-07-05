@@ -806,4 +806,21 @@ mod tests {
         let decoded = Frame::try_from(finalized).unwrap();
         assert_eq!(frame, decoded);
     }
+
+    #[test]
+    fn test_frame_debug_not_too_long() {
+        crate::tests::setup_logging();
+        let data = vec![0; 256];
+        let frame = Frame::new_push(0x75b_97bb, &data);
+        let debug_str = alloc::format!("{frame:?}");
+        assert!(debug_str.len() < 64);
+        assert!(debug_str.contains("opcode: Push"));
+        assert!(debug_str.contains("id: 075b97bb"));
+        assert!(debug_str.contains("payload.len: 256"));
+        let finalized = FinalizedFrame::from(&frame);
+        let debug_str = alloc::format!("{finalized:?}");
+        assert!(debug_str.len() < 64);
+        assert!(debug_str.contains("opcode: Ok(Push)"));
+        assert!(debug_str.contains("encoded_len"));
+    }
 }
