@@ -15,7 +15,7 @@ use bytes::Bytes;
 use futures_util::TryFutureExt;
 use parking_lot::Mutex;
 use penguin_mux::timing::{Backoff, OptionalDuration};
-use penguin_mux::{Datagram, IntKey, Multiplexor, MuxStream};
+use penguin_mux::{Datagram, HashMapLike, Multiplexor, MuxStream};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, OnceLock};
@@ -142,7 +142,7 @@ impl HandlerResources {
             *client_id
         } else {
             // The client doesn't exist, add it to the maps
-            let client_id = u32::next_available_key(client_id_map);
+            let client_id = client_id_map.next_available_key();
             client_id_map.insert(
                 client_id,
                 ClientIdMapEntry::new(addr, our_addr, socket, socks5),

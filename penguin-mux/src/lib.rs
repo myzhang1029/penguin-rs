@@ -18,6 +18,7 @@ pub mod config;
 #[cfg(feature = "deadlock-detection")]
 pub mod deadlock_detection;
 pub mod frame;
+mod int_key;
 mod loom;
 mod proto_version;
 mod stream;
@@ -34,9 +35,7 @@ use crate::ws::WebSocket;
 use alloc::boxed::Box;
 use bytes::Bytes;
 use core::future::poll_fn;
-use core::hash::{BuildHasher, Hash};
 use hashbrown::HashMap;
-use rand::distr::uniform::SampleUniform;
 use std::time::Instant;
 use thiserror::Error;
 use tokio::sync::mpsc::error::TrySendError;
@@ -52,6 +51,7 @@ type IntHasher = std::collections::hash_map::RandomState;
 #[cfg(all(not(feature = "nohash"), not(feature = "std")))]
 type IntHasher = hashbrown::DefaultHashBuilder;
 
+pub use crate::int_key::HashMapLike;
 pub use crate::proto_version::{PROTOCOL_VERSION, PROTOCOL_VERSION_NUMBER};
 pub use crate::stream::MuxStream;
 pub use crate::task::TaskData;
@@ -242,7 +242,7 @@ impl Multiplexor {
             let flow_id = {
                 let mut streams = self.flows.write();
                 // Allocate a new port
-                let flow_id = u32::next_available_key(&*streams);
+                let flow_id = streams.next_available_key();
                 trace!("flow_id = {flow_id:08x}");
                 streams.insert(flow_id, FlowSlot::Requested(stream_tx));
                 flow_id
@@ -344,7 +344,7 @@ impl Multiplexor {
         let flow_id = {
             let mut streams = self.flows.write();
             // Allocate a new port
-            let flow_id = u32::next_available_key(&*streams);
+            let flow_id = streams.next_available_key();
             trace!("flow_id = {flow_id:08x}");
             streams.insert(flow_id, FlowSlot::BindRequested(result_tx));
             flow_id
@@ -565,37 +565,3 @@ impl Drop for BindRequest<'_> {
         self.reply(false).ok();
     }
 }
-
-/// Randomly generate a new number
-pub trait IntKey: Eq + Hash + Copy + SampleUniform + PartialOrd {
-    /// The minimum value of the key
-    const MIN: Self;
-    /// The maximum value of the key
-    const MAX: Self;
-
-    /// Generate a new key that is not in the map
-    #[inline]
-    #[must_use]
-    fn next_available_key<V, S: BuildHasher>(map: &HashMap<Self, V, S>) -> Self {
-        loop {
-            let i = rand::random_range(Self::MIN..Self::MAX);
-            if !map.contains_key(&i) {
-                break i;
-            }
-        }
-    }
-}
-
-macro_rules! impl_int_key {
-    ($($t:ty),*) => {
-        $(
-            impl IntKey for $t {
-                // 0 is for special use
-                const MIN : Self = 1;
-                const MAX : Self = Self::MAX;
-            }
-        )*
-    };
-}
-
-impl_int_key!(u8, u16, u32, u64, u128, usize);
