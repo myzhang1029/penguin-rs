@@ -143,17 +143,17 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
         mut last_pong_timestamp_rx: watch::Receiver<T>,
     ) -> Result<()> {
         let (should_drain_frame_rx, res) = futures_util::select_biased! {
-            r = self.process_dropped_ports_task(&mut dropped_ports_rx).fuse() => {
-                debug!("mux dropped ports task finished: {r:?}");
-                (true, r)
+            r = self.process_ws_next().fuse() => {
+                debug!("mux ws next task finished: {r:?}");
+                (false, r)
             }
             r = self.process_frame_recv_task(&mut tx_frame_rx, &mut last_pong_timestamp_rx).fuse() => {
                 debug!("mux frame recv task finished: {r:?}");
                 (false, r)
             }
-            r = self.process_ws_next().fuse() => {
-                debug!("mux ws next task finished: {r:?}");
-                (false, r)
+            r = self.process_dropped_ports_task(&mut dropped_ports_rx).fuse() => {
+                debug!("mux dropped ports task finished: {r:?}");
+                (true, r)
             }
         };
         self.wind_down(should_drain_frame_rx, &mut tx_frame_rx)
