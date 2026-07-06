@@ -239,9 +239,11 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
                         warn!("No pong received for {elapsed_since_last_pong:?}");
                         return Err(Error::KeepaliveTimeout);
                     }
-                    poll_fn(|cx| self.ws.lock().poll_ready_unpin(cx)).await?;
+                    self.tx_msg_tx.send(Message::Ping).map_err(|_| {
+                        debug_assert!(false, "`tx_msg_tx` should not be closed (this is a bug)");
+                        Error::ChannelClosed("tx_msg_tx")
+                    })?;
                     last_ping_sent = T::now();
-                    self.ws.lock().start_send_unpin(Message::Ping)?;
                 }
             }
             poll_fn(|cx| self.ws.lock().poll_flush_unpin(cx)).await?;
@@ -269,6 +271,7 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
             );
             return Poll::Ready(Err(Error::ChannelClosed("tx_msg_rx")));
         };
+        trace!("message queue backlog: {}", tx_msg_rx.len());
         // After this point, we may not return `Poll::Pending` because we (might) hold data
         self.ws.lock().start_send_unpin(msg)?;
         Poll::Ready(Ok(()))

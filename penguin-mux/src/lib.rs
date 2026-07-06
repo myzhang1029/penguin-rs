@@ -603,6 +603,20 @@ impl BindRequest<'_> {
         }
         .or(Err(Error::Closed))
     }
+
+    /// Manually send a `Ping` message to the peer.
+    ///
+    /// This message will not be tracked by the internal timers. It is most useful
+    /// for where `TimestampProvider` is stub or `tokio-time` is not enabled.
+    ///
+    /// # Errors
+    /// - Returns [`Error::Closed`] if the `Multiplexor` is already closed.
+    #[tracing::instrument(skip(self), level = "debug")]
+    pub fn manual_ping(&self) -> Result<()> {
+        self.tx_msg_tx
+            .send(Message::Ping)
+            .or(Err(Error::Closed))
+    }
 }
 
 impl Drop for BindRequest<'_> {
