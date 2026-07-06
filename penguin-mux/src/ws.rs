@@ -7,7 +7,8 @@ use core::fmt;
 use core::task::{Context, Poll};
 
 /// Types of messages we need
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, derive_more::From, PartialEq, Eq)]
+#[from(Bytes)]
 pub enum Message {
     /// Binary message or any payload
     Binary(Bytes),

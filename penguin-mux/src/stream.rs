@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use crate::frame::{FinalizedFrame, Frame};
+use crate::frame::Frame;
 use crate::loom::{Arc, AtomicBool, AtomicU32, AtomicWaker, Ordering};
+use crate::ws::Message;
 use bytes::Bytes;
 use core::fmt;
 #[cfg(feature = "std")]
@@ -19,7 +20,7 @@ use tracing::{debug, trace, warn};
 /// All parameters of a stream channel
 pub struct MuxStream {
     /// Receive stream frames
-    pub(super) frame_rx: mpsc::Receiver<Bytes>,
+    pub(super) rx_frame_rx: mpsc::Receiver<Bytes>,
     /// Flow ID
     pub(super) flow_id: u32,
     /// Forwarding destination
@@ -38,7 +39,7 @@ pub struct MuxStream {
     /// Remaining bytes to be read
     pub(super) buf: Bytes,
     /// See `MultiplexorInner`.
-    pub(super) frame_tx: mpsc::UnboundedSender<FinalizedFrame>,
+    pub(super) tx_msg_tx: mpsc::UnboundedSender<Message>,
     /// See `MultiplexorInner`.
     pub(super) dropped_ports_tx: mpsc::UnboundedSender<u32>,
     /// Number of `Push` frames between [`Acknowledge`](frame::OpCode::Acknowledge)s:
@@ -169,16 +170,16 @@ impl MuxStream {
     #[tracing::instrument(skip_all, level = "trace", fields(flow_id = self.flow_id))]
     #[inline]
     pub fn poll_for_push(&mut self, cx: &mut Context<'_>) -> Poll<usize> {
-        let Some(next) = ready!(self.frame_rx.poll_recv(cx)) else {
+        let Some(next) = ready!(self.rx_frame_rx.poll_recv(cx)) else {
             trace!("stream has been closed");
             // See `tokio::sync::mpsc`#clean-shutdown
-            self.frame_rx.close();
+            self.rx_frame_rx.close();
             // There should be no code path sending more frames after an EOF
             // If this assertion fails, some code path is sending frames after EOF
             // and thus causing loss of data.
             // However, this is not an inconsistent state so we should not
             // panic a production setup.
-            debug_assert!(self.frame_rx.try_recv().is_err());
+            debug_assert!(self.rx_frame_rx.try_recv().is_err());
             return Poll::Ready(0);
         };
         // Putting no data into the buffer is EOF, and other code should
@@ -207,7 +208,7 @@ impl MuxStream {
             return Poll::Ready(None);
         };
         let frame = Frame::new_push(self.flow_id, buf).into();
-        Poll::Ready(self.frame_tx.send(frame).ok())
+        Poll::Ready(self.tx_msg_tx.send(frame).ok())
     }
 
     /// Increment the number of `Push` frames received since the last `Acknowledge`
@@ -223,7 +224,7 @@ impl MuxStream {
             self.psh_recvd_since = 0;
             // Send an `Acknowledge` frame
             trace!("sending `Acknowledge` of {new} frames");
-            self.frame_tx
+            self.tx_msg_tx
                 .send(Frame::new_acknowledge(self.flow_id, new).into())
                 .ok();
             // If the previous line fails, the task has exited.
@@ -300,7 +301,7 @@ impl MuxStream {
         if self.finish_sent.swap(true, Ordering::AcqRel) {
             return Some(());
         }
-        self.frame_tx
+        self.tx_msg_tx
             .send(Frame::new_finish(self.flow_id).into())
             .ok()?;
         Some(())
@@ -450,7 +451,7 @@ where
                     }
                     ready!(self.us.poll_obtain_write_permission(cx)).ok_or(BrokenPipe)?;
                     let frame = Frame::new_push(self.us.flow_id, new_buf).into();
-                    self.us.frame_tx.send(frame).or(Err(BrokenPipe))?;
+                    self.us.tx_msg_tx.send(frame).or(Err(BrokenPipe))?;
                     let processed = new_buf.len();
                     Pin::new(&mut self.other).consume(processed);
                     written_amt += processed as u64;
@@ -482,6 +483,7 @@ where
 mod tests {
     use super::*;
     use crate::tests::setup_logging;
+    use crate::ws::Message::Binary;
     use alloc::vec;
     use core::pin::{Pin, pin};
     #[cfg(feature = "tokio-io-util")]
@@ -509,10 +511,10 @@ mod tests {
     #[cfg(feature = "std")]
     async fn test_mux_stream_read_inner() {
         let (rx_frame_tx, rx_frame_rx) = mpsc::channel(10);
-        let (tx_frame_tx, mut tx_frame_rx) = mpsc::unbounded_channel();
+        let (tx_msg_tx, mut tx_msg_rx) = mpsc::unbounded_channel();
         let (dropped_ports_tx, _) = mpsc::unbounded_channel();
         let stream = MuxStream {
-            frame_rx: rx_frame_rx,
+            rx_frame_rx,
             flow_id: 1,
             dest_host: Bytes::new(),
             dest_port: 8080,
@@ -520,7 +522,7 @@ mod tests {
             psh_send_remaining: Arc::new(AtomicU32::new(2)),
             psh_recvd_since: 0,
             writer_waker: Arc::new(AtomicWaker::new()),
-            frame_tx: tx_frame_tx,
+            tx_msg_tx: tx_msg_tx,
             buf: Bytes::new(),
             dropped_ports_tx,
             rwnd_threshold: 2,
@@ -563,9 +565,10 @@ mod tests {
         }
 
         // There should be an `Acknowledge` frame waiting for us now
-        let frame = tx_frame_rx.recv().await.unwrap();
-        assert_eq!(frame.opcode().unwrap(), crate::frame::OpCode::Acknowledge);
-        let frame = Frame::try_from(frame).unwrap();
+        let Binary(msg) = tx_msg_rx.recv().await.unwrap() else {
+            panic!("Expected a binary message");
+        };
+        let frame = Frame::try_from(msg).unwrap();
         assert_eq!(frame.id, 1);
         if let crate::frame::Payload::Acknowledge(ack) = frame.payload {
             assert_eq!(ack, 2);
@@ -603,10 +606,10 @@ mod tests {
     #[cfg(feature = "std")]
     async fn test_mux_stream_write_inner() {
         let (_, rx_frame_rx) = mpsc::channel(DEFAULT_RWND_THRESHOLD as usize);
-        let (tx_frame_tx, mut tx_frame_rx) = mpsc::unbounded_channel();
+        let (tx_msg_tx, mut tx_msg_rx) = mpsc::unbounded_channel();
         let (dropped_ports_tx, _) = mpsc::unbounded_channel();
         let stream = MuxStream {
-            frame_rx: rx_frame_rx,
+            rx_frame_rx,
             flow_id: 1,
             dest_host: Bytes::new(),
             dest_port: 8080,
@@ -614,7 +617,7 @@ mod tests {
             psh_send_remaining: Arc::new(AtomicU32::new(2)),
             psh_recvd_since: 0,
             writer_waker: Arc::new(AtomicWaker::new()),
-            frame_tx: tx_frame_tx,
+            tx_msg_tx,
             buf: Bytes::new(),
             dropped_ports_tx,
             rwnd_threshold: DEFAULT_RWND_THRESHOLD,
@@ -630,18 +633,20 @@ mod tests {
         }
 
         // Check the frame sent
-        let frame1 = tx_frame_rx.recv().await.unwrap();
-        assert_eq!(frame1.opcode().unwrap(), crate::frame::OpCode::Push);
-        let frame1 = Frame::try_from(frame1).unwrap();
+        let Binary(msg) = tx_msg_rx.recv().await.unwrap() else {
+            panic!("Expected a binary message");
+        };
+        let frame1 = Frame::try_from(msg).unwrap();
         assert_eq!(frame1.id, 1);
         if let crate::frame::Payload::Push(push) = frame1.payload {
             assert_eq!(&push.as_ref(), b"hello");
         } else {
             panic!("Expected a `Push` frame");
         }
-        let frame2 = tx_frame_rx.recv().await.unwrap();
-        assert_eq!(frame2.opcode().unwrap(), crate::frame::OpCode::Push);
-        let frame2 = Frame::try_from(frame2).unwrap();
+        let Binary(msg) = tx_msg_rx.recv().await.unwrap() else {
+            panic!("Expected a binary message");
+        };
+        let frame2 = Frame::try_from(msg).unwrap();
         assert_eq!(frame2.id, 1);
         if let crate::frame::Payload::Push(push) = frame2.payload {
             assert_eq!(&push.as_ref(), b"world");
@@ -665,9 +670,10 @@ mod tests {
             assert!(matches!(rs, Poll::Ready(Ok(5))));
         }
 
-        let frame4 = tx_frame_rx.recv().await.unwrap();
-        assert_eq!(frame4.opcode().unwrap(), crate::frame::OpCode::Push);
-        let frame4 = Frame::try_from(frame4).unwrap();
+        let Binary(msg) = tx_msg_rx.recv().await.unwrap() else {
+            panic!("Expected a binary message");
+        };
+        let frame4 = Frame::try_from(msg).unwrap();
         assert_eq!(frame4.id, 1);
         if let crate::frame::Payload::Push(push) = frame4.payload {
             assert_eq!(&push.as_ref(), b"maybe");
@@ -687,12 +693,12 @@ mod tests {
         const RX3: Bytes = Bytes::from_static(b"stout");
         setup_logging();
         let (rx_frame_tx, rx_frame_rx) = mpsc::channel(DEFAULT_RWND_THRESHOLD as usize);
-        let (tx_frame_tx, mut tx_frame_rx) = mpsc::unbounded_channel();
+        let (tx_msg_tx, mut tx_msg_rx) = mpsc::unbounded_channel();
         let (dropped_ports_tx, _) = mpsc::unbounded_channel();
         let (other_stream, mut check_side) = tokio::io::duplex(1024);
 
         let mux_stream = MuxStream {
-            frame_rx: rx_frame_rx,
+            rx_frame_rx,
             flow_id: 1,
             dest_host: Bytes::new(),
             dest_port: 8080,
@@ -700,7 +706,7 @@ mod tests {
             psh_send_remaining: Arc::new(AtomicU32::new(10)), // Allow more frames for this test
             psh_recvd_since: 0,
             writer_waker: Arc::new(AtomicWaker::new()),
-            frame_tx: tx_frame_tx.clone(),
+            tx_msg_tx: tx_msg_tx.clone(),
             buf: Bytes::new(),
             dropped_ports_tx: dropped_ports_tx.clone(),
             rwnd_threshold: DEFAULT_RWND_THRESHOLD,
@@ -728,8 +734,10 @@ mod tests {
         check_side.flush().await.unwrap();
 
         // Verify data was sent to the remote peer
-        let frame = tx_frame_rx.recv().await.unwrap();
-        let frame = Frame::try_from(frame).unwrap();
+        let Binary(msg) = tx_msg_rx.recv().await.unwrap() else {
+            panic!("Expected a binary message");
+        };
+        let frame = Frame::try_from(msg).unwrap();
         assert_eq!(frame.id, 1);
         if let crate::frame::Payload::Push(push) = frame.payload {
             assert_eq!(push.as_ref(), RX1);
@@ -752,8 +760,10 @@ mod tests {
         check_side.write_all(&RX2).await.unwrap();
         check_side.flush().await.unwrap();
         // Check that this side is still open
-        let frame = tx_frame_rx.recv().await.unwrap();
-        let frame = Frame::try_from(frame).unwrap();
+        let Binary(msg) = tx_msg_rx.recv().await.unwrap() else {
+            panic!("Expected a binary message");
+        };
+        let frame = Frame::try_from(msg).unwrap();
         assert_eq!(frame.id, 1);
         if let crate::frame::Payload::Push(push) = frame.payload {
             assert_eq!(push.as_ref(), RX2);
@@ -764,8 +774,10 @@ mod tests {
         check_side.write_all(&RX3).await.unwrap();
         check_side.shutdown().await.unwrap();
         // Check that the data is not lost
-        let frame = tx_frame_rx.recv().await.unwrap();
-        let frame = Frame::try_from(frame).unwrap();
+        let Binary(msg) = tx_msg_rx.recv().await.unwrap() else {
+            panic!("Expected a binary message");
+        };
+        let frame = Frame::try_from(msg).unwrap();
         assert_eq!(frame.id, 1);
         if let crate::frame::Payload::Push(push) = frame.payload {
             assert_eq!(push.as_ref(), RX3);
@@ -789,11 +801,11 @@ mod tests {
         assert_eq!(TEST_ACK_THRESHOLD, TEST_ACK_THRESHOLD_U32 as usize);
         setup_logging();
         let (rx_frame_tx, rx_frame_rx) = mpsc::channel(TEST_ACK_THRESHOLD);
-        let (tx_frame_tx, mut tx_frame_rx) = mpsc::unbounded_channel();
+        let (tx_msg_tx, mut tx_msg_rx) = mpsc::unbounded_channel();
         let (dropped_ports_tx, _) = mpsc::unbounded_channel();
         let (other_stream, mut check_side) = tokio::io::duplex(1024);
         let mut mux_stream = MuxStream {
-            frame_rx: rx_frame_rx,
+            rx_frame_rx,
             flow_id: 1,
             dest_host: Bytes::new(),
             dest_port: 8080,
@@ -801,7 +813,7 @@ mod tests {
             psh_send_remaining: Arc::new(AtomicU32::new(10)), // Allow more frames for this test
             psh_recvd_since: 0,
             writer_waker: Arc::new(AtomicWaker::new()),
-            frame_tx: tx_frame_tx.clone(),
+            tx_msg_tx: tx_msg_tx.clone(),
             buf: Bytes::new(),
             dropped_ports_tx: dropped_ports_tx.clone(),
             rwnd_threshold: TEST_ACK_THRESHOLD_U32,
@@ -818,15 +830,17 @@ mod tests {
         // The point is to confirm that the reader processed the frames
         // so if we get `Acknowledge` even before we started reading, then
         // it is pointless.
-        tx_frame_rx.try_recv().unwrap_err();
+        tx_msg_rx.try_recv().unwrap_err();
         // First test with just `AsyncRead`
         let mut buf = [0u8; 5 * TEST_ACK_THRESHOLD];
         let n = mux_stream.read_exact(&mut buf).await.unwrap();
         assert_eq!(n, 5 * TEST_ACK_THRESHOLD);
         assert_eq!(&buf[..n], b"hello".repeat(TEST_ACK_THRESHOLD).as_slice());
         // Check that the `Acknowledge` frame has arrived
-        let frame = tx_frame_rx.recv().await.unwrap();
-        let frame = Frame::try_from(frame).unwrap();
+        let Binary(msg) = tx_msg_rx.recv().await.unwrap() else {
+            panic!("Expected a binary message");
+        };
+        let frame = Frame::try_from(msg).unwrap();
         assert_eq!(frame.id, 1);
         if let crate::frame::Payload::Acknowledge(ack) = frame.payload {
             assert_eq!(ack, TEST_ACK_THRESHOLD_U32);
@@ -842,16 +856,20 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let frame = tx_frame_rx.recv().await.unwrap();
-        let frame = Frame::try_from(frame).unwrap();
+        let Binary(msg) = tx_msg_rx.recv().await.unwrap() else {
+            panic!("Expected a binary message");
+        };
+        let frame = Frame::try_from(msg).unwrap();
         assert_eq!(frame.id, 1);
         if let crate::frame::Payload::Acknowledge(ack) = frame.payload {
             assert_eq!(ack, TEST_ACK_THRESHOLD_U32);
         } else {
             panic!("Expected an `Acknowledge` frame");
         }
-        let frame = tx_frame_rx.recv().await.unwrap();
-        let frame = Frame::try_from(frame).unwrap();
+        let Binary(msg) = tx_msg_rx.recv().await.unwrap() else {
+            panic!("Expected a binary message");
+        };
+        let frame = Frame::try_from(msg).unwrap();
         assert_eq!(frame.id, 1);
         if let crate::frame::Payload::Acknowledge(ack) = frame.payload {
             assert_eq!(ack, TEST_ACK_THRESHOLD_U32);
@@ -877,8 +895,8 @@ mod tests {
         task.await.unwrap().unwrap();
         // Check that the data has been sent
         let mut buf = [0u8; 5 * TEST_ACK_THRESHOLD];
-        while let Some(frame) = tx_frame_rx.recv().await {
-            let frame = Frame::try_from(frame).unwrap();
+        while let Some(Binary(msg)) = tx_msg_rx.recv().await {
+            let frame = Frame::try_from(msg).unwrap();
             assert_eq!(frame.id, 1);
             match frame.payload {
                 crate::frame::Payload::Push(push) => {
@@ -913,10 +931,10 @@ mod tests {
     async fn test_mux_stream_shutdown_inner() {
         setup_logging();
         let (_, rx_frame_rx) = mpsc::channel(10);
-        let (tx_frame_tx, mut tx_frame_rx) = mpsc::unbounded_channel();
+        let (tx_msg_tx, mut tx_msg_rx) = mpsc::unbounded_channel();
         let (dropped_ports_tx, mut dropped_ports_rx) = mpsc::unbounded_channel();
         let mut stream = MuxStream {
-            frame_rx: rx_frame_rx,
+            rx_frame_rx,
             flow_id: 15,
             dest_host: Bytes::new(),
             dest_port: 8080,
@@ -924,7 +942,7 @@ mod tests {
             psh_send_remaining: Arc::new(AtomicU32::new(2)),
             psh_recvd_since: 0,
             writer_waker: Arc::new(AtomicWaker::new()),
-            frame_tx: tx_frame_tx,
+            tx_msg_tx,
             buf: Bytes::new(),
             dropped_ports_tx,
             rwnd_threshold: 2,
@@ -935,10 +953,12 @@ mod tests {
         let rs = Pin::new(&mut stream).as_mut().poll_shutdown(&mut cx);
         assert!(matches!(rs, Poll::Ready(Ok(()))));
         // Check the frame sent
-        let frame = tx_frame_rx.recv().await.unwrap();
-        assert_eq!(frame.opcode().unwrap(), crate::frame::OpCode::Finish);
-        let frame = Frame::try_from(frame).unwrap();
+        let Binary(msg) = tx_msg_rx.recv().await.unwrap() else {
+            panic!("Expected a binary message");
+        };
+        let frame = Frame::try_from(msg).unwrap();
         assert_eq!(frame.id, 15);
+        assert_eq!(frame.opcode(), crate::frame::OpCode::Finish);
 
         drop(stream);
         // Check that `Drop` sends its information

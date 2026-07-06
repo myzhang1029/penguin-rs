@@ -154,7 +154,7 @@ pub(crate) enum Payload<'data> {
 
 impl Payload<'_> {
     #[inline]
-    const fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         match self {
             Self::Connect(ConnectPayload { target_host, .. }) => {
                 size_of::<u32>() + size_of::<u16>() + target_host.len()
@@ -354,6 +354,12 @@ impl<'data> Frame<'data> {
         });
         Self { id, payload }
     }
+
+    /// Get the opcode of this frame
+    #[inline]
+    pub fn opcode(&self) -> OpCode {
+        OpCode::from(&self.payload)
+    }
 }
 
 macro_rules! check_remaining {
@@ -551,43 +557,12 @@ impl From<&Frame<'_>> for Bytes {
     }
 }
 
-/// An owned and finalized frame for single-copy operations.
-/// This struct is used over `Bytes` mostly so that the `Debug` implementation
-/// would be more useful.
-#[derive(Clone, derive_more::From, derive_more::Into, PartialEq, Eq)]
-// Do not implement from Bytes, so that we can hopefully make sure that
-// all `FinalizedFrame` instances are valid frames.
-#[from(Frame<'_>, &Frame<'_>)]
-#[into(Bytes)]
-pub(crate) struct FinalizedFrame(Bytes);
-
-impl FinalizedFrame {
-    /// Check the opcode of the frame
+// This operation allows a single-copy conversion from `Frame<'_>` to `Message`,
+// without going through `Frame<'static>`.
+impl From<Frame<'_>> for crate::ws::Message {
     #[inline]
-    pub fn opcode(&self) -> Result<OpCode, Error> {
-        let firstbyte = self.0.first().ok_or({
-            // This is used in `impl Debug` so let's allow empty frames
-            Error::FrameTooShort
-        })?;
-        let raw_opcode = firstbyte & 0x0F;
-        OpCode::try_from(raw_opcode)
-    }
-}
-
-impl Debug for FinalizedFrame {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("FinalizedFrame")
-            .field("opcode", &self.opcode())
-            .field("encoded_len", &self.0.len())
-            .finish()
-    }
-}
-
-impl TryFrom<FinalizedFrame> for Frame<'_> {
-    type Error = Error;
-    #[inline]
-    fn try_from(frame: FinalizedFrame) -> Result<Self, Self::Error> {
-        Frame::try_from(frame.0)
+    fn from(frame: Frame<'_>) -> Self {
+        Self::Binary(Bytes::from(frame))
     }
 }
 
@@ -774,40 +749,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Datagram target host too long")]
-    fn test_finalized_frame_too_long() {
-        crate::tests::setup_logging();
-        let long_hostname = vec![0; 256];
-        let frame = Frame::new_datagram(2134, &long_hostname, 1234, &[1, 2, 3, 4]);
-        let _ = FinalizedFrame::from(frame);
-    }
-
-    #[test]
-    fn test_finalized_frame() {
-        const COMMON_OVERHEAD_SIZE: usize = size_of::<u8>() + size_of::<u32>();
-        crate::tests::setup_logging();
-        let frame = Frame::new_connect(&[0x01, 0x02, 0x03], 5678, 1234, 128);
-        let payload_len = frame.payload.len();
-        let finalized = FinalizedFrame::from(&frame);
-        assert_eq!(Bytes::from(&frame), Bytes::from(finalized.clone()));
-        assert_eq!(Bytes::from(&frame), finalized.0);
-        assert_eq!(finalized.0.len(), COMMON_OVERHEAD_SIZE + payload_len);
-        assert_eq!(finalized.opcode().unwrap(), OpCode::Connect);
-        let decoded = Frame::try_from(finalized).unwrap();
-        assert_eq!(frame, decoded);
-
-        let frame = Frame::new_datagram(2134, &[1, 2, 3, 4], 1234, &[1, 2, 3, 4]);
-        let payload_len = frame.payload.len();
-        let finalized = FinalizedFrame::from(&frame);
-        assert_eq!(Bytes::from(&frame), Bytes::from(finalized.clone()));
-        assert_eq!(Bytes::from(&frame), finalized.0);
-        assert_eq!(finalized.0.len(), COMMON_OVERHEAD_SIZE + payload_len);
-        assert_eq!(finalized.opcode().unwrap(), OpCode::Datagram);
-        let decoded = Frame::try_from(finalized).unwrap();
-        assert_eq!(frame, decoded);
-    }
-
-    #[test]
     fn test_frame_debug_not_too_long() {
         crate::tests::setup_logging();
         let data = vec![0; 256];
@@ -817,10 +758,5 @@ mod tests {
         assert!(debug_str.contains("opcode: Push"));
         assert!(debug_str.contains("id: 075b97bb"));
         assert!(debug_str.contains("payload.len: 256"));
-        let finalized = FinalizedFrame::from(&frame);
-        let debug_str = alloc::format!("{finalized:?}");
-        assert!(debug_str.len() < 64);
-        assert!(debug_str.contains("opcode: Ok(Push)"));
-        assert!(debug_str.contains("encoded_len"));
     }
 }

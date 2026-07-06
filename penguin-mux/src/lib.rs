@@ -28,11 +28,11 @@ mod tests;
 pub mod timing;
 pub mod ws;
 
-use crate::frame::{BindPayload, BindType, FinalizedFrame, Frame};
+use crate::frame::{BindPayload, BindType, Frame};
 use crate::loom::{Arc, AtomicBool, AtomicU32, AtomicWaker, Mutex, Ordering, RwLock};
 use crate::task::Task;
 use crate::timing::TimestampProvider;
-use crate::ws::WebSocket;
+use crate::ws::{Message, WebSocket};
 use alloc::boxed::Box;
 use bytes::Bytes;
 use core::future::poll_fn;
@@ -120,8 +120,8 @@ pub type Result<T> = core::result::Result<T, Error>;
 pub struct Multiplexor<R = SmallRng> {
     /// Open stream channels: `flow_id` -> `FlowSlot`
     flows: Arc<RwLock<HashMap<u32, FlowSlot, IntHasher>>>,
-    /// Where tasks queue frames to be sent
-    tx_frame_tx: mpsc::UnboundedSender<FinalizedFrame>,
+    /// Where tasks queue messages to be sent
+    tx_msg_tx: mpsc::UnboundedSender<Message>,
     /// We only use this to inform the task that the multiplexor is closed
     /// and it should stop processing.
     dropped_ports_tx: mpsc::UnboundedSender<u32>,
@@ -208,10 +208,10 @@ impl<R: Rng + Send> Multiplexor<R> {
         }
         let (datagram_tx, datagram_rx) = mpsc::channel(options.datagram_buffer_size);
         let (con_recv_stream_tx, con_recv_stream_rx) = mpsc::channel(options.stream_buffer_size);
-        // This one is unbounded because the protocol provides its own flow control for `Push` frames
+        // This one is unbounded because the protocol itself provides flow control for `Push` frames
         // and other frame types are to be immediately processed without any backpressure,
         // so they are ok to be unbounded channels.
-        let (tx_frame_tx, tx_frame_rx) = mpsc::unbounded_channel();
+        let (tx_msg_tx, tx_msg_rx) = mpsc::unbounded_channel();
         // This one cannot be bounded because it needs to be used in Drop
         let (dropped_ports_tx, dropped_ports_rx) = mpsc::unbounded_channel();
         let (last_pong_timestamp_tx, last_pong_timestamp_rx) = watch::channel(T::now());
@@ -225,7 +225,7 @@ impl<R: Rng + Send> Multiplexor<R> {
         let flows = Arc::new(RwLock::new(HashMap::with_hasher(IntHasher::default())));
 
         let mux = Self {
-            tx_frame_tx: tx_frame_tx.clone(),           // cheap
+            tx_msg_tx: tx_msg_tx.clone(),               // cheap
             flows: flows.clone(),                       // cheap
             dropped_ports_tx: dropped_ports_tx.clone(), // cheap
             datagram_rx: Mutex::new(datagram_rx),
@@ -238,7 +238,7 @@ impl<R: Rng + Send> Multiplexor<R> {
         let taskdata = TaskData {
             task: Task {
                 ws: Mutex::new(ws),
-                tx_frame_tx,
+                tx_msg_tx,
                 flows,
                 dropped_ports_tx,
                 con_recv_stream_tx,
@@ -251,7 +251,7 @@ impl<R: Rng + Send> Multiplexor<R> {
                 keepalive_timeout: options.keepalive_timeout,
             },
             dropped_ports_rx,
-            tx_frame_rx,
+            tx_msg_rx,
             last_pong_timestamp_rx,
         };
         (mux, taskdata)
@@ -292,7 +292,7 @@ impl<R: Rng + Send> Multiplexor<R> {
                 flow_id
             };
             trace!("sending `Connect`");
-            self.tx_frame_tx
+            self.tx_msg_tx
                 .send(Frame::new_connect(host, port, flow_id, self.rwnd).into())
                 .or(Err(Error::Closed))?;
             trace!("sending stream to user");
@@ -364,7 +364,7 @@ impl<R: Rng + Send> Multiplexor<R> {
             datagram.target_port,
             datagram.data,
         );
-        self.tx_frame_tx.send(frame.into()).or(Err(Error::Closed))?;
+        self.tx_msg_tx.send(frame.into()).or(Err(Error::Closed))?;
         Ok(())
     }
 
@@ -394,8 +394,10 @@ impl<R: Rng + Send> Multiplexor<R> {
             streams.insert(flow_id, FlowSlot::BindRequested(result_tx));
             flow_id
         };
-        let bnd_frame = Frame::new_bind(flow_id, bind_type, host, port).into();
-        self.tx_frame_tx.send(bnd_frame).or(Err(Error::Closed))?;
+        let bnd_frame = Frame::new_bind(flow_id, bind_type, host, port);
+        self.tx_msg_tx
+            .send(bnd_frame.into())
+            .or(Err(Error::Closed))?;
         let result = result_rx.await.or(Err(Error::Closed))?;
         Ok(result)
     }
@@ -560,7 +562,7 @@ pub struct BindRequest<'data> {
     /// Bind payload
     payload: BindPayload<'data>,
     /// Place to respond to the bind request
-    tx_frame_tx: mpsc::UnboundedSender<FinalizedFrame>,
+    tx_msg_tx: mpsc::UnboundedSender<Message>,
 }
 
 impl BindRequest<'_> {
@@ -595,10 +597,9 @@ impl BindRequest<'_> {
     #[tracing::instrument(skip(self), level = "debug")]
     pub fn reply(&self, accepted: bool) -> Result<()> {
         if accepted {
-            self.tx_frame_tx
-                .send(Frame::new_finish(self.flow_id).into())
+            self.tx_msg_tx.send(Frame::new_finish(self.flow_id).into())
         } else {
-            self.tx_frame_tx.send(Frame::new_reset(self.flow_id).into())
+            self.tx_msg_tx.send(Frame::new_reset(self.flow_id).into())
         }
         .or(Err(Error::Closed))
     }

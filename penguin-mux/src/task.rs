@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use crate::frame::{ConnectPayload, FinalizedFrame, Frame, Payload};
+use crate::frame::{ConnectPayload, Frame, Payload};
 use crate::loom::{Arc, AtomicBool, AtomicU32, AtomicWaker, Mutex, RwLock};
 use crate::timing::{OptionalDuration, TimestampProvider};
 use crate::ws::{Message, WebSocket};
@@ -36,7 +36,7 @@ type IntHasher = hashbrown::DefaultHashBuilder;
 pub struct TaskData<S: WebSocket, T: TimestampProvider> {
     pub(crate) task: Task<S, T>,
     // To be taken out when the task is spawned
-    pub(crate) tx_frame_rx: mpsc::UnboundedReceiver<FinalizedFrame>,
+    pub(crate) tx_msg_rx: mpsc::UnboundedReceiver<Message>,
     // To be taken out when the task is spawned
     pub(crate) dropped_ports_rx: mpsc::UnboundedReceiver<u32>,
     // To be taken out when the task is spawned
@@ -59,11 +59,11 @@ where
     pub async fn into_task(self) -> Result<()> {
         let Self {
             task,
-            tx_frame_rx,
+            tx_msg_rx,
             dropped_ports_rx,
             last_pong_timestamp_rx,
         } = self;
-        task.start(dropped_ports_rx, tx_frame_rx, last_pong_timestamp_rx)
+        task.start(dropped_ports_rx, tx_msg_rx, last_pong_timestamp_rx)
             .await
     }
 
@@ -98,8 +98,8 @@ pub struct Task<S: WebSocket, T: TimestampProvider> {
     pub ws: Mutex<S>,
     /// Open stream channels: `flow_id` -> `FlowSlot`
     pub flows: Arc<RwLock<HashMap<u32, FlowSlot, IntHasher>>>,
-    /// Where tasks queue frames to be sent
-    pub tx_frame_tx: mpsc::UnboundedSender<FinalizedFrame>,
+    /// Where tasks queue messages to be sent
+    pub tx_msg_tx: mpsc::UnboundedSender<Message>,
     /// Channel for notifying the task of a dropped `MuxStream` (to send the flow ID)
     /// Sending 0 means that the multiplexor is being dropped and the
     /// task should exit.
@@ -139,25 +139,24 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
     async fn start(
         self,
         mut dropped_ports_rx: mpsc::UnboundedReceiver<u32>,
-        mut tx_frame_rx: mpsc::UnboundedReceiver<FinalizedFrame>,
+        mut tx_msg_rx: mpsc::UnboundedReceiver<Message>,
         mut last_pong_timestamp_rx: watch::Receiver<T>,
     ) -> Result<()> {
         let (should_drain_frame_rx, res) = futures_util::select_biased! {
             r = self.process_ws_next().fuse() => {
-                debug!("mux ws next task finished: {r:?}");
+                debug!("`process_ws_next` finished: {r:?}");
                 (false, r)
             }
-            r = self.process_frame_recv_task(&mut tx_frame_rx, &mut last_pong_timestamp_rx).fuse() => {
-                debug!("mux frame recv task finished: {r:?}");
+            r = self.process_message_to_send_task(&mut tx_msg_rx, &mut last_pong_timestamp_rx).fuse() => {
+                debug!("`process_message_to_send_task` task finished: {r:?}");
                 (false, r)
             }
             r = self.process_dropped_ports_task(&mut dropped_ports_rx).fuse() => {
-                debug!("mux dropped ports task finished: {r:?}");
+                debug!("`process_dropped_ports_task` task finished: {r:?}");
                 (true, r)
             }
         };
-        self.wind_down(should_drain_frame_rx, &mut tx_frame_rx)
-            .await;
+        self.wind_down(should_drain_frame_rx, &mut tx_msg_rx).await;
         res
     }
 
@@ -195,17 +194,17 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
         Err(Error::ChannelClosed("dropped_ports_rx"))
     }
 
-    /// Poll `frame_rx` and process the frame received and send keepalive pings as needed.
+    /// Poll `tx_msg_rx`, queue the message received, and send keepalive pings as needed.
     /// It propagates errors from the `Sink` processing.
     ///
     /// # Cancel Safety
     /// This function is mostly cancel safe. If it is cancelled, no data will be lost,
-    /// but there might be unflushed frames on `ws_sink` or lost `Message::Ping` messages.
+    /// but there might be unflushed messages on `ws_sink` or lost `Message::Ping` messages.
     #[tracing::instrument(skip_all, level = "trace")]
     #[inline]
-    async fn process_frame_recv_task(
+    async fn process_message_to_send_task(
         &self,
-        tx_frame_rx: &mut mpsc::UnboundedReceiver<FinalizedFrame>,
+        tx_msg_rx: &mut mpsc::UnboundedReceiver<Message>,
         last_pong_timestamp_rx: &mut watch::Receiver<T>,
     ) -> Result<()> {
         let mut interval = crate::timing::OptionalInterval::from(self.keepalive_interval);
@@ -218,7 +217,7 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
 
         loop {
             futures_util::select_biased! {
-                r = poll_fn(|cx| self.poll_reserve_space_recv_frame(cx, tx_frame_rx)).fuse() => {
+                r = poll_fn(|cx| self.poll_reserve_space_queue_message(cx, tx_msg_rx)).fuse() => {
                     r?;
                 }
                 r = last_pong_timestamp_rx.changed().fuse() => {
@@ -251,26 +250,27 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
         // in either case, it does not make sense to check `frame_rx`.
     }
 
-    /// Poll `frame_rx` and process the frame received in a way that is cancel safe.
-    fn poll_reserve_space_recv_frame(
+    /// Poll `tx_msg_rx` and queue the message to be sent in a way that is cancel safe.
+    fn poll_reserve_space_queue_message(
         &self,
         cx: &mut Context<'_>,
-        tx_frame_rx: &mut mpsc::UnboundedReceiver<FinalizedFrame>,
+        tx_msg_rx: &mut mpsc::UnboundedReceiver<Message>,
     ) -> Poll<Result<()>> {
         ready!(self.ws.lock().poll_ready_unpin(cx))?;
         // `ready!`: if we cancel here, the reserved space is not used, but no other side effect
-        let Some(frame) = ready!(tx_frame_rx.poll_recv(cx)) else {
-            // Only happens when `frame_rx` is closed
+        let Some(msg) = ready!(tx_msg_rx.poll_recv(cx)) else {
+            // Only happens when `tx_msg_rx` is closed
             // cannot happen because `Self` contains one sender unless
             // there is a bug in our code or `tokio` itself. Not a critical error,
             // using `debug_assert!` to avoid panicking in production.
-            debug_assert!(false, "frame receiver should not be closed (this is a bug)");
-            return Poll::Ready(Err(Error::ChannelClosed("frame_rx")));
+            debug_assert!(
+                false,
+                "`tx_msg_rx` receiver should not be closed (this is a bug)"
+            );
+            return Poll::Ready(Err(Error::ChannelClosed("tx_msg_rx")));
         };
         // After this point, we may not return `Poll::Pending` because we (might) hold data
-        self.ws
-            .lock()
-            .start_send_unpin(Message::Binary(frame.into()))?;
+        self.ws.lock().start_send_unpin(msg)?;
         Poll::Ready(Ok(()))
     }
 
@@ -296,8 +296,8 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
     #[tracing::instrument(skip_all, level = "trace")]
     async fn wind_down(
         &self,
-        should_drain_frame_rx: bool,
-        tx_frame_rx: &mut mpsc::UnboundedReceiver<FinalizedFrame>,
+        should_drain_msg_rx: bool,
+        tx_msg_rx: &mut mpsc::UnboundedReceiver<Message>,
     ) {
         debug!("closing all connections");
         // We first make sure the streams can no longer send
@@ -314,17 +314,17 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
         // Further ensure no more frames can be sent. This should cause all further attempts at
         // `AsyncWrite::poll_write` to return `BrokenPipe`.
         // See `tokio::sync::mpsc`#clean-shutdown
-        tx_frame_rx.close();
-        // Now if `should_drain_frame_rx` is `true`, we will process the remaining frames in `frame_rx`.
+        tx_msg_rx.close();
+        // Now if `should_drain_msg_rx` is `true`, we will process and try to send the remaining
+        // messages in `tx_msg_rx`.
         // If it is `false`, then we reached here because the peer is now not interested
         // in our connection anymore, and we should just mind our own business and serve the connections
         // on our end.
-        if should_drain_frame_rx {
+        if should_drain_msg_rx {
             // Since we've called `close` on `tx_frame_rx`, this loop will
             // terminate once existing frames are processed.
-            while let Some(frame) = tx_frame_rx.recv().await {
+            while let Some(message) = tx_msg_rx.recv().await {
                 debug!("sending remaining frame after mux drop");
-                let message = Message::Binary(frame.into());
                 let r = poll_fn(|cx| self.ws.lock().poll_ready_unpin(cx))
                     .await
                     .and_then(|()| self.ws.lock().start_send_unpin(message));
@@ -404,7 +404,7 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
         } = frame;
         tracing::Span::current().record("flow_id", format_args!("{flow_id:08x}"));
         let send_rst = || {
-            self.tx_frame_tx.send(Frame::new_reset(flow_id).into()).ok()
+            self.tx_msg_tx.send(Frame::new_reset(flow_id).into()).ok()
             // Error only happens if the `frame_tx` channel is closed, at which point
             // we don't care about sending a `Reset` frame anymore
         };
@@ -530,7 +530,7 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
                     let request = BindRequest {
                         flow_id,
                         payload,
-                        tx_frame_tx: self.tx_frame_tx.clone(), // cheap
+                        tx_msg_tx: self.tx_msg_tx.clone(), // cheap
                     };
                     if let Err(e) = sender.send(request).await {
                         warn!("Failed to return `Bind` request: {e}");
@@ -538,7 +538,7 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
                     // Let the user decide what to reply using `BindRequest::reply`
                 } else {
                     info!("Received `Bind` request but configured to not accept such requests");
-                    self.tx_frame_tx.send(Frame::new_reset(flow_id).into()).ok();
+                    self.tx_msg_tx.send(Frame::new_reset(flow_id).into()).ok();
                 }
             }
             Payload::Datagram(payload) => {
@@ -572,19 +572,19 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
         dest_port: u16,
     ) -> (MuxStream, EstablishedStreamData) {
         // `tx` is our end, `rx` is the user's end
-        let (frame_tx, frame_rx) = mpsc::channel(self.rwnd as usize);
+        let (rx_frame_tx, rx_frame_rx) = mpsc::channel(self.rwnd as usize);
         let finish_sent = Arc::new(AtomicBool::new(false));
         let psh_send_remaining = Arc::new(AtomicU32::new(peer_rwnd));
         let writer_waker = Arc::new(AtomicWaker::new());
         let stream_data = EstablishedStreamData {
-            sender: Some(frame_tx),
+            sender: Some(rx_frame_tx),
             finish_sent: finish_sent.clone(),               // cheap
             psh_send_remaining: psh_send_remaining.clone(), // cheap
             writer_waker: writer_waker.clone(),             // cheap
         };
         // Save the TX end of the stream so we can write to it when subsequent frames arrive
         let stream = MuxStream {
-            frame_rx,
+            rx_frame_rx,
             flow_id,
             dest_host,
             dest_port,
@@ -593,7 +593,7 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
             psh_recvd_since: 0,
             writer_waker,
             buf: Bytes::new(),
-            frame_tx: self.tx_frame_tx.clone(), // cheap
+            tx_msg_tx: self.tx_msg_tx.clone(), // cheap
             dropped_ports_tx: self.dropped_ports_tx.clone(), // cheap
             rwnd_threshold: self.default_rwnd_threshold.min(peer_rwnd),
         };
@@ -617,7 +617,7 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
             let mut streams = self.flows.write();
             if streams.contains_key(&flow_id) {
                 debug!("resetting `Connect` with in-use flow_id");
-                self.tx_frame_tx.send(Frame::new_reset(flow_id).into()).ok();
+                self.tx_msg_tx.send(Frame::new_reset(flow_id).into()).ok();
                 // On the other side, `process_frame` will pass the `Reset` frame to
                 // `close_port`, which takes the port out of the map and inform `Multiplexor::new_stream_channel`
                 // to retry.
@@ -638,7 +638,7 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
         // Make sure `Acknowledge` is sent before the stream is sent to the user
         // so that the stream is `Established` when the user uses it.
         trace!("sending `Acknowledge`");
-        self.tx_frame_tx
+        self.tx_msg_tx
             .send(Frame::new_acknowledge(flow_id, self.rwnd).into())
             .or(Err(Error::Closed))?;
         // At the con_recv side, we use `con_recv_stream_tx` to send the new stream to the
@@ -694,7 +694,7 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
                 if !finish_sent && !inhibit_rst {
                     // If the user did not call `poll_shutdown`, we send a `Reset` frame
                     debug!("stream dropped without `poll_shutdown`");
-                    self.tx_frame_tx.send(Frame::new_reset(flow_id).into()).ok();
+                    self.tx_msg_tx.send(Frame::new_reset(flow_id).into()).ok();
                     // Ignore the error because the other end will EOF everything anyway
                 }
                 // No need to send an empty `Bytes`. Dropping `sender`
