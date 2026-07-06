@@ -41,7 +41,7 @@ use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use thiserror::Error;
 use tokio::sync::mpsc::error::TrySendError;
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot};
 use tracing::{error, trace, warn};
 
 #[cfg(feature = "nohash")]
@@ -114,8 +114,8 @@ pub type Result<T> = core::result::Result<T, Error>;
 /// the latter works in any async runtime.
 ///
 /// For builtin keepalive to work, the `tokio-time` feature must be enabled.
-/// Otherwise, the user can periodically call [`Multiplexor::send_datagram`] to
-/// an arbitrary host and port to emulate keepalive.
+/// Otherwise, the user can periodically call [`Multiplexor::manual_ping`] to
+/// achieve the same effect.
 #[derive(derive_more::Debug)]
 pub struct Multiplexor<R = SmallRng> {
     /// Open stream channels: `flow_id` -> `FlowSlot`
@@ -214,7 +214,6 @@ impl<R: Rng + Send> Multiplexor<R> {
         let (tx_msg_tx, tx_msg_rx) = mpsc::unbounded_channel();
         // This one cannot be bounded because it needs to be used in Drop
         let (dropped_ports_tx, dropped_ports_rx) = mpsc::unbounded_channel();
-        let (last_pong_timestamp_tx, last_pong_timestamp_rx) = watch::channel(T::now());
 
         let (bnd_request_tx, bnd_request_rx) = if options.bind_buffer_size > 0 {
             let (tx, rx) = mpsc::channel(options.bind_buffer_size);
@@ -242,7 +241,7 @@ impl<R: Rng + Send> Multiplexor<R> {
                 flows,
                 dropped_ports_tx,
                 con_recv_stream_tx,
-                last_pong_timestamp_tx,
+                last_pong_timestamp: Mutex::new(T::now()),
                 default_rwnd_threshold: options.default_rwnd_threshold,
                 rwnd: options.rwnd,
                 datagram_tx,
@@ -252,7 +251,6 @@ impl<R: Rng + Send> Multiplexor<R> {
             },
             dropped_ports_rx,
             tx_msg_rx,
-            last_pong_timestamp_rx,
         };
         (mux, taskdata)
     }
@@ -613,9 +611,7 @@ impl BindRequest<'_> {
     /// - Returns [`Error::Closed`] if the `Multiplexor` is already closed.
     #[tracing::instrument(skip(self), level = "debug")]
     pub fn manual_ping(&self) -> Result<()> {
-        self.tx_msg_tx
-            .send(Message::Ping)
-            .or(Err(Error::Closed))
+        self.tx_msg_tx.send(Message::Ping).or(Err(Error::Closed))
     }
 }
 
