@@ -62,7 +62,7 @@ find . -name "*.profraw" -type f -delete
 
 # Run cargo penguin-mux tests with loom
 if [ "$CONFIG_NAME" != "aarch64-pc-windows-msvc" ]; then
-  RUSTFLAGS="--cfg loom -Cinstrument-coverage" LOOM_LOG=debug cargo test --lib --release --no-default-features --package penguin-mux --features std,tokio
+  RUSTFLAGS="--cfg loom -Cinstrument-coverage" LOOM_LOG=debug cargo nextest run --lib --release --no-default-features --package penguin-mux --features std,tokio
 
   # Process coverage data for loom tests
   grcov . --binary-path ./target/release/ -s . -t lcov --branch --ignore-not-existing --ignore "/*" -o release.info
