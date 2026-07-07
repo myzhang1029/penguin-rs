@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use divan::{Bencher, counter::BytesCount};
-use penguin_mux::{Multiplexor, config::Options};
-use rand::{Rng, SeedableRng};
+use penguin_mux::{Multiplexor, config::Options, ws::WebSocket};
+use rand::{Rng, SeedableRng, rngs::SmallRng};
 use std::sync::LazyLock;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -27,273 +27,264 @@ static TOKIO_RT: LazyLock<runtime::Runtime> = LazyLock::new(|| {
 });
 
 const EACH_WRITE_SIZE: usize = 4096;
+#[cfg(debug_assertions)]
+const SLOW_NUMS: [usize; 4] = [1, 4, 32, 256];
+#[cfg(not(debug_assertions))]
+const SLOW_NUMS: [usize; 6] = [1, 4, 32, 256, 2048, 16384];
+#[cfg(debug_assertions)]
+const FAST_NUMS: [usize; 4] = [2, 8, 64, 512];
+#[cfg(not(debug_assertions))]
+const FAST_NUMS: [usize; 6] = [2, 8, 64, 512, 4096, 32768];
 
+#[inline]
 fn make_payload() -> Bytes {
     let mut rng = rand::rngs::SmallRng::seed_from_u64(0xabcd);
     let mut payload = vec![0u8; EACH_WRITE_SIZE];
     rng.fill_bytes(&mut payload);
-    payload.into()
+    let payload = Bytes::from(payload);
+    payload
 }
 
-#[divan::bench]
-fn baseline_ws(b: Bencher<'_, '_>) {
-    b.with_inputs(make_payload).bench_values(|_| {
+#[inline]
+async fn make_connected_tcp_stream() -> (TcpStream, TcpStream) {
+    let s_socket = TcpListener::bind(("::1", 0)).await.unwrap();
+    let s_addr = s_socket.local_addr().unwrap();
+    let server_task = tokio::spawn(async move { s_socket.accept().await.unwrap().0 });
+    let client = TcpStream::connect(s_addr).await.unwrap();
+    let server = server_task.await.unwrap();
+    (client, server)
+}
+
+trait BenchConstructableWebSocket: WebSocket + Sized {
+    type PeerType: WebSocket;
+    async fn get_pair() -> (Self, Self::PeerType);
+}
+
+#[cfg(feature = "tungstenite")]
+impl BenchConstructableWebSocket for WebSocketStream<TcpStream> {
+    type PeerType = WebSocketStream<TcpStream>;
+    #[inline]
+    async fn get_pair() -> (Self, Self::PeerType) {
+        let (client, server) = make_connected_tcp_stream().await;
+        let server_task =
+            tokio::spawn(WebSocketStream::from_raw_socket(server, Role::Server, None));
+        let client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
+        let server = server_task.await.unwrap();
+        (client, server)
+    }
+}
+
+#[inline]
+async fn make_connected_mux<WS: BenchConstructableWebSocket>()
+-> (Multiplexor<SmallRng>, Multiplexor<SmallRng>) {
+    let (client, server) = WS::get_pair().await;
+    let server_task = tokio::spawn(async move {
+        let rng = SmallRng::seed_from_u64(0x1234);
+        let (server, task) =
+            Multiplexor::new_detailed::<_, std::time::Instant>(server, Options::default(), rng);
+        task.spawn(None);
+        server
+    });
+    let rng = SmallRng::seed_from_u64(0xabcd);
+    let (client, task) =
+        Multiplexor::new_detailed::<_, std::time::Instant>(client, Options::default(), rng);
+    task.spawn(None);
+    let server = server_task.await.unwrap();
+    (client, server)
+}
+
+#[divan::bench(types = [WebSocketStream<TcpStream>])]
+fn baseline_ws<WS: BenchConstructableWebSocket>(b: Bencher<'_, '_>) {
+    b.with_inputs(|| {
+        TOKIO_RT.block_on(async { (make_payload(), make_connected_mux::<WS>().await) })
+    })
+    .bench_values(|(_, (client, server))| {
         TOKIO_RT.block_on(async {
-            let s_socket = TcpListener::bind(("::1", 0)).await.unwrap();
-            let s_addr = s_socket.local_addr().unwrap();
-            let mut rng = rand::rngs::SmallRng::seed_from_u64(0xabcd);
-            let rng2 = rng.fork();
-            tokio::spawn(async move {
-                let tcpstream = s_socket.accept().await.unwrap().0;
-                let server = WebSocketStream::from_raw_socket(tcpstream, Role::Server, None).await;
-                let (mux, task) = Multiplexor::new_detailed::<_, std::time::Instant>(
-                    server,
-                    Options::default(),
-                    rng2,
-                );
-                task.spawn(None);
-                let mut stream = mux.accept_stream_channel().await.unwrap();
+            let server_task = tokio::spawn(async move {
+                let mut stream = server.accept_stream_channel().await.unwrap();
                 stream.shutdown().await.unwrap();
             });
-            let tcpstream = TcpStream::connect(s_addr).await.unwrap();
-            let client = WebSocketStream::from_raw_socket(tcpstream, Role::Client, None).await;
-            let (mux, task) =
-                Multiplexor::new_detailed::<_, std::time::Instant>(client, Options::default(), rng);
-            task.spawn(None);
-            let mut stream = mux.new_stream_channel(&[], 0).await.unwrap();
+            let mut stream = client.new_stream_channel(&[], 0).await.unwrap();
             stream.shutdown().await.unwrap();
+            server_task.await.unwrap();
         });
     });
 }
 
-#[divan::bench(args = [2, 8, 64, 512, 4096, 32768])]
+#[divan::bench(args = FAST_NUMS)]
 fn baseline_tcp(b: Bencher<'_, '_>, num_writes: usize) {
-    b.with_inputs(make_payload)
-        .counter(BytesCount::new(num_writes * EACH_WRITE_SIZE * 2))
-        .bench_values(|payload| {
-            TOKIO_RT.block_on(async {
-                let s_socket = TcpListener::bind(("::1", 0)).await.unwrap();
-                let s_addr = s_socket.local_addr().unwrap();
-                let s_payload = payload.clone(); //cheap
-                let len = payload.len();
-                tokio::spawn(async move {
-                    let mut stream = s_socket.accept().await.unwrap().0;
-                    stream.shutdown().await.unwrap();
-                    let mut buf = vec![0; len];
-                    for _ in 0..num_writes {
-                        stream.read_exact(&mut buf).await.unwrap();
-                        // No check for correctness as this should be guaranteed by tests
-                    }
-                    assert_eq!(buf, payload);
-                });
-                let mut stream = TcpStream::connect(s_addr).await.unwrap();
+    b.with_inputs(|| {
+        TOKIO_RT.block_on(async { (make_payload(), make_connected_tcp_stream().await) })
+    })
+    .counter(BytesCount::new(num_writes * EACH_WRITE_SIZE * 2))
+    .bench_values(|(payload, (mut client, mut server))| {
+        TOKIO_RT.block_on(async {
+            let len = payload.len();
+            let server_task = tokio::spawn(async move {
+                server.shutdown().await.unwrap();
+                let mut buf = vec![0; len];
                 for _ in 0..num_writes {
-                    stream.write_all(&s_payload).await.unwrap();
+                    server.read_exact(&mut buf).await.unwrap();
+                    // No check for correctness as this should be guaranteed by tests
                 }
-                stream.shutdown().await.unwrap();
             });
+            for _ in 0..num_writes {
+                client.write_all(&payload).await.unwrap();
+            }
+            client.shutdown().await.unwrap();
+            server_task.await.unwrap();
         });
+    });
 }
 
-#[divan::bench(args = [1, 4, 32, 256, 2048, 16384])]
+#[divan::bench(args = SLOW_NUMS)]
 fn baseline_tcp_bidir(b: Bencher<'_, '_>, num_writes: usize) {
-    b.with_inputs(make_payload)
-        .counter(BytesCount::new(num_writes * EACH_WRITE_SIZE * 2))
-        .bench_values(|payload| {
-            TOKIO_RT.block_on(async {
-                let s_socket = TcpListener::bind(("::1", 0)).await.unwrap();
-                let s_addr = s_socket.local_addr().unwrap();
-                let s_payload = payload.clone(); // cheap
-                let len = payload.len();
-                tokio::spawn(async move {
-                    let mut stream = s_socket.accept().await.unwrap().0;
-                    let mut buf = vec![0; len];
-                    for _ in 0..num_writes {
-                        stream.write_all(&s_payload).await.unwrap();
-                        stream.read_exact(&mut buf).await.unwrap();
-                        // No check for correctness as this should be guaranteed by tests
-                    }
-                    stream.shutdown().await.unwrap();
-                });
-                let mut stream = TcpStream::connect(s_addr).await.unwrap();
+    b.with_inputs(|| {
+        TOKIO_RT.block_on(async { (make_payload(), make_connected_tcp_stream().await) })
+    })
+    .counter(BytesCount::new(num_writes * EACH_WRITE_SIZE * 2))
+    .bench_values(|(payload, (mut client, mut server))| {
+        TOKIO_RT.block_on(async {
+            let len = payload.len();
+            let server_task = tokio::spawn(async move {
+                let mut buf = vec![0; len];
+                for _ in 0..num_writes {
+                    server.write_all(&payload).await.unwrap();
+                    server.read_exact(&mut buf).await.unwrap();
+                    // No check for correctness as this should be guaranteed by tests
+                }
+                server.shutdown().await.unwrap();
+            });
+            let mut buf = vec![0; len];
+            for _ in 0..num_writes {
+                client.read_exact(&mut buf).await.unwrap();
+                client.write_all(&buf).await.unwrap();
+            }
+            client.shutdown().await.unwrap();
+            server_task.await.unwrap();
+        });
+    });
+}
+
+#[divan::bench(
+    types = [WebSocketStream<TcpStream>],
+    args = FAST_NUMS,
+)]
+fn bench_stream_throughput<WS: BenchConstructableWebSocket>(b: Bencher<'_, '_>, num_writes: usize) {
+    b.with_inputs(|| {
+        TOKIO_RT.block_on(async { (make_payload(), make_connected_mux::<WS>().await) })
+    })
+    .counter(BytesCount::new(num_writes * EACH_WRITE_SIZE * 2))
+    .bench_values(|(payload, (client, server))| {
+        TOKIO_RT.block_on(async {
+            let len = payload.len();
+            let server_task = tokio::spawn(async move {
+                let mut stream = server.accept_stream_channel().await.unwrap();
+                stream.shutdown().await.unwrap();
                 let mut buf = vec![0; len];
                 for _ in 0..num_writes {
                     stream.read_exact(&mut buf).await.unwrap();
-                    stream.write_all(&buf).await.unwrap();
+                    // No check for correctness as this should be guaranteed by tests
                 }
-                stream.shutdown().await.unwrap();
-                assert_eq!(buf, payload);
             });
+            let mut stream = client.new_stream_channel(&[], 0).await.unwrap();
+            for _ in 0..num_writes {
+                stream.write_all(&payload).await.unwrap();
+            }
+            stream.shutdown().await.unwrap();
+            server_task.await.unwrap();
         });
+    });
 }
 
-#[divan::bench(args = [2, 8, 64, 512, 4096, 32768])]
-fn bench_stream_throughput(b: Bencher<'_, '_>, num_writes: usize) {
-    b.with_inputs(make_payload)
-        .counter(BytesCount::new(num_writes * EACH_WRITE_SIZE * 2))
-        .bench_values(|payload| {
-            TOKIO_RT.block_on(async {
-                let s_socket = TcpListener::bind(("::1", 0)).await.unwrap();
-                let s_addr = s_socket.local_addr().unwrap();
-                let s_payload = payload.clone(); // cheap
-                let len = payload.len();
-                let mut rng = rand::rngs::SmallRng::seed_from_u64(0xabcd);
-                let rng2 = rng.fork();
-                tokio::spawn(async move {
-                    let tcpstream = s_socket.accept().await.unwrap().0;
-                    let server =
-                        WebSocketStream::from_raw_socket(tcpstream, Role::Server, None).await;
-                    let (mux, task) = Multiplexor::new_detailed::<_, std::time::Instant>(
-                        server,
-                        Options::default(),
-                        rng2,
-                    );
-                    task.spawn(None);
-                    let mut stream = mux.accept_stream_channel().await.unwrap();
-                    stream.shutdown().await.unwrap();
-                    //tokio::time::sleep(core::time::Duration::from_secs(1)).await;
-                    let mut buf = vec![0; len];
-                    for _ in 0..num_writes {
-                        stream.read_exact(&mut buf).await.unwrap();
-                        // No check for correctness as this should be guaranteed by tests
-                    }
-                });
-                let tcpstream = TcpStream::connect(s_addr).await.unwrap();
-                let client = WebSocketStream::from_raw_socket(tcpstream, Role::Client, None).await;
-                let (mux, task) = Multiplexor::new_detailed::<_, std::time::Instant>(
-                    client,
-                    Options::default(),
-                    rng,
-                );
-                task.spawn(None);
-                let mut stream = mux.new_stream_channel(&[], 0).await.unwrap();
-                for _ in 0..num_writes {
-                    stream.write_all(&s_payload).await.unwrap();
-                }
-                stream.shutdown().await.unwrap();
-            });
-        });
-}
-
-#[divan::bench(args = [1, 4, 32, 256, 2048, 16384])]
-fn bench_stream_throughput_bidir(b: Bencher<'_, '_>, num_writes: usize) {
-    b.with_inputs(make_payload)
-        .counter(BytesCount::new(num_writes * EACH_WRITE_SIZE * 2))
-        .bench_values(|payload| {
-            TOKIO_RT.block_on(async {
-                let s_socket = TcpListener::bind(("::1", 0)).await.unwrap();
-                let s_addr = s_socket.local_addr().unwrap();
-                let s_payload = payload.clone(); // cheap
-                let len = payload.len();
-                let mut rng = rand::rngs::SmallRng::seed_from_u64(0xabcd);
-                let rng2 = rng.fork();
-                tokio::spawn(async move {
-                    let tcpstream = s_socket.accept().await.unwrap().0;
-                    let server =
-                        WebSocketStream::from_raw_socket(tcpstream, Role::Server, None).await;
-                    let (mux, task) = Multiplexor::new_detailed::<_, std::time::Instant>(
-                        server,
-                        Options::default(),
-                        rng2,
-                    );
-                    task.spawn(None);
-                    let mut stream = mux.accept_stream_channel().await.unwrap();
-                    let mut buf = vec![0; len];
-                    for _ in 0..num_writes {
-                        stream.write_all(&s_payload).await.unwrap();
-                        stream.read_exact(&mut buf).await.unwrap();
-                        // No check for correctness as this should be guaranteed by tests
-                    }
-                    stream.shutdown().await.unwrap();
-                });
-                let tcpstream = TcpStream::connect(s_addr).await.unwrap();
-                let client = WebSocketStream::from_raw_socket(tcpstream, Role::Client, None).await;
-                let (mux, task) = Multiplexor::new_detailed::<_, std::time::Instant>(
-                    client,
-                    Options::default(),
-                    rng,
-                );
-                task.spawn(None);
-                let mut stream = mux.new_stream_channel(&[], 0).await.unwrap();
-                //tokio::time::sleep(core::time::Duration::from_secs(1)).await;
+#[divan::bench(types = [WebSocketStream<TcpStream>], args = SLOW_NUMS)]
+fn bench_stream_throughput_bidir<WS: BenchConstructableWebSocket>(
+    b: Bencher<'_, '_>,
+    num_writes: usize,
+) {
+    b.with_inputs(|| {
+        TOKIO_RT.block_on(async { (make_payload(), make_connected_mux::<WS>().await) })
+    })
+    .counter(BytesCount::new(num_writes * EACH_WRITE_SIZE * 2))
+    .bench_values(|(payload, (client, server))| {
+        TOKIO_RT.block_on(async {
+            let len = payload.len();
+            let server_task = tokio::spawn(async move {
+                let mut stream = server.accept_stream_channel().await.unwrap();
                 let mut buf = vec![0; len];
                 for _ in 0..num_writes {
+                    stream.write_all(&payload).await.unwrap();
                     stream.read_exact(&mut buf).await.unwrap();
-                    stream.write_all(&buf).await.unwrap();
+                    // No check for correctness as this should be guaranteed by tests
                 }
                 stream.shutdown().await.unwrap();
             });
+            let mut stream = client.new_stream_channel(&[], 0).await.unwrap();
+            let mut buf = vec![0; len];
+            for _ in 0..num_writes {
+                stream.read_exact(&mut buf).await.unwrap();
+                stream.write_all(&buf).await.unwrap();
+            }
+            stream.shutdown().await.unwrap();
+            server_task.await.unwrap();
         });
+    });
 }
 
-#[divan::bench(args = [1, 4, 16, 64, 256])]
-fn bench_stream_throughput_with_contention(b: Bencher<'_, '_>, num_concurrent: usize) {
+#[divan::bench(
+    types = [WebSocketStream<TcpStream>],
+    args = SLOW_NUMS,
+)]
+fn bench_stream_throughput_with_contention<WS: BenchConstructableWebSocket>(
+    b: Bencher<'_, '_>,
+    num_concurrent: usize,
+) {
     const EACH_JOB_WRITES: usize = 256;
-    b.with_inputs(make_payload)
-        .counter(BytesCount::new(
-            num_concurrent * EACH_WRITE_SIZE * EACH_JOB_WRITES * 2,
-        ))
-        .bench_values(|payload| {
-            TOKIO_RT.block_on(async {
-                let mut jobs = tokio::task::JoinSet::new();
-                let s_socket = TcpListener::bind(("::1", 0)).await.unwrap();
-                let s_addr = s_socket.local_addr().unwrap();
-                let s_payload = payload.clone(); // cheap
-                let len = payload.len();
-                let mut rng = rand::rngs::SmallRng::seed_from_u64(0xabcd);
-                let rng2 = rng.fork();
-                jobs.spawn(async move {
-                    let mut server_jobs = tokio::task::JoinSet::new();
-                    let tcpstream = s_socket.accept().await.unwrap().0;
-                    let server =
-                        WebSocketStream::from_raw_socket(tcpstream, Role::Server, None).await;
-                    let (mux, task) = Multiplexor::new_detailed::<_, std::time::Instant>(
-                        server,
-                        Options::default(),
-                        rng2,
-                    );
-                    task.spawn(None);
-                    for _ in 0..num_concurrent {
-                        let mut stream = mux.accept_stream_channel().await.unwrap();
-                        let s_payload = s_payload.clone(); // cheap
-                        server_jobs.spawn(async move {
-                            let mut buf = vec![0; len];
-                            for _ in 0..EACH_JOB_WRITES {
-                                stream.write_all(&s_payload).await.unwrap();
-                                stream.read_exact(&mut buf).await.unwrap();
-                                // No check for correctness as this should be guaranteed by tests
-                            }
-                            stream.shutdown().await.unwrap();
-                        });
-                    }
-                    while let Some(res) = server_jobs.join_next().await {
-                        res.unwrap();
-                    }
-                });
-                let tcpstream = TcpStream::connect(s_addr).await.unwrap();
-                let client = WebSocketStream::from_raw_socket(tcpstream, Role::Client, None).await;
-                let (mux, task) = Multiplexor::new_detailed::<_, std::time::Instant>(
-                    client,
-                    Options::default(),
-                    rng,
-                );
-                task.spawn(None);
+    b.with_inputs(|| {
+        TOKIO_RT.block_on(async { (make_payload(), make_connected_mux::<WS>().await) })
+    })
+    .counter(BytesCount::new(
+        num_concurrent * EACH_WRITE_SIZE * EACH_JOB_WRITES * 2,
+    ))
+    .bench_values(|(payload, (client, server))| {
+        TOKIO_RT.block_on(async {
+            let mut jobs = tokio::task::JoinSet::new();
+            let len = payload.len();
+            jobs.spawn(async move {
+                let mut server_jobs = tokio::task::JoinSet::new();
                 for _ in 0..num_concurrent {
-                    let mut stream = mux.new_stream_channel(&[], 0).await.unwrap();
-                    jobs.spawn(async move {
+                    let mut stream = server.accept_stream_channel().await.unwrap();
+                    let payload = payload.clone(); // cheap
+                    server_jobs.spawn(async move {
                         let mut buf = vec![0; len];
                         for _ in 0..EACH_JOB_WRITES {
+                            stream.write_all(&payload).await.unwrap();
                             stream.read_exact(&mut buf).await.unwrap();
-                            stream.write_all(&buf).await.unwrap();
+                            // No check for correctness as this should be guaranteed by tests
                         }
                         stream.shutdown().await.unwrap();
                     });
                 }
-                while let Some(res) = jobs.join_next().await {
+                while let Some(res) = server_jobs.join_next().await {
                     res.unwrap();
                 }
             });
+            for _ in 0..num_concurrent {
+                let mut stream = client.new_stream_channel(&[], 0).await.unwrap();
+                jobs.spawn(async move {
+                    let mut buf = vec![0; len];
+                    for _ in 0..EACH_JOB_WRITES {
+                        stream.read_exact(&mut buf).await.unwrap();
+                        stream.write_all(&buf).await.unwrap();
+                    }
+                    stream.shutdown().await.unwrap();
+                });
+            }
+            while let Some(res) = jobs.join_next().await {
+                res.unwrap();
+            }
         });
+    });
 }
 
 fn main() {
