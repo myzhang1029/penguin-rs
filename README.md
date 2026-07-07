@@ -56,31 +56,33 @@ Other than that, this project offers these functionalities compared to
 
 - Plausible deniability with WebSocket PSK and working `backend`.
 
+- Support for unix domain socket listeners, HTTP proxy, and Linux/BSD transparent proxy.
+
 - TLS certificate hot-reload with `SIGUSR1`.
 
 - Higher performance: my crude testing on my machine reveals that `penguin` is
-  approximately 2x faster than `chisel` on my machine (`penguin`
-  commit `73a0045ff` vs `chisel` commit `ab8f06a8`).
+  a little more than 2x faster than `chisel` on my machine (`penguin`
+  commit `3df9b8ad96` vs `chisel` commit `927abde999`).
 ```
 $ iperf3 -c 127.0.0.1 # chisel without TLS
-[ ID] Interval           Transfer     Bitrate
-[  5]   0.00-10.00  sec  5.41 GBytes  4.65 Gbits/sec                  sender
-[  5]   0.00-10.00  sec  5.40 GBytes  4.64 Gbits/sec                  receiver
+[ ID] Interval           Transfer     Bitrate         Retr
+[  5]   0.00-10.00  sec  7.06 GBytes  6.07 Gbits/sec    0            sender
+[  5]   0.00-10.00  sec  7.06 GBytes  6.06 Gbits/sec                  receiver
 
 $ iperf3 -c 127.0.0.1 # penguin without TLS
-[ ID] Interval           Transfer     Bitrate
-[  5]   0.00-10.00  sec  16.5 GBytes  14.2 Gbits/sec                  sender
-[  5]   0.00-10.00  sec  16.5 GBytes  14.2 Gbits/sec                  receiver
+[ ID] Interval           Transfer     Bitrate         Retr
+[  5]   0.00-10.00  sec  18.9 GBytes  16.2 Gbits/sec    0            sender
+[  5]   0.00-10.00  sec  18.9 GBytes  16.2 Gbits/sec                  receiver
 
 $ iperf3 -c 127.0.0.1 # chisel with TLS
-[ ID] Interval           Transfer     Bitrate
-[  5]   0.00-10.00  sec  4.79 GBytes  4.12 Gbits/sec                  sender
-[  5]   0.00-10.01  sec  4.79 GBytes  4.11 Gbits/sec                  receiver
+[ ID] Interval           Transfer     Bitrate         Retr
+[  5]   0.00-10.00  sec  5.82 GBytes  5.00 Gbits/sec    0            sender
+[  5]   0.00-10.00  sec  5.81 GBytes  4.99 Gbits/sec                  receiver
 
 $ iperf3 -c 127.0.0.1 # penguin with TLS
-[ ID] Interval           Transfer     Bitrate
-[  5]   0.00-10.01  sec  11.0 GBytes  9.48 Gbits/sec                  sender
-[  5]   0.00-10.01  sec  11.0 GBytes  9.48 Gbits/sec                  receiver
+[ ID] Interval           Transfer     Bitrate         Retr
+[  5]   0.00-10.00  sec  13.8 GBytes  11.9 Gbits/sec    0            sender
+[  5]   0.00-10.00  sec  13.8 GBytes  11.8 Gbits/sec                  receiver
 ```
 
 - All the safety Rust offers.
