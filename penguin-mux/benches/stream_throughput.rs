@@ -42,7 +42,7 @@ const FAST_NUMS: &[usize] = &[2, 64, 512, 4096, 8192];
 
 #[inline]
 fn make_payload() -> Bytes {
-    let mut rng = rand::rngs::SmallRng::seed_from_u64(0xabcd);
+    let mut rng = SmallRng::seed_from_u64(0xabcd);
     let mut payload = vec![0u8; EACH_WRITE_SIZE];
     rng.fill_bytes(&mut payload);
     let payload = Bytes::from(payload);
@@ -135,6 +135,45 @@ impl<const BUF_SIZE: usize> BenchConstructableWebSocket for DuplexWebSocketStrea
     }
 }
 
+#[cfg(feature = "yawc")]
+impl BenchConstructableWebSocket for yawc::WebSocket<TcpStream> {
+    type PeerType = yawc::WebSocket<yawc::HttpStream>;
+    #[inline]
+    async fn get_pair() -> (Self, Self::PeerType) {
+        let (client, server) = make_connected_tcp_stream().await;
+        let s_addr = server.local_addr().unwrap();
+        let (job_tx, mut job_rx) = tokio::sync::mpsc::channel(2);
+        let server_fn = move |req: hyper::Request<hyper::body::Incoming>| {
+            let job_tx = job_tx.clone();
+            async move {
+                let (response, fut) =
+                    yawc::WebSocket::upgrade_with_options(req, yawc::Options::default())?;
+                let task = tokio::task::spawn(async move { fut.await.unwrap() });
+                job_tx.send(task).await.unwrap();
+                yawc::Result::Ok(response)
+            }
+        };
+        let server_task = tokio::spawn(async move {
+            let io = hyper_util::rt::TokioIo::new(server);
+            let conn_fut = hyper::server::conn::http1::Builder::new()
+                .serve_connection(io, hyper::service::service_fn(server_fn))
+                .with_upgrades();
+            conn_fut.await.unwrap();
+        });
+        let url = format!("ws://{s_addr}").parse().unwrap();
+        let client = yawc::WebSocket::handshake(url, client, yawc::Options::default().with_utf8())
+            .await
+            .unwrap();
+        server_task.await.unwrap();
+        let Some(result) = job_rx.recv().await else {
+            panic!("Server task did not send a result");
+        };
+        assert!(job_rx.is_empty(), "Server task sent more than one result");
+        let server = result.await.unwrap();
+        (client, server)
+    }
+}
+
 #[inline]
 async fn make_connected_mux<WS: BenchConstructableWebSocket>()
 -> (Multiplexor<SmallRng>, Multiplexor<SmallRng>) {
@@ -154,9 +193,15 @@ async fn make_connected_mux<WS: BenchConstructableWebSocket>()
     (client, server)
 }
 
-#[divan::bench(
+#[cfg_attr(all(feature = "tungstenite", feature = "yawc"), divan::bench(
+    types = [WebSocketStream<TcpStream>, DuplexWebSocketStream<4096>, DuplexWebSocketStream<1048576>, yawc::WebSocket<TcpStream>],
+))]
+#[cfg_attr(all(feature = "tungstenite", not(feature = "yawc")), divan::bench(
     types = [WebSocketStream<TcpStream>, DuplexWebSocketStream<4096>, DuplexWebSocketStream<1048576>],
-)]
+))]
+#[cfg_attr(all(not(feature = "tungstenite"), feature = "yawc"), divan::bench(
+    types = [yawc::WebSocket<TcpStream>],
+))]
 fn bench00_baseline_ws<WS: BenchConstructableWebSocket>(b: Bencher<'_, '_>) {
     b.with_inputs(|| {
         TOKIO_RT.block_on(async { (make_payload(), make_connected_mux::<WS>().await) })
@@ -229,10 +274,18 @@ fn bench02_baseline_tcp_bidir(b: Bencher<'_, '_>, num_writes: usize) {
     });
 }
 
-#[divan::bench(
+#[cfg_attr(all(feature = "tungstenite", feature = "yawc"), divan::bench(
+    types = [WebSocketStream<TcpStream>, DuplexWebSocketStream<4096>, DuplexWebSocketStream<1048576>, yawc::WebSocket<TcpStream>],
+    args = FAST_NUMS,
+))]
+#[cfg_attr(all(feature = "tungstenite", not(feature = "yawc")), divan::bench(
     types = [WebSocketStream<TcpStream>, DuplexWebSocketStream<4096>, DuplexWebSocketStream<1048576>],
     args = FAST_NUMS,
-)]
+))]
+#[cfg_attr(all(not(feature = "tungstenite"), feature = "yawc"), divan::bench(
+    types = [yawc::WebSocket<TcpStream>],
+    args = FAST_NUMS,
+))]
 fn bench10_stream_throughput<WS: BenchConstructableWebSocket>(b: Bencher<'_, '_>, num_writes: usize) {
     b.with_inputs(|| {
         TOKIO_RT.block_on(async { (make_payload(), make_connected_mux::<WS>().await) })
@@ -260,10 +313,18 @@ fn bench10_stream_throughput<WS: BenchConstructableWebSocket>(b: Bencher<'_, '_>
     });
 }
 
-#[divan::bench(
+#[cfg_attr(all(feature = "tungstenite", feature = "yawc"), divan::bench(
+    types = [WebSocketStream<TcpStream>, DuplexWebSocketStream<4096>, DuplexWebSocketStream<1048576>, yawc::WebSocket<TcpStream>],
+    args = SLOW_NUMS,
+))]
+#[cfg_attr(all(feature = "tungstenite", not(feature = "yawc")), divan::bench(
     types = [WebSocketStream<TcpStream>, DuplexWebSocketStream<4096>, DuplexWebSocketStream<1048576>],
-    args = SLOW_NUMS
-)]
+    args = SLOW_NUMS,
+))]
+#[cfg_attr(all(not(feature = "tungstenite"), feature = "yawc"), divan::bench(
+    types = [yawc::WebSocket<TcpStream>],
+    args = SLOW_NUMS,
+))]
 fn bench11_stream_throughput_bidir<WS: BenchConstructableWebSocket>(
     b: Bencher<'_, '_>,
     num_writes: usize,
@@ -297,10 +358,18 @@ fn bench11_stream_throughput_bidir<WS: BenchConstructableWebSocket>(
     });
 }
 
-#[divan::bench(
+#[cfg_attr(all(feature = "tungstenite", feature = "yawc"), divan::bench(
+    types = [WebSocketStream<TcpStream>, DuplexWebSocketStream<4096>, DuplexWebSocketStream<1048576>, yawc::WebSocket<TcpStream>],
+    args = SLOW_NUMS,
+))]
+#[cfg_attr(all(feature = "tungstenite", not(feature = "yawc")), divan::bench(
     types = [WebSocketStream<TcpStream>, DuplexWebSocketStream<4096>, DuplexWebSocketStream<1048576>],
     args = SLOW_NUMS,
-)]
+))]
+#[cfg_attr(all(not(feature = "tungstenite"), feature = "yawc"), divan::bench(
+    types = [yawc::WebSocket<TcpStream>],
+    args = SLOW_NUMS,
+))]
 fn bench12_stream_throughput_with_contention<WS: BenchConstructableWebSocket>(
     b: Bencher<'_, '_>,
     num_concurrent: usize,

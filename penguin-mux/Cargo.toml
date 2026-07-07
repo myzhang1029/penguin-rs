@@ -33,9 +33,13 @@ thiserror = { version = "2", default-features = false }
 tokio = { version = "^1, >=1.23.1", features = [ "sync"] }
 tokio-tungstenite = { version = "0.29", default-features = false, optional = true }
 tracing = { version = "0.1", features = ["attributes"], default-features = false }
+yawc = { version = "0.3", default-features = false, optional = true }
 
 [dev-dependencies]
 divan = "0.1"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["server", "tokio"] }
 penguin-mux = { path = ".", default-features = false, features = ["__dev-dependencies"] }
 tracing-subscriber = { version = "^0.3, >=0.3.20", features = ["env-filter"] }
 
@@ -50,8 +54,10 @@ tokio = ["tokio-rt", "tokio-io-util", "tokio-time"]
 tokio-rt = ["tokio/rt"]
 tokio-io-util = ["tokio/io-util"]
 tokio-time = ["tokio/time"]
-# use tungstenite as the WebSocket implementation
+# Support `tungstenite` WebSocket implementation
 tungstenite = ["dep:tokio-tungstenite"]
+# Support `yawc` WebSocket implementation
+yawc = ["dep:yawc"]
 # Use nohash-hasher for flow_id hashmaps
 nohash = ["dep:nohash-hasher"]
 # Facility to launch `parking_lot`'s deadlock detection in a separate thread in tests

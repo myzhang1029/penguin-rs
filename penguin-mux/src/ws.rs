@@ -209,3 +209,84 @@ mod tokio_tungstenite {
         }
     }
 }
+
+#[cfg(feature = "yawc")]
+mod yawc {
+    use super::{Message, WebSocket};
+    use core::pin::Pin;
+    use core::task::{Context, Poll, ready};
+    use futures_util::Sink;
+    use tokio::io::{AsyncRead, AsyncWrite};
+    use tracing::error;
+    use yawc::{Frame, OpCode, WebSocket as YawcWebSocket, WebSocketError, close::CloseCode};
+
+    impl From<Frame> for Message {
+        fn from(frame: Frame) -> Self {
+            let (opcode, is_final, payload) = frame.into_parts();
+            assert!(is_final, "Received non-final frame: {opcode:?}");
+            match opcode {
+                OpCode::Binary => Self::Binary(payload),
+                OpCode::Text => {
+                    error!("Received text message: {payload:?}");
+                    Self::Binary(payload)
+                }
+                OpCode::Ping => Self::Ping,
+                OpCode::Pong => Self::Pong,
+                OpCode::Close => Self::Close,
+                OpCode::Continuation => unreachable!("`Continuation` frame should not be received"),
+            }
+        }
+    }
+
+    impl From<Message> for Frame {
+        fn from(msg: Message) -> Self {
+            const EMPTY: &[u8] = b"";
+            match msg {
+                Message::Binary(data) => Self::binary(data),
+                Message::Ping => Self::ping(EMPTY),
+                Message::Pong => Self::pong(EMPTY),
+                Message::Close => Self::close(CloseCode::Normal, EMPTY),
+            }
+        }
+    }
+
+    impl From<WebSocketError> for crate::Error {
+        #[inline]
+        fn from(e: WebSocketError) -> Self {
+            Self::WebSocket(alloc::boxed::Box::new(e))
+        }
+    }
+
+    impl<RW> WebSocket for YawcWebSocket<RW>
+    where
+        RW: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        fn poll_ready_unpin(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), crate::Error>> {
+            Pin::new(self).poll_ready(cx).map_err(Into::into)
+        }
+
+        fn start_send_unpin(&mut self, item: Message) -> Result<(), crate::Error> {
+            Pin::new(self).start_send(item.into()).map_err(Into::into)
+        }
+
+        fn poll_flush_unpin(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), crate::Error>> {
+            Pin::new(self).poll_flush(cx).map_err(Into::into)
+        }
+
+        fn poll_close_unpin(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), crate::Error>> {
+            Pin::new(self).poll_close(cx).map_err(Into::into)
+        }
+
+        fn poll_next_unpin(
+            &mut self,
+            cx: &mut Context<'_>,
+        ) -> Poll<Option<Result<Message, crate::Error>>> {
+            let result = ready!(self.poll_next_frame(cx));
+            match result {
+                Ok(frame) => Poll::Ready(Some(Ok(frame.into()))),
+                Err(WebSocketError::ConnectionClosed) => Poll::Ready(None),
+                Err(e) => Poll::Ready(Some(Err(e.into()))),
+            }
+        }
+    }
+}
