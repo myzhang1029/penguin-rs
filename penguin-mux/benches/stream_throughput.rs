@@ -78,19 +78,19 @@ fn baseline_tcp(b: Bencher<'_, '_>, num_writes: usize) {
                 let len = payload.len();
                 tokio::spawn(async move {
                     let mut stream = s_socket.accept().await.unwrap().0;
-                    for _ in 0..num_writes {
-                        stream.write_all(&s_payload).await.unwrap();
-                    }
                     stream.shutdown().await.unwrap();
+                    let mut buf = vec![0; len];
+                    for _ in 0..num_writes {
+                        stream.read_exact(&mut buf).await.unwrap();
+                        // No check for correctness as this should be guaranteed by tests
+                    }
+                    assert_eq!(buf, payload);
                 });
                 let mut stream = TcpStream::connect(s_addr).await.unwrap();
-                stream.shutdown().await.unwrap();
-                let mut buf = vec![0; len];
                 for _ in 0..num_writes {
-                    stream.read_exact(&mut buf).await.unwrap();
-                    // No check for correctness as this should be guaranteed by tests
+                    stream.write_all(&s_payload).await.unwrap();
                 }
-                assert_eq!(buf, payload);
+                stream.shutdown().await.unwrap();
             });
         });
 }
@@ -150,10 +150,13 @@ fn bench_stream_throughput(b: Bencher<'_, '_>, num_writes: usize) {
                     );
                     task.spawn(None);
                     let mut stream = mux.accept_stream_channel().await.unwrap();
-                    for _ in 0..num_writes {
-                        stream.write_all(&s_payload).await.unwrap();
-                    }
                     stream.shutdown().await.unwrap();
+                    //tokio::time::sleep(core::time::Duration::from_secs(1)).await;
+                    let mut buf = vec![0; len];
+                    for _ in 0..num_writes {
+                        stream.read_exact(&mut buf).await.unwrap();
+                        // No check for correctness as this should be guaranteed by tests
+                    }
                 });
                 let tcpstream = TcpStream::connect(s_addr).await.unwrap();
                 let client = WebSocketStream::from_raw_socket(tcpstream, Role::Client, None).await;
@@ -164,13 +167,10 @@ fn bench_stream_throughput(b: Bencher<'_, '_>, num_writes: usize) {
                 );
                 task.spawn(None);
                 let mut stream = mux.new_stream_channel(&[], 0).await.unwrap();
-                stream.shutdown().await.unwrap();
-                //tokio::time::sleep(core::time::Duration::from_secs(1)).await;
-                let mut buf = vec![0; len];
                 for _ in 0..num_writes {
-                    stream.read_exact(&mut buf).await.unwrap();
-                    // No check for correctness as this should be guaranteed by tests
+                    stream.write_all(&s_payload).await.unwrap();
                 }
+                stream.shutdown().await.unwrap();
             });
         });
 }
