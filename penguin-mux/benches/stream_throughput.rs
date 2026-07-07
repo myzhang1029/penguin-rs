@@ -3,6 +3,7 @@ use divan::{Bencher, counter::BytesCount};
 use penguin_mux::{Multiplexor, config::Options, ws::WebSocket};
 use rand::{Rng, SeedableRng, rngs::SmallRng};
 use std::sync::LazyLock;
+use std::hint::black_box;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -125,7 +126,7 @@ fn baseline_tcp(b: Bencher<'_, '_>, num_writes: usize) {
                 let mut buf = vec![0; len];
                 for _ in 0..num_writes {
                     server.read_exact(&mut buf).await.unwrap();
-                    // No check for correctness as this should be guaranteed by tests
+                    black_box(&buf);
                 }
             });
             for _ in 0..num_writes {
@@ -151,7 +152,7 @@ fn baseline_tcp_bidir(b: Bencher<'_, '_>, num_writes: usize) {
                 for _ in 0..num_writes {
                     server.write_all(&payload).await.unwrap();
                     server.read_exact(&mut buf).await.unwrap();
-                    // No check for correctness as this should be guaranteed by tests
+                    black_box(&buf);
                 }
                 server.shutdown().await.unwrap();
             });
@@ -184,7 +185,7 @@ fn bench_stream_throughput<WS: BenchConstructableWebSocket>(b: Bencher<'_, '_>, 
                 let mut buf = vec![0; len];
                 for _ in 0..num_writes {
                     stream.read_exact(&mut buf).await.unwrap();
-                    // No check for correctness as this should be guaranteed by tests
+                    black_box(&buf);
                 }
             });
             let mut stream = client.new_stream_channel(&[], 0).await.unwrap();
@@ -215,7 +216,7 @@ fn bench_stream_throughput_bidir<WS: BenchConstructableWebSocket>(
                 for _ in 0..num_writes {
                     stream.write_all(&payload).await.unwrap();
                     stream.read_exact(&mut buf).await.unwrap();
-                    // No check for correctness as this should be guaranteed by tests
+                    black_box(&buf);
                 }
                 stream.shutdown().await.unwrap();
             });
@@ -260,7 +261,7 @@ fn bench_stream_throughput_with_contention<WS: BenchConstructableWebSocket>(
                         for _ in 0..EACH_JOB_WRITES {
                             stream.write_all(&payload).await.unwrap();
                             stream.read_exact(&mut buf).await.unwrap();
-                            // No check for correctness as this should be guaranteed by tests
+                            black_box(&buf);
                         }
                         stream.shutdown().await.unwrap();
                     });
