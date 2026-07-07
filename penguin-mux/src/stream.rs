@@ -144,7 +144,7 @@ impl AsyncWrite for MuxStream {
         let mut total_len = 0;
         for buf in bufs {
             total_len += buf.len();
-            slices.push(CowBytes::Temporary(&*buf));
+            slices.push(CowBytes::Temporary(buf));
         }
         let Some(()) = ready!(self.poll_obtain_write_permission(cx)) else {
             return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
@@ -479,11 +479,33 @@ where
                         break Poll::Ready(Ok(written_amt));
                     }
                     ready!(self.us.poll_obtain_write_permission(cx)).ok_or(BrokenPipe)?;
-                    let frame = Frame::new_push(self.us.flow_id, new_buf).into();
-                    self.us.tx_msg_tx.send(frame).or(Err(BrokenPipe))?;
+                    let mut msg_payload = alloc::vec::Vec::from(Frame::new_push(self.us.flow_id, new_buf));
                     let processed = new_buf.len();
-                    Pin::new(&mut self.other).consume(processed);
                     written_amt += processed as u64;
+                    other.as_mut().consume(processed);
+                    // XXX: The current implementation is terrible because it relies on the fact that
+                    // the current on-wire format does not care about the data length and the payload
+                    // is the last part of the frame.
+                    // TODO: design a good API to implement this through `Frame`'s methods.
+                    // Check if we can squeeze a bit more data from the other side to send in the same frame
+                    let mut should_shutdown = false;
+                    while let Poll::Ready(Ok(new_buf)) = other.as_mut().poll_fill_buf(cx) {
+                        if new_buf.is_empty() {
+                            // The other side is EOF'd, send what we have and then shutdown
+                            should_shutdown = true;
+                            break;
+                        }
+                        msg_payload.extend_from_slice(new_buf);
+                        let processed = new_buf.len();
+                        written_amt += processed as u64;
+                        other.as_mut().consume(processed);
+                    };
+                    self.us.tx_msg_tx.send(Message::Binary(msg_payload.into())).or(Err(BrokenPipe))?;
+                    if should_shutdown {
+                        self.us.do_shutdown();
+                        self.write_state = WriteState::Done(written_amt);
+                        break Poll::Ready(Ok(written_amt));
+                    }
                     self.write_state = WriteState::Transferring(written_amt);
                 }
             }

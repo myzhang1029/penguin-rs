@@ -328,7 +328,7 @@ impl<'data> Frame<'data> {
     /// Create a new [`OpCode::Push`] frame with vectored data.
     #[must_use]
     #[inline]
-    pub fn new_push_vectored(id: u32, data: Vec<CowBytes<'data>>) -> Self {
+    pub const fn new_push_vectored(id: u32, data: Vec<CowBytes<'data>>) -> Self {
         Self {
             id,
             payload: Payload::Push(PushPayload::Vectored(data)),
