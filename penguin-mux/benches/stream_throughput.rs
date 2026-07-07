@@ -2,8 +2,8 @@ use bytes::Bytes;
 use divan::{Bencher, counter::BytesCount};
 use penguin_mux::{Multiplexor, config::Options, ws::WebSocket};
 use rand::{Rng, SeedableRng, rngs::SmallRng};
-use std::sync::LazyLock;
 use std::hint::black_box;
+use std::sync::LazyLock;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -23,6 +23,7 @@ fn setup_logging() {
 static TOKIO_RT: LazyLock<runtime::Runtime> = LazyLock::new(|| {
     runtime::Builder::new_multi_thread()
         .enable_all()
+        .worker_threads(2)
         .build()
         .unwrap()
 });
