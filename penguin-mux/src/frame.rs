@@ -130,6 +130,39 @@ pub(crate) struct DatagramPayload<'data> {
     pub data: CowBytes<'data>,
 }
 
+/// Payload for a [`Payload::Push`] variant
+#[derive(Clone, Debug, Eq)]
+pub(crate) enum PushPayload<'data> {
+    /// A single data segment
+    Single(CowBytes<'data>),
+    /// A vectored data segment
+    Vectored(Vec<CowBytes<'data>>),
+}
+
+impl PushPayload<'_> {
+    #[inline]
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Single(data) => data.len(),
+            Self::Vectored(vec) => vec.iter().map(CowBytes::len).sum(),
+        }
+    }
+}
+
+impl PartialEq for PushPayload<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Single(a), Self::Single(b)) => a == b,
+            (Self::Single(a), Self::Vectored(b)) | (Self::Vectored(b), Self::Single(a)) => {
+                a.as_ref() == b.concat().as_slice()
+            }
+            (Self::Vectored(a), Self::Vectored(b)) => {
+                a.concat().as_slice() == b.concat().as_slice()
+            }
+        }
+    }
+}
+
 /// Frame payload
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Payload<'data> {
@@ -145,7 +178,7 @@ pub(crate) enum Payload<'data> {
     /// `Finish` has no payload
     Finish,
     /// `Push` payload
-    Push(CowBytes<'data>),
+    Push(PushPayload<'data>),
     /// `Bind` payload. See [`BindPayload`]
     Bind(BindPayload<'data>),
     /// `Datagram` payload. See [`DatagramPayload`]
@@ -154,7 +187,7 @@ pub(crate) enum Payload<'data> {
 
 impl Payload<'_> {
     #[inline]
-    pub const fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         match self {
             Self::Connect(ConnectPayload { target_host, .. }) => {
                 size_of::<u32>() + size_of::<u16>() + target_host.len()
@@ -278,7 +311,7 @@ impl<'data> Frame<'data> {
     pub const fn new_push(id: u32, data: &'data [u8]) -> Self {
         Self {
             id,
-            payload: Payload::Push(CowBytes::Temporary(data)),
+            payload: Payload::Push(PushPayload::Single(CowBytes::Temporary(data))),
         }
     }
 
@@ -288,7 +321,17 @@ impl<'data> Frame<'data> {
     pub const fn new_push_owned(id: u32, data: Bytes) -> Self {
         Self {
             id,
-            payload: Payload::Push(CowBytes::Static(data)),
+            payload: Payload::Push(PushPayload::Single(CowBytes::Static(data))),
+        }
+    }
+
+    /// Create a new [`OpCode::Push`] frame with vectored data.
+    #[must_use]
+    #[inline]
+    pub fn new_push_vectored(id: u32, data: Vec<CowBytes<'data>>) -> Self {
+        Self {
+            id,
+            payload: Payload::Push(PushPayload::Vectored(data)),
         }
     }
 
@@ -414,7 +457,7 @@ impl<'data> TryFrom<CowBytes<'data>> for Frame<'data> {
             }
             OpCode::Reset => Payload::Reset,
             OpCode::Finish => Payload::Finish,
-            OpCode::Push => Payload::Push(data),
+            OpCode::Push => Payload::Push(PushPayload::Single(data)),
             OpCode::Bind => {
                 check_remaining!(data, size_of::<u8>() + size_of::<u16>());
                 let bind_type = BindType::try_from(data.get_u8())?;
@@ -503,8 +546,13 @@ impl From<&Frame<'_>> for Vec<u8> {
                 encoded.put_u32(*psh_recvd_since);
             }
             Payload::Reset | Payload::Finish => {}
-            Payload::Push(data) => {
+            Payload::Push(PushPayload::Single(data)) => {
                 encoded.extend(data.as_ref());
+            }
+            Payload::Push(PushPayload::Vectored(vec)) => {
+                for data in vec {
+                    encoded.extend(data.as_ref());
+                }
             }
             Payload::Bind(BindPayload {
                 bind_type,
@@ -680,14 +728,46 @@ mod tests {
     #[test]
     fn test_frame_repr_push() {
         crate::tests::setup_logging();
-        let frame = Frame::new_push(0x75b_97bb, &[1, 2, 3, 4]);
+        let frame = Frame::new_push(0x125b_97bb, &[1, 2, 3, 4]);
         let bytes = Vec::from(&frame);
         assert_eq!(
             bytes,
             vec![
                 0x74, // ver | opcode (u8)
-                0x07, 0x5b, 0x97, 0xbb, // id (u32)
+                0x12, 0x5b, 0x97, 0xbb, // id (u32)
                 0x01, 0x02, 0x03, 0x04, // data (variable)
+            ]
+        );
+        let frame_back = Frame::try_from(Bytes::from(bytes)).unwrap();
+        assert_eq!(frame, frame_back);
+
+        let frame = Frame::new_push_owned(0x754_97cc, Bytes::from_static(&[1, 2, 3, 4]));
+        let bytes = Vec::from(&frame);
+        assert_eq!(
+            bytes,
+            vec![
+                0x74, // ver | opcode (u8)
+                0x07, 0x54, 0x97, 0xcc, // id (u32)
+                0x01, 0x02, 0x03, 0x04, // data (variable)
+            ]
+        );
+        let frame_back = Frame::try_from(Bytes::from(bytes)).unwrap();
+        assert_eq!(frame, frame_back);
+
+        let frame = Frame::new_push_vectored(
+            0x2754_98df,
+            vec![
+                CowBytes::Temporary(b"hello"),
+                CowBytes::Static(Bytes::from_static(b"world")),
+            ],
+        );
+        let bytes = Vec::from(&frame);
+        assert_eq!(
+            bytes,
+            vec![
+                0x74, // ver | opcode (u8)
+                0x27, 0x54, 0x98, 0xdf, // id (u32)
+                0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x77, 0x6f, 0x72, 0x6c, 0x64, // data (variable)
             ]
         );
         let frame_back = Frame::try_from(Bytes::from(bytes)).unwrap();

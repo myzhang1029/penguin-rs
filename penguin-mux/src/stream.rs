@@ -482,6 +482,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frame::{Payload, PushPayload};
     use crate::tests::setup_logging;
     use crate::ws::Message::Binary;
     use alloc::vec;
@@ -638,20 +639,20 @@ mod tests {
         };
         let frame1 = Frame::try_from(msg).unwrap();
         assert_eq!(frame1.id, 1);
-        if let crate::frame::Payload::Push(push) = frame1.payload {
+        if let Payload::Push(PushPayload::Single(push)) = frame1.payload {
             assert_eq!(&push.as_ref(), b"hello");
         } else {
-            panic!("Expected a `Push` frame");
+            panic!("Expected a `Push(Single)` frame");
         }
         let Binary(msg) = tx_msg_rx.recv().await.unwrap() else {
             panic!("Expected a binary message");
         };
         let frame2 = Frame::try_from(msg).unwrap();
         assert_eq!(frame2.id, 1);
-        if let crate::frame::Payload::Push(push) = frame2.payload {
+        if let Payload::Push(PushPayload::Single(push)) = frame2.payload {
             assert_eq!(&push.as_ref(), b"world");
         } else {
-            panic!("Expected a `Push` frame");
+            panic!("Expected a `Push(Single)` frame");
         }
 
         // Try to write again
@@ -675,10 +676,10 @@ mod tests {
         };
         let frame4 = Frame::try_from(msg).unwrap();
         assert_eq!(frame4.id, 1);
-        if let crate::frame::Payload::Push(push) = frame4.payload {
+        if let Payload::Push(PushPayload::Single(push)) = frame4.payload {
             assert_eq!(&push.as_ref(), b"maybe");
         } else {
-            panic!("Expected a `Push` frame");
+            panic!("Expected a `Push(Single)` frame");
         }
     }
 
@@ -739,10 +740,10 @@ mod tests {
         };
         let frame = Frame::try_from(msg).unwrap();
         assert_eq!(frame.id, 1);
-        if let crate::frame::Payload::Push(push) = frame.payload {
+        if let Payload::Push(PushPayload::Single(push)) = frame.payload {
             assert_eq!(push.as_ref(), RX1);
         } else {
-            panic!("Expected a `Push` frame");
+            panic!("Expected a `Push(Single)` frame");
         }
 
         // Send some partial data before we go away to check that the
@@ -765,10 +766,10 @@ mod tests {
         };
         let frame = Frame::try_from(msg).unwrap();
         assert_eq!(frame.id, 1);
-        if let crate::frame::Payload::Push(push) = frame.payload {
+        if let Payload::Push(PushPayload::Single(push)) = frame.payload {
             assert_eq!(push.as_ref(), RX2);
         } else {
-            panic!("Expected a `Push` frame");
+            panic!("Expected a `Push(Single)` frame");
         }
         // Again short data before we go away
         check_side.write_all(&RX3).await.unwrap();
@@ -779,10 +780,10 @@ mod tests {
         };
         let frame = Frame::try_from(msg).unwrap();
         assert_eq!(frame.id, 1);
-        if let crate::frame::Payload::Push(push) = frame.payload {
+        if let Payload::Push(PushPayload::Single(push)) = frame.payload {
             assert_eq!(push.as_ref(), RX3);
         } else {
-            panic!("Expected a `Push` frame");
+            panic!("Expected a `Push(Single)` frame");
         }
 
         // Get final results
@@ -842,7 +843,7 @@ mod tests {
         };
         let frame = Frame::try_from(msg).unwrap();
         assert_eq!(frame.id, 1);
-        if let crate::frame::Payload::Acknowledge(ack) = frame.payload {
+        if let Payload::Acknowledge(ack) = frame.payload {
             assert_eq!(ack, TEST_ACK_THRESHOLD_U32);
         } else {
             panic!("Expected an `Acknowledge` frame");
@@ -861,7 +862,7 @@ mod tests {
         };
         let frame = Frame::try_from(msg).unwrap();
         assert_eq!(frame.id, 1);
-        if let crate::frame::Payload::Acknowledge(ack) = frame.payload {
+        if let Payload::Acknowledge(ack) = frame.payload {
             assert_eq!(ack, TEST_ACK_THRESHOLD_U32);
         } else {
             panic!("Expected an `Acknowledge` frame");
@@ -871,7 +872,7 @@ mod tests {
         };
         let frame = Frame::try_from(msg).unwrap();
         assert_eq!(frame.id, 1);
-        if let crate::frame::Payload::Acknowledge(ack) = frame.payload {
+        if let Payload::Acknowledge(ack) = frame.payload {
             assert_eq!(ack, TEST_ACK_THRESHOLD_U32);
         } else {
             panic!("Expected an `Acknowledge` frame");
@@ -899,13 +900,13 @@ mod tests {
             let frame = Frame::try_from(msg).unwrap();
             assert_eq!(frame.id, 1);
             match frame.payload {
-                crate::frame::Payload::Push(push) => {
+                Payload::Push(PushPayload::Single(push)) => {
                     buf.copy_from_slice(push.as_ref());
                 }
-                crate::frame::Payload::Finish => {
+                Payload::Finish => {
                     break;
                 }
-                _ => panic!("Expected a `Push` frame"),
+                _ => panic!("Expected a `Push(Single)` frame"),
             }
         }
         assert_eq!(&buf[..], b"hello".repeat(TEST_ACK_THRESHOLD).as_slice());

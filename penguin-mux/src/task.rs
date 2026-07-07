@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use crate::frame::{ConnectPayload, Frame, Payload};
+use crate::frame::{ConnectPayload, Frame, Payload, PushPayload};
 use crate::loom::{Arc, AtomicBool, AtomicU32, AtomicWaker, Mutex, RwLock};
 use crate::timing::{OptionalDuration, TimestampProvider};
 use crate::ws::{Message, WebSocket};
@@ -476,6 +476,11 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
             // `true` because we don't want to reply `Reset` with `Reset`.
             Payload::Reset => self.close_port(flow_id, true),
             Payload::Push(data) => {
+                let PushPayload::Single(data) = data else {
+                    unreachable!(
+                        "Parser should not produce a `PushPayload::Vectored` variant (this is a bug)"
+                    );
+                };
                 // In this case, `data` is always owned already
                 let result = self
                     .flows
