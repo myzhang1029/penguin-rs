@@ -11,6 +11,8 @@ use core::fmt;
 use core::pin::Pin;
 use core::task::{Context, Poll, ready};
 #[cfg(feature = "std")]
+use cow_bytes::CowBytes;
+#[cfg(feature = "std")]
 use std::io::{self, ErrorKind::BrokenPipe};
 #[cfg(feature = "std")]
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite};
@@ -130,6 +132,33 @@ impl AsyncWrite for MuxStream {
     fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.do_shutdown();
         Poll::Ready(Ok(()))
+    }
+
+    #[inline]
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[io::IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        let mut slices = alloc::vec::Vec::with_capacity(bufs.len());
+        let mut total_len = 0;
+        for buf in bufs {
+            total_len += buf.len();
+            slices.push(CowBytes::Temporary(&*buf));
+        }
+        let Some(()) = ready!(self.poll_obtain_write_permission(cx)) else {
+            return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
+        };
+        let frame = Frame::new_push_vectored(self.flow_id, slices).into();
+        self.tx_msg_tx
+            .send(frame)
+            .map_err(|_| io::Error::from(io::ErrorKind::BrokenPipe))?;
+        Poll::Ready(Ok(total_len))
+    }
+
+    #[inline]
+    fn is_write_vectored(&self) -> bool {
+        true
     }
 }
 
