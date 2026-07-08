@@ -284,14 +284,7 @@ impl<R: Rng + Send> Multiplexor<R> {
         while retries_left > 0 {
             retries_left -= 1;
             let (stream_tx, stream_rx) = oneshot::channel();
-            let flow_id = {
-                let mut streams = self.flows.write();
-                // Allocate a new port
-                let flow_id = streams.next_available_key(&mut self.rng.lock());
-                trace!("flow_id = {flow_id:08x}");
-                streams.insert(flow_id, FlowSlot::Requested(stream_tx));
-                flow_id
-            };
+            let flow_id = self.insert_new_flow(FlowSlot::Requested(stream_tx));
             trace!("sending `Connect`");
             self.tx_msg_tx
                 .send(Frame::new_connect(host, port, flow_id, self.rwnd).into())
@@ -387,14 +380,7 @@ impl<R: Rng + Send> Multiplexor<R> {
     #[tracing::instrument(skip(self), level = "debug")]
     pub async fn request_bind(&self, host: &[u8], port: u16, bind_type: BindType) -> Result<bool> {
         let (result_tx, result_rx) = oneshot::channel();
-        let flow_id = {
-            let mut streams = self.flows.write();
-            // Allocate a new port
-            let flow_id = streams.next_available_key(&mut self.rng.lock());
-            trace!("flow_id = {flow_id:08x}");
-            streams.insert(flow_id, FlowSlot::BindRequested(result_tx));
-            flow_id
-        };
+        let flow_id = self.insert_new_flow(FlowSlot::BindRequested(result_tx));
         let bnd_frame = Frame::new_bind(flow_id, bind_type, host, port);
         self.tx_msg_tx
             .send(bnd_frame.into())
@@ -422,6 +408,16 @@ impl<R: Rng + Send> Multiplexor<R> {
         } else {
             Err(Error::UnsupportedOperation)
         }
+    }
+
+    /// Allocate a new non-zero flow ID and insert the given `FlowSlot` into the map.
+    fn insert_new_flow(&self, slot: FlowSlot) -> u32 {
+        let mut streams = self.flows.write();
+        // The write lock guard makes sure no other insertions can happen while work on it
+        let flow_id = streams.next_available_nonzero_key(&mut self.rng.lock());
+        trace!("flow_id = {flow_id:08x}");
+        streams.insert(flow_id, slot);
+        flow_id
     }
 }
 

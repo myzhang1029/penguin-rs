@@ -31,6 +31,24 @@ pub trait HashMapLike {
             }
         }
     }
+
+    /// Generate a new key that is not in the map and non-zero
+    #[inline]
+    #[must_use]
+    fn next_available_nonzero_key<R>(&self, rand: &mut R) -> Self::Key
+    where
+        StandardUniform: Distribution<Self::Key>,
+        Self::Key: From<u8> + PartialEq,
+        R: Rng,
+    {
+        let zero = 0u8.into();
+        loop {
+            let key = rand.random::<Self::Key>();
+            if key != zero && !self.contains_key(&key) {
+                break key;
+            }
+        }
+    }
 }
 
 #[cfg(feature = "std")]

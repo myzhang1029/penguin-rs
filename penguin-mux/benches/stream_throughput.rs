@@ -286,7 +286,10 @@ fn bench02_baseline_tcp_bidir(b: Bencher<'_, '_>, num_writes: usize) {
     types = [yawc::WebSocket<TcpStream>],
     args = FAST_NUMS,
 ))]
-fn bench10_stream_throughput<WS: BenchConstructableWebSocket>(b: Bencher<'_, '_>, num_writes: usize) {
+fn bench10_stream_throughput<WS: BenchConstructableWebSocket>(
+    b: Bencher<'_, '_>,
+    num_writes: usize,
+) {
     b.with_inputs(|| {
         TOKIO_RT.block_on(async { (make_payload(), make_connected_mux::<WS>().await) })
     })

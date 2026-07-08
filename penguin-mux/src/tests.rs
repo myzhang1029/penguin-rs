@@ -940,6 +940,43 @@ async fn test_flow_id_contention_can_succeed() {
 #[tokio::test]
 #[cfg(not(loom))]
 #[cfg(all(feature = "tokio-rt", feature = "std"))]
+async fn test_reject_zero_flow_id_conn() {
+    setup_logging();
+    let (mut client, server) = get_pair(None).await;
+
+    let server_mux = Multiplexor::new(server);
+
+    let server_task = tokio::spawn(async move {
+        let stream = server_mux.accept_stream_channel().await.unwrap();
+        assert_eq!(stream.flow_id, 12);
+    });
+
+    // Try a zero flow ID `Connect`, which should be rejected
+    let frame = frame::Frame::new_connect(&[], 22, 0, 10);
+    client.send(frame.into()).await.unwrap();
+    let reply = client.next().await.unwrap().unwrap();
+    let Message::Binary(payload) = reply else {
+        panic!("Expected a binary message");
+    };
+    let frame = frame::Frame::try_from(payload).unwrap();
+    assert_eq!(frame.id, 0);
+    assert!(matches!(frame.payload, frame::Payload::Reset));
+    // Now send a non-zero flow ID `Connect`
+    let frame = frame::Frame::new_connect(&[], 22, 12, 10);
+    client.send(frame.into()).await.unwrap();
+    let reply = client.next().await.unwrap().unwrap();
+    let Message::Binary(payload) = reply else {
+        panic!("Expected a binary message");
+    };
+    let frame = frame::Frame::try_from(payload).unwrap();
+    assert_eq!(frame.id, 12);
+    assert!(matches!(frame.payload, frame::Payload::Acknowledge(_)));
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+#[cfg(not(loom))]
+#[cfg(all(feature = "tokio-rt", feature = "std"))]
 async fn test_bind_request() {
     setup_logging();
     let (client, server) = get_pair(None).await;

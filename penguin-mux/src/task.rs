@@ -505,6 +505,8 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
                 }
             }
             Payload::Bind(payload) => {
+                // We can accept `Bind` requests of zero flow ID because it is not saved
+                // in the map or used in the same `dropped_flows_tx` channel.
                 if let Some(sender) = &self.bnd_request_tx {
                     debug!(
                         "received `Bind` request: [{:?}]:{}",
@@ -602,7 +604,10 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
         let stream = {
             // Save the TX end of the stream so we can write to it when subsequent frames arrive
             let mut streams = self.flows.write();
-            if streams.contains_key(&flow_id) {
+            if streams.contains_key(&flow_id) || flow_id == 0 {
+                // We reject a zero stream flow ID because we use it in `dropped_flows_tx`
+                // to indicate dropped multiplexor. Note that the protocol itself does not
+                // forbid a zero stream flow ID, but it does give us the liberty to reject it.
                 debug!("resetting `Connect` with in-use flow_id");
                 self.tx_msg_tx.send(Frame::new_reset(flow_id).into()).ok();
                 // On the other side, `process_frame` will pass the `Reset` frame to
