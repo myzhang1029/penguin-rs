@@ -42,7 +42,7 @@ use rand::{Rng, SeedableRng};
 use thiserror::Error;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot};
-use tracing::{error, trace, warn};
+use tracing::{debug, error, trace, warn};
 
 #[cfg(feature = "nohash")]
 type IntHasher = nohash_hasher::BuildNoHashHasher<u32>;
@@ -428,7 +428,7 @@ impl<R: Rng + Send> Multiplexor<R> {
 impl<R> Drop for Multiplexor<R> {
     fn drop(&mut self) {
         if self.dropped_flows_tx.send(0).is_err() {
-            error!("Failed to inform task of dropped multiplexor");
+            debug!("failed to inform task of dropped multiplexor");
         }
     }
 }
@@ -513,7 +513,7 @@ impl FlowSlot {
     ) -> Option<oneshot::Sender<Option<MuxStream>>> {
         // Make sure it is not replaced in the error case
         if matches!(self, Self::Established(_) | Self::BindRequested(_)) {
-            error!("establishing an established or invalid slot");
+            error!("Establishing an established or invalid slot");
             return None;
         }
         let sender = match core::mem::replace(self, Self::Established(data)) {
