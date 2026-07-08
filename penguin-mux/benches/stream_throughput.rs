@@ -4,6 +4,8 @@ use penguin_mux::{Multiplexor, config::Options, ws::WebSocket};
 use rand::{Rng, SeedableRng, rngs::SmallRng};
 use std::hint::black_box;
 use std::sync::LazyLock;
+#[cfg(feature = "tungstenite")]
+use tokio::io::DuplexStream;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -28,15 +30,15 @@ static TOKIO_RT: LazyLock<runtime::Runtime> = LazyLock::new(|| {
         .unwrap()
 });
 
-const EACH_WRITE_SIZE: usize = 4096;
+const EACH_WRITE_SIZE: usize = 32768;
 #[cfg(debug_assertions)]
-const SLOW_NUMS: [usize; 4] = [1, 4, 32, 256];
+const SLOW_NUMS: &[usize] = &[1, 16, 64];
 #[cfg(not(debug_assertions))]
-const SLOW_NUMS: [usize; 6] = [1, 4, 32, 256, 2048, 16384];
+const SLOW_NUMS: &[usize] = &[1, 32, 256, 2048, 4096];
 #[cfg(debug_assertions)]
-const FAST_NUMS: [usize; 4] = [2, 8, 64, 512];
+const FAST_NUMS: &[usize] = &[2, 32, 128];
 #[cfg(not(debug_assertions))]
-const FAST_NUMS: [usize; 6] = [2, 8, 64, 512, 4096, 32768];
+const FAST_NUMS: &[usize] = &[2, 64, 512, 4096, 8192];
 
 #[inline]
 fn make_payload() -> Bytes {
@@ -76,6 +78,63 @@ impl BenchConstructableWebSocket for WebSocketStream<TcpStream> {
     }
 }
 
+#[cfg(feature = "tungstenite")]
+#[derive(Debug)]
+struct DuplexWebSocketStream<const BUF_SIZE: usize>(WebSocketStream<DuplexStream>);
+
+#[cfg(feature = "tungstenite")]
+impl<const BUF_SIZE: usize> WebSocket for DuplexWebSocketStream<BUF_SIZE> {
+    #[inline(always)]
+    fn poll_next_unpin(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<penguin_mux::ws::Message, penguin_mux::Error>>> {
+        self.0.poll_next_unpin(cx)
+    }
+    #[inline(always)]
+    fn poll_ready_unpin(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), penguin_mux::Error>> {
+        self.0.poll_ready_unpin(cx)
+    }
+    #[inline(always)]
+    fn start_send_unpin(
+        &mut self,
+        item: penguin_mux::ws::Message,
+    ) -> Result<(), penguin_mux::Error> {
+        self.0.start_send_unpin(item)
+    }
+    #[inline(always)]
+    fn poll_flush_unpin(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), penguin_mux::Error>> {
+        self.0.poll_flush_unpin(cx)
+    }
+    #[inline(always)]
+    fn poll_close_unpin(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), penguin_mux::Error>> {
+        self.0.poll_close_unpin(cx)
+    }
+}
+
+#[cfg(feature = "tungstenite")]
+impl<const BUF_SIZE: usize> BenchConstructableWebSocket for DuplexWebSocketStream<BUF_SIZE> {
+    type PeerType = Self;
+    #[inline]
+    async fn get_pair() -> (Self, Self::PeerType) {
+        let (client, server) = tokio::io::duplex(BUF_SIZE);
+        let server_task =
+            tokio::spawn(WebSocketStream::from_raw_socket(server, Role::Server, None));
+        let client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
+        let server = server_task.await.unwrap();
+        (Self(client), Self(server))
+    }
+}
+
 #[inline]
 async fn make_connected_mux<WS: BenchConstructableWebSocket>()
 -> (Multiplexor<SmallRng>, Multiplexor<SmallRng>) {
@@ -95,8 +154,10 @@ async fn make_connected_mux<WS: BenchConstructableWebSocket>()
     (client, server)
 }
 
-#[divan::bench(types = [WebSocketStream<TcpStream>])]
-fn baseline_ws<WS: BenchConstructableWebSocket>(b: Bencher<'_, '_>) {
+#[divan::bench(
+    types = [WebSocketStream<TcpStream>, DuplexWebSocketStream<4096>, DuplexWebSocketStream<1048576>],
+)]
+fn bench00_baseline_ws<WS: BenchConstructableWebSocket>(b: Bencher<'_, '_>) {
     b.with_inputs(|| {
         TOKIO_RT.block_on(async { (make_payload(), make_connected_mux::<WS>().await) })
     })
@@ -114,11 +175,11 @@ fn baseline_ws<WS: BenchConstructableWebSocket>(b: Bencher<'_, '_>) {
 }
 
 #[divan::bench(args = FAST_NUMS)]
-fn baseline_tcp(b: Bencher<'_, '_>, num_writes: usize) {
+fn bench01_baseline_tcp(b: Bencher<'_, '_>, num_writes: usize) {
     b.with_inputs(|| {
         TOKIO_RT.block_on(async { (make_payload(), make_connected_tcp_stream().await) })
     })
-    .counter(BytesCount::new(num_writes * EACH_WRITE_SIZE * 2))
+    .counter(BytesCount::new(num_writes * EACH_WRITE_SIZE))
     .bench_values(|(payload, (mut client, mut server))| {
         TOKIO_RT.block_on(async {
             let len = payload.len();
@@ -140,7 +201,7 @@ fn baseline_tcp(b: Bencher<'_, '_>, num_writes: usize) {
 }
 
 #[divan::bench(args = SLOW_NUMS)]
-fn baseline_tcp_bidir(b: Bencher<'_, '_>, num_writes: usize) {
+fn bench02_baseline_tcp_bidir(b: Bencher<'_, '_>, num_writes: usize) {
     b.with_inputs(|| {
         TOKIO_RT.block_on(async { (make_payload(), make_connected_tcp_stream().await) })
     })
@@ -169,14 +230,14 @@ fn baseline_tcp_bidir(b: Bencher<'_, '_>, num_writes: usize) {
 }
 
 #[divan::bench(
-    types = [WebSocketStream<TcpStream>],
+    types = [WebSocketStream<TcpStream>, DuplexWebSocketStream<4096>, DuplexWebSocketStream<1048576>],
     args = FAST_NUMS,
 )]
-fn bench_stream_throughput<WS: BenchConstructableWebSocket>(b: Bencher<'_, '_>, num_writes: usize) {
+fn bench10_stream_throughput<WS: BenchConstructableWebSocket>(b: Bencher<'_, '_>, num_writes: usize) {
     b.with_inputs(|| {
         TOKIO_RT.block_on(async { (make_payload(), make_connected_mux::<WS>().await) })
     })
-    .counter(BytesCount::new(num_writes * EACH_WRITE_SIZE * 2))
+    .counter(BytesCount::new(num_writes * EACH_WRITE_SIZE))
     .bench_values(|(payload, (client, server))| {
         TOKIO_RT.block_on(async {
             let len = payload.len();
@@ -199,8 +260,11 @@ fn bench_stream_throughput<WS: BenchConstructableWebSocket>(b: Bencher<'_, '_>, 
     });
 }
 
-#[divan::bench(types = [WebSocketStream<TcpStream>], args = SLOW_NUMS)]
-fn bench_stream_throughput_bidir<WS: BenchConstructableWebSocket>(
+#[divan::bench(
+    types = [WebSocketStream<TcpStream>, DuplexWebSocketStream<4096>, DuplexWebSocketStream<1048576>],
+    args = SLOW_NUMS
+)]
+fn bench11_stream_throughput_bidir<WS: BenchConstructableWebSocket>(
     b: Bencher<'_, '_>,
     num_writes: usize,
 ) {
@@ -234,10 +298,10 @@ fn bench_stream_throughput_bidir<WS: BenchConstructableWebSocket>(
 }
 
 #[divan::bench(
-    types = [WebSocketStream<TcpStream>],
+    types = [WebSocketStream<TcpStream>, DuplexWebSocketStream<4096>, DuplexWebSocketStream<1048576>],
     args = SLOW_NUMS,
 )]
-fn bench_stream_throughput_with_contention<WS: BenchConstructableWebSocket>(
+fn bench12_stream_throughput_with_contention<WS: BenchConstructableWebSocket>(
     b: Bencher<'_, '_>,
     num_concurrent: usize,
 ) {
