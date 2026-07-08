@@ -38,7 +38,7 @@ pub struct TaskData<S: WebSocket, T: TimestampProvider> {
     // To be taken out when the task is spawned
     pub(crate) tx_msg_rx: mpsc::UnboundedReceiver<Message>,
     // To be taken out when the task is spawned
-    pub(crate) dropped_ports_rx: mpsc::UnboundedReceiver<u32>,
+    pub(crate) dropped_flows_rx: mpsc::UnboundedReceiver<u32>,
 }
 
 impl<S, T> TaskData<S, T>
@@ -58,9 +58,9 @@ where
         let Self {
             task,
             tx_msg_rx,
-            dropped_ports_rx,
+            dropped_flows_rx,
         } = self;
-        task.start(dropped_ports_rx, tx_msg_rx).await
+        task.start(dropped_flows_rx, tx_msg_rx).await
     }
 
     /// Spawn the multiplexor task in the background using the `tokio` runtime.
@@ -97,9 +97,9 @@ pub struct Task<S: WebSocket, T: TimestampProvider> {
     /// See `Multiplexor::tx_msg_tx`
     /// `Task` needs it in the task for creating `MuxStream`s
     pub tx_msg_tx: mpsc::UnboundedSender<Message>,
-    /// See `Multiplexor::dropped_ports_tx`
+    /// See `Multiplexor::dropped_flows_tx`
     /// `Task` needs it in the task for creating `MuxStream`s
-    pub dropped_ports_tx: mpsc::UnboundedSender<u32>,
+    pub dropped_flows_tx: mpsc::UnboundedSender<u32>,
     /// See `Multiplexor::con_recv_stream_tx`
     pub con_recv_stream_tx: mpsc::Sender<MuxStream>,
     /// Time that the last `Pong` was received.
@@ -133,7 +133,7 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
     )]
     async fn start(
         self,
-        mut dropped_ports_rx: mpsc::UnboundedReceiver<u32>,
+        mut dropped_flows_rx: mpsc::UnboundedReceiver<u32>,
         mut tx_msg_rx: mpsc::UnboundedReceiver<Message>,
     ) -> Result<()> {
         let (should_drain_frame_rx, res) = futures_util::select_biased! {
@@ -145,42 +145,42 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
                 debug!("`process_message_to_send_task` task finished: {r:?}");
                 (false, r)
             }
-            () = self.process_dropped_ports_task(&mut dropped_ports_rx).fuse() => {
-                debug!("`process_dropped_ports_task` task finished");
+            () = self.process_dropped_flows_task(&mut dropped_flows_rx).fuse() => {
+                debug!("`process_dropped_flows_task` task finished");
                 (true, Ok(()))
             }
         };
-        self.wind_down(should_drain_frame_rx, tx_msg_rx, dropped_ports_rx)
+        self.wind_down(should_drain_frame_rx, tx_msg_rx, dropped_flows_rx)
             .await;
         res
     }
 
-    /// Process dropped ports from the `dropped_ports_rx` channel.
+    /// Process dropped flows from the `dropped_flows_rx` channel.
     /// Returns when [`Multiplexor`] itself is dropped.
     ///
     /// # Cancel Safety
     /// This function is cancel safe. If it is cancelled, some items
-    /// may be left on `dropped_ports_rx` but no item will be lost.
+    /// may be left on `dropped_flows_rx` but no item will be lost.
     #[tracing::instrument(skip_all, level = "trace")]
     #[inline]
-    async fn process_dropped_ports_task(
+    async fn process_dropped_flows_task(
         &self,
-        dropped_ports_rx: &mut mpsc::UnboundedReceiver<u32>,
+        dropped_flows_rx: &mut mpsc::UnboundedReceiver<u32>,
     ) {
-        while let Some(flow_id) = dropped_ports_rx.recv().await {
+        while let Some(flow_id) = dropped_flows_rx.recv().await {
             if flow_id == 0 {
-                // `our_port` is `0`, which means the multiplexor itself is being dropped.
+                // `flow_id` is `0`, which means the multiplexor itself is being dropped.
                 debug!("mux dropped");
                 // If this returns, our end is dropped, but we should still try to flush everything we
                 // already have in the `frame_rx` before closing.
                 return;
             }
-            self.close_port(flow_id, false);
+            self.close_flow(flow_id, false);
         }
-        // None: only happens when the last sender (i.e. `dropped_ports_tx` in `Task`)
+        // None: only happens when the last sender (i.e. `dropped_flows_tx` in `Task`)
         // is dropped, which should not happen in normal circumstances because `Task::drop`
         // is called before its fields are dropped.
-        unreachable!("dropped ports receiver should not be closed (this is a bug)");
+        unreachable!("dropped flows receiver should not be closed (this is a bug)");
     }
 
     /// Poll `tx_msg_rx`, queue the message received, and send keepalive pings as needed.
@@ -274,7 +274,7 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
         &self,
         should_drain_msg_rx: bool,
         mut tx_msg_rx: mpsc::UnboundedReceiver<Message>,
-        mut dropped_ports_rx: mpsc::UnboundedReceiver<u32>,
+        mut dropped_flows_rx: mpsc::UnboundedReceiver<u32>,
     ) {
         debug!("closing all connections");
         // We first make sure the streams can no longer send
@@ -324,12 +324,12 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
         }
         // Finally, we send EOF to all established streams.
         self.flows.write().drain().for_each(|(flow_id, slot)| {
-            self.close_port_local(slot, flow_id, true);
+            self.close_flow_local(slot, flow_id, true);
         });
-        // To clean up, we also drain the `dropped_ports_rx` channel
-        dropped_ports_rx.close();
-        while let Some(flow_id) = dropped_ports_rx.recv().await {
-            debug!("got dropped port {flow_id:08x} after mux drop");
+        // To clean up, we also drain the `dropped_flows_rx` channel
+        dropped_flows_rx.close();
+        while let Some(flow_id) = dropped_flows_rx.recv().await {
+            debug!("got dropped flow {flow_id:08x} after mux drop");
         }
     }
 
@@ -469,7 +469,7 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
                 }
             }
             // `true` because we don't want to reply `Reset` with `Reset`.
-            Payload::Reset => self.close_port(flow_id, true),
+            Payload::Reset => self.close_flow(flow_id, true),
             Payload::Push(data) => {
                 let PushPayload::Single(data) = data else {
                     unreachable!(
@@ -489,12 +489,12 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
                         // Peer does not respect the `rwnd` limit, this should not happen in normal circumstances.
                         // let's send `Reset`.
                         warn!("Peer does not respect `rwnd` limit, dropping stream");
-                        self.close_port(flow_id, false);
+                        self.close_flow(flow_id, false);
                     }
                     Some(Err(TrySendError::Closed(()))) => {
                         // Else, the corresponding `MuxStream` is dropped
-                        // The job to remove the port from the map is done by `close_port_task`,
-                        // so not being able to send is the same as not finding the port;
+                        // The job to remove the flow from the map is done by `close_flow_task`,
+                        // so not being able to send is the same as not finding the flow;
                         // just timing is different.
                         debug!("dropped `MuxStream` not yet removed from the map");
                     }
@@ -581,7 +581,7 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
             writer_waker,
             buf: Bytes::new(),
             tx_msg_tx: self.tx_msg_tx.clone(), // cheap
-            dropped_ports_tx: self.dropped_ports_tx.clone(), // cheap
+            dropped_flows_tx: self.dropped_flows_tx.clone(), // cheap
             rwnd_threshold: self.default_rwnd_threshold.min(peer_rwnd),
         };
         (stream, stream_data)
@@ -589,7 +589,7 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
 
     /// Create a new stream because this end received a [`Connect`](crate::frame::OpCode::Connect) frame.
     /// Create a new `MuxStream`, add it to the map, and send an `Acknowledge` frame.
-    /// If `our_port` is 0, a new port will be allocated.
+    /// If `flow_id` is 0, a new flow ID will be allocated.
     #[tracing::instrument(skip_all, level = "debug")]
     async fn con_recv_new_stream(
         &self,
@@ -606,7 +606,7 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
                 debug!("resetting `Connect` with in-use flow_id");
                 self.tx_msg_tx.send(Frame::new_reset(flow_id).into()).ok();
                 // On the other side, `process_frame` will pass the `Reset` frame to
-                // `close_port`, which takes the port out of the map and inform `Multiplexor::new_stream_channel`
+                // `close_flow`, which takes the flow out of the map and inform `Multiplexor::new_stream_channel`
                 // to retry.
                 // The existing connection at the same `flow_id` is not affected. For conforming implementations,
                 // This only happens when both ends are trying to establish a new connection at the same time
@@ -640,11 +640,10 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
     }
 
     /// Create a new `MuxStream` by finalizing a Con/Ack handshsake and
-    /// change the state of the port to `Established`.
+    /// change the state of the stream flow to `Established`.
     #[tracing::instrument(skip_all, level = "debug")]
-
     fn ack_recv_new_stream(&self, flow_id: u32, peer_rwnd: u32) -> Result<()> {
-        // Change the state of the port to `Established` and send the stream to the user
+        // Change the state of the stream flow to `Established` and send the stream to the user
         // At the client side, we use the associated oneshot channel to send the new stream
         trace!("sending stream to user");
         let (stream, stream_data) = self.new_stream_shared(flow_id, peer_rwnd, Bytes::new(), 0);
@@ -659,14 +658,14 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
         Ok(())
     }
 
-    /// Close a port. That is, remove it from the map and call `close_port_local`.
+    /// Close a flow. That is, remove it from the map and call `close_flow_local`.
     #[tracing::instrument(skip_all, level = "trace")]
     #[inline]
-    fn close_port(&self, flow_id: u32, inhibit_rst: bool) {
-        // Free the port for reuse
+    fn close_flow(&self, flow_id: u32, inhibit_rst: bool) {
+        // Free the flow ID for reuse
         let value = self.flows.write().remove(&flow_id);
         if let Some(removed) = value {
-            self.close_port_local(removed, flow_id, inhibit_rst);
+            self.close_flow_local(removed, flow_id, inhibit_rst);
         } else {
             debug!("flow_id {flow_id:08x} not found, nothing to close");
         }
@@ -674,7 +673,7 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
 
     /// EOF the local end, and wake up the writer.
     #[tracing::instrument(skip_all, level = "debug", fields(flow_id = %format_args!("{flow_id:08x}")))]
-    fn close_port_local(&self, removed: FlowSlot, flow_id: u32, inhibit_rst: bool) {
+    fn close_flow_local(&self, removed: FlowSlot, flow_id: u32, inhibit_rst: bool) {
         match removed {
             FlowSlot::Established(mut stream_data) => {
                 let finish_sent = stream_data.disallow_write();

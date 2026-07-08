@@ -127,7 +127,7 @@ pub struct Multiplexor<R = SmallRng> {
     /// task should exit.
     /// `Multiplexor` only use this to inform the task that the multiplexor is dropped
     /// and it should stop processing.
-    dropped_ports_tx: mpsc::UnboundedSender<u32>,
+    dropped_flows_tx: mpsc::UnboundedSender<u32>,
     /// Channel of received datagram frames for processing.
     datagram_rx: Mutex<mpsc::Receiver<Datagram>>,
     /// Channel for a `Multiplexor` to receive newly
@@ -216,7 +216,7 @@ impl<R: Rng + Send> Multiplexor<R> {
         // so they are ok to be unbounded channels.
         let (tx_msg_tx, tx_msg_rx) = mpsc::unbounded_channel();
         // This one cannot be bounded because it needs to be used in Drop
-        let (dropped_ports_tx, dropped_ports_rx) = mpsc::unbounded_channel();
+        let (dropped_flows_tx, dropped_flows_rx) = mpsc::unbounded_channel();
 
         let (bnd_request_tx, bnd_request_rx) = if options.bind_buffer_size > 0 {
             let (tx, rx) = mpsc::channel(options.bind_buffer_size);
@@ -229,7 +229,7 @@ impl<R: Rng + Send> Multiplexor<R> {
         let mux = Self {
             tx_msg_tx: tx_msg_tx.clone(),               // cheap
             flows: flows.clone(),                       // cheap
-            dropped_ports_tx: dropped_ports_tx.clone(), // cheap
+            dropped_flows_tx: dropped_flows_tx.clone(), // cheap
             datagram_rx: Mutex::new(datagram_rx),
             con_recv_stream_rx: Mutex::new(con_recv_stream_rx),
             bnd_request_rx: bnd_request_rx.map(Mutex::new),
@@ -242,7 +242,7 @@ impl<R: Rng + Send> Multiplexor<R> {
                 ws: Mutex::new(ws),
                 tx_msg_tx,
                 flows,
-                dropped_ports_tx,
+                dropped_flows_tx,
                 con_recv_stream_tx,
                 last_pong_timestamp: Mutex::new(T::now()),
                 default_rwnd_threshold: options.default_rwnd_threshold,
@@ -252,7 +252,7 @@ impl<R: Rng + Send> Multiplexor<R> {
                 keepalive_interval: options.keepalive_interval,
                 keepalive_timeout: options.keepalive_timeout,
             },
-            dropped_ports_rx,
+            dropped_flows_rx,
             tx_msg_rx,
         };
         (mux, taskdata)
@@ -427,7 +427,7 @@ impl<R: Rng + Send> Multiplexor<R> {
 
 impl<R> Drop for Multiplexor<R> {
     fn drop(&mut self) {
-        if self.dropped_ports_tx.send(0).is_err() {
+        if self.dropped_flows_tx.send(0).is_err() {
             error!("Failed to inform task of dropped multiplexor");
         }
     }

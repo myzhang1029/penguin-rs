@@ -712,7 +712,7 @@ async fn test_early_eof_detected_inner() {
 #[tokio::test]
 #[cfg(not(loom))]
 #[cfg(all(feature = "tokio-rt", feature = "tokio-io-util", feature = "std"))]
-async fn test_close_port_behaviour() {
+async fn test_close_flow_behaviour() {
     setup_logging();
     let (mut client, server) = get_pair(None).await;
     // Let's handle the client side of the handshake by hand
@@ -887,7 +887,7 @@ async fn test_flow_id_contention_can_succeed() {
 
     let client_mux = Multiplexor::new(client);
 
-    let (serverside_received_ports_tx, serverside_received_ports_rx) = oneshot::channel();
+    let (serverside_received_flows_tx, serverside_received_flows_rx) = oneshot::channel();
 
     let server_task = tokio::spawn(async move {
         // This side receives frames `Connect` and `Reset`s the first one
@@ -921,11 +921,11 @@ async fn test_flow_id_contention_can_succeed() {
                 .await
                 .unwrap();
         }
-        serverside_received_ports_tx.send(rx_flow_ids).unwrap();
+        serverside_received_flows_tx.send(rx_flow_ids).unwrap();
     });
     let stream1 = client_mux.new_stream_channel(&[], 0).await.unwrap();
     drop(client_mux);
-    let (_, server_flow_id2) = serverside_received_ports_rx.await.unwrap();
+    let (_, server_flow_id2) = serverside_received_flows_rx.await.unwrap();
     assert_eq!(stream1.flow_id, server_flow_id2);
     assert_eq!(
         stream1

@@ -48,8 +48,8 @@ pub struct MuxStream {
     pub(super) buf: Bytes,
     /// See `Multiplexor::tx_msg_tx`
     pub(super) tx_msg_tx: mpsc::UnboundedSender<Message>,
-    /// See `Multiplexor::dropped_ports_tx`
-    pub(super) dropped_ports_tx: mpsc::UnboundedSender<u32>,
+    /// See `Multiplexor::dropped_flows_tx`
+    pub(super) dropped_flows_tx: mpsc::UnboundedSender<u32>,
     /// Number of `Push` frames between [`Acknowledge`](frame::OpCode::Acknowledge)s:
     /// If too low, `Acknowledge`s will consume too much bandwidth;
     /// If too high, writers may block.
@@ -78,7 +78,7 @@ impl Drop for MuxStream {
     /// the stream is still open. The associated port will be freed for reuse.
     fn drop(&mut self) {
         // Notify the task that this port is no longer in use
-        self.dropped_ports_tx
+        self.dropped_flows_tx
             .send(self.flow_id)
             // Maybe the task has already exited, who knows
             .ok();
@@ -281,7 +281,7 @@ impl MuxStream {
     pub fn poll_obtain_write_permission(&self, cx: &Context<'_>) -> Poll<Option<()>> {
         // Atomic ordering: if the operations around this line are reordered,
         // the sent frame will be `Rst`ed by the remote peer, which is harmless.
-        // Both `close_port` and `shutdown` in `inner.rs` set this flag with
+        // Both `close_flow` and `shutdown` in `inner.rs` set this flag with
         // `Relaxed` ordering because they are not releasing any access, but
         // instead acting based on the WebSocket or the stream's states.
         if self.finish_sent.load(Ordering::Relaxed) {
@@ -332,7 +332,7 @@ impl MuxStream {
         // 1. `MuxStream` was dropped before `poll_shutdown` is completed and the mux task should
         //    have already sent a `Reset` frame.
         // 2. The entire mux task has been dropped, so we will only get `BrokenPipe` error.
-        // Atomic ordering: see `inner.rs` -> `close_port_local`.
+        // Atomic ordering: see `inner.rs` -> `close_flow_local`.
         if self.finish_sent.swap(true, Ordering::AcqRel) {
             return Some(());
         }
@@ -585,7 +585,7 @@ mod tests {
     async fn test_mux_stream_read_inner() {
         let (rx_frame_tx, rx_frame_rx) = mpsc::channel(10);
         let (tx_msg_tx, mut tx_msg_rx) = mpsc::unbounded_channel();
-        let (dropped_ports_tx, _) = mpsc::unbounded_channel();
+        let (dropped_flows_tx, _) = mpsc::unbounded_channel();
         let stream = MuxStream {
             rx_frame_rx,
             flow_id: 1,
@@ -597,7 +597,7 @@ mod tests {
             writer_waker: Arc::new(AtomicWaker::new()),
             tx_msg_tx: tx_msg_tx,
             buf: Bytes::new(),
-            dropped_ports_tx,
+            dropped_flows_tx,
             rwnd_threshold: 2,
         };
         let mut stream = pin!(stream);
@@ -680,7 +680,7 @@ mod tests {
     async fn test_mux_stream_write_inner() {
         let (_, rx_frame_rx) = mpsc::channel(DEFAULT_RWND_THRESHOLD as usize);
         let (tx_msg_tx, mut tx_msg_rx) = mpsc::unbounded_channel();
-        let (dropped_ports_tx, _) = mpsc::unbounded_channel();
+        let (dropped_flows_tx, _) = mpsc::unbounded_channel();
         let stream = MuxStream {
             rx_frame_rx,
             flow_id: 1,
@@ -692,7 +692,7 @@ mod tests {
             writer_waker: Arc::new(AtomicWaker::new()),
             tx_msg_tx,
             buf: Bytes::new(),
-            dropped_ports_tx,
+            dropped_flows_tx,
             rwnd_threshold: DEFAULT_RWND_THRESHOLD,
         };
         let mut stream = pin!(stream);
@@ -776,7 +776,7 @@ mod tests {
     async fn test_mux_stream_write_vectored_inner() {
         let (_, rx_frame_rx) = mpsc::channel(DEFAULT_RWND_THRESHOLD as usize);
         let (tx_msg_tx, mut tx_msg_rx) = mpsc::unbounded_channel();
-        let (dropped_ports_tx, _) = mpsc::unbounded_channel();
+        let (dropped_flows_tx, _) = mpsc::unbounded_channel();
         let stream = MuxStream {
             rx_frame_rx,
             flow_id: 1,
@@ -788,7 +788,7 @@ mod tests {
             writer_waker: Arc::new(AtomicWaker::new()),
             tx_msg_tx,
             buf: Bytes::new(),
-            dropped_ports_tx,
+            dropped_flows_tx,
             rwnd_threshold: DEFAULT_RWND_THRESHOLD,
         };
         let mut stream = pin!(stream);
@@ -825,7 +825,7 @@ mod tests {
         setup_logging();
         let (rx_frame_tx, rx_frame_rx) = mpsc::channel(DEFAULT_RWND_THRESHOLD as usize);
         let (tx_msg_tx, mut tx_msg_rx) = mpsc::unbounded_channel();
-        let (dropped_ports_tx, _) = mpsc::unbounded_channel();
+        let (dropped_flows_tx, _) = mpsc::unbounded_channel();
         let (other_stream, mut check_side) = tokio::io::duplex(1024);
 
         let mux_stream = MuxStream {
@@ -839,7 +839,7 @@ mod tests {
             writer_waker: Arc::new(AtomicWaker::new()),
             tx_msg_tx: tx_msg_tx.clone(),
             buf: Bytes::new(),
-            dropped_ports_tx: dropped_ports_tx.clone(),
+            dropped_flows_tx: dropped_flows_tx.clone(),
             rwnd_threshold: DEFAULT_RWND_THRESHOLD,
         };
 
@@ -933,7 +933,7 @@ mod tests {
         setup_logging();
         let (rx_frame_tx, rx_frame_rx) = mpsc::channel(TEST_ACK_THRESHOLD);
         let (tx_msg_tx, mut tx_msg_rx) = mpsc::unbounded_channel();
-        let (dropped_ports_tx, _) = mpsc::unbounded_channel();
+        let (dropped_flows_tx, _) = mpsc::unbounded_channel();
         let (other_stream, mut check_side) = tokio::io::duplex(1024);
         let mut mux_stream = MuxStream {
             rx_frame_rx,
@@ -946,7 +946,7 @@ mod tests {
             writer_waker: Arc::new(AtomicWaker::new()),
             tx_msg_tx: tx_msg_tx.clone(),
             buf: Bytes::new(),
-            dropped_ports_tx: dropped_ports_tx.clone(),
+            dropped_flows_tx: dropped_flows_tx.clone(),
             rwnd_threshold: TEST_ACK_THRESHOLD_U32,
         };
         // First clog the congestion window
@@ -1063,7 +1063,7 @@ mod tests {
         setup_logging();
         let (_, rx_frame_rx) = mpsc::channel(10);
         let (tx_msg_tx, mut tx_msg_rx) = mpsc::unbounded_channel();
-        let (dropped_ports_tx, mut dropped_ports_rx) = mpsc::unbounded_channel();
+        let (dropped_flows_tx, mut dropped_flows_rx) = mpsc::unbounded_channel();
         let mut stream = MuxStream {
             rx_frame_rx,
             flow_id: 15,
@@ -1075,7 +1075,7 @@ mod tests {
             writer_waker: Arc::new(AtomicWaker::new()),
             tx_msg_tx,
             buf: Bytes::new(),
-            dropped_ports_tx,
+            dropped_flows_tx,
             rwnd_threshold: 2,
         };
         let waker = futures_util::task::noop_waker();
@@ -1093,7 +1093,7 @@ mod tests {
 
         drop(stream);
         // Check that `Drop` sends its information
-        let dropped_port = dropped_ports_rx.recv().await.unwrap();
-        assert_eq!(dropped_port, 15);
+        let dropped_flow = dropped_flows_rx.recv().await.unwrap();
+        assert_eq!(dropped_flow, 15);
     }
 }
