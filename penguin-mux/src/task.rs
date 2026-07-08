@@ -94,20 +94,19 @@ pub struct Task<S: WebSocket, T: TimestampProvider> {
     pub ws: Mutex<S>,
     /// Open stream channels: `flow_id` -> `FlowSlot`
     pub flows: Arc<RwLock<HashMap<u32, FlowSlot, IntHasher>>>,
-    /// Where tasks queue messages to be sent
+    /// See `Multiplexor::tx_msg_tx`
+    /// `Task` needs it in the task for creating `MuxStream`s
     pub tx_msg_tx: mpsc::UnboundedSender<Message>,
-    /// Channel for notifying the task of a dropped `MuxStream` (to send the flow ID)
-    /// Sending 0 means that the multiplexor is being dropped and the
-    /// task should exit.
-    /// The reason we need `their_port` is to ensure the connection is `Reset`ted
-    /// if the user did not call `poll_shutdown` on the `MuxStream`.
+    /// See `Multiplexor::dropped_ports_tx`
+    /// `Task` needs it in the task for creating `MuxStream`s
     pub dropped_ports_tx: mpsc::UnboundedSender<u32>,
+    /// See `Multiplexor::con_recv_stream_tx`
     pub con_recv_stream_tx: mpsc::Sender<MuxStream>,
     /// Time that the last `Pong` was received.
     pub last_pong_timestamp: Mutex<T>,
-    /// Default threshold for `Acknowledge` replies. See [`config::Options`] for more details.
+    /// Default threshold for `Acknowledge` replies. See `config::Options`
     pub default_rwnd_threshold: u32,
-    /// Our rwnd. See [`config::Options`] for more details.
+    /// Our rwnd. See `config::Options`
     pub rwnd: u32,
     pub datagram_tx: mpsc::Sender<Datagram>,
     pub bnd_request_tx: Option<mpsc::Sender<BindRequest<'static>>>,
@@ -146,12 +145,13 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
                 debug!("`process_message_to_send_task` task finished: {r:?}");
                 (false, r)
             }
-            r = self.process_dropped_ports_task(&mut dropped_ports_rx).fuse() => {
-                debug!("`process_dropped_ports_task` task finished: {r:?}");
-                (true, r)
+            () = self.process_dropped_ports_task(&mut dropped_ports_rx).fuse() => {
+                debug!("`process_dropped_ports_task` task finished");
+                (true, Ok(()))
             }
         };
-        self.wind_down(should_drain_frame_rx, &mut tx_msg_rx).await;
+        self.wind_down(should_drain_frame_rx, tx_msg_rx, dropped_ports_rx)
+            .await;
         res
     }
 
@@ -166,27 +166,21 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
     async fn process_dropped_ports_task(
         &self,
         dropped_ports_rx: &mut mpsc::UnboundedReceiver<u32>,
-    ) -> Result<()> {
+    ) {
         while let Some(flow_id) = dropped_ports_rx.recv().await {
             if flow_id == 0 {
                 // `our_port` is `0`, which means the multiplexor itself is being dropped.
                 debug!("mux dropped");
                 // If this returns, our end is dropped, but we should still try to flush everything we
                 // already have in the `frame_rx` before closing.
-                return Ok(());
+                return;
             }
             self.close_port(flow_id, false);
         }
-        // None: only happens when the last sender (i.e. `dropped_ports_tx` in `MultiplexorInner`)
-        // is dropped, which should not happen in normal circumstances because `MultiplexorInner::drop`
+        // None: only happens when the last sender (i.e. `dropped_ports_tx` in `Task`)
+        // is dropped, which should not happen in normal circumstances because `Task::drop`
         // is called before its fields are dropped.
-        // However, this is not a fatal inconsistency, so we `debug_assert!` it to avoid
-        // panicking in production.
-        debug_assert!(
-            false,
-            "dropped ports receiver should not be closed (this is a bug)"
-        );
-        Err(Error::ChannelClosed("dropped_ports_rx"))
+        unreachable!("dropped ports receiver should not be closed (this is a bug)");
     }
 
     /// Poll `tx_msg_rx`, queue the message received, and send keepalive pings as needed.
@@ -247,13 +241,8 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
         let Some(msg) = ready!(tx_msg_rx.poll_recv(cx)) else {
             // Only happens when `tx_msg_rx` is closed
             // cannot happen because `Self` contains one sender unless
-            // there is a bug in our code or `tokio` itself. Not a critical error,
-            // using `debug_assert!` to avoid panicking in production.
-            debug_assert!(
-                false,
-                "`tx_msg_rx` receiver should not be closed (this is a bug)"
-            );
-            return Poll::Ready(Err(Error::ChannelClosed("tx_msg_rx")));
+            // there is a bug in our code or `tokio` itself.
+            unreachable!("`tx_msg_rx` receiver should not be closed (this is a bug)");
         };
         trace!("message queue backlog: {}", tx_msg_rx.len());
         // After this point, we may not return `Poll::Pending` because we (might) hold data
@@ -263,6 +252,7 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
 
     /// Process the return value of `ws.next()`
     /// Returns `Ok(())` when a `Close` message was received or the WebSocket was otherwise closed by the peer.
+    /// When this function returns, peer already requested close, so we should not attempt to send any more frames.
     #[tracing::instrument(skip_all, level = "trace")]
     async fn process_ws_next(&self) -> Result<()> {
         while let Some(m) = poll_fn(|cx| self.ws.lock().poll_next_unpin(cx)).await {
@@ -276,7 +266,6 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
         }
         debug!("WebSocket closed by peer");
         return Ok(());
-        // In this case, peer already requested close, so we should not attempt to send any more frames.
     }
 
     /// Wind down the multiplexor task.
@@ -284,7 +273,8 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
     async fn wind_down(
         &self,
         should_drain_msg_rx: bool,
-        tx_msg_rx: &mut mpsc::UnboundedReceiver<Message>,
+        mut tx_msg_rx: mpsc::UnboundedReceiver<Message>,
+        mut dropped_ports_rx: mpsc::UnboundedReceiver<u32>,
     ) {
         debug!("closing all connections");
         // We first make sure the streams can no longer send
@@ -336,6 +326,11 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
         self.flows.write().drain().for_each(|(flow_id, slot)| {
             self.close_port_local(slot, flow_id, true);
         });
+        // To clean up, we also drain the `dropped_ports_rx` channel
+        dropped_ports_rx.close();
+        while let Some(flow_id) = dropped_ports_rx.recv().await {
+            debug!("got dropped port {flow_id:08x} after mux drop");
+        }
     }
 
     /// Process an incoming message

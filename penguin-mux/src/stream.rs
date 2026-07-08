@@ -10,14 +10,14 @@ use crate::ws::Message;
 #[cfg(feature = "std")]
 use alloc::vec::Vec;
 use bytes::Bytes;
-#[cfg(feature = "std")]
-use futures_util::future::FusedFuture;
 use core::fmt;
 #[cfg(feature = "std")]
 use core::pin::Pin;
 use core::task::{Context, Poll, ready};
 #[cfg(feature = "std")]
 use cow_bytes::CowBytes;
+#[cfg(feature = "std")]
+use futures_util::future::FusedFuture;
 #[cfg(feature = "std")]
 use std::io::{self, ErrorKind::BrokenPipe};
 #[cfg(feature = "std")]
@@ -46,9 +46,9 @@ pub struct MuxStream {
     pub(super) writer_waker: Arc<AtomicWaker>,
     /// Remaining bytes to be read
     pub(super) buf: Bytes,
-    /// See `MultiplexorInner`.
+    /// See `Multiplexor::tx_msg_tx`
     pub(super) tx_msg_tx: mpsc::UnboundedSender<Message>,
-    /// See `MultiplexorInner`.
+    /// See `Multiplexor::dropped_ports_tx`
     pub(super) dropped_ports_tx: mpsc::UnboundedSender<u32>,
     /// Number of `Push` frames between [`Acknowledge`](frame::OpCode::Acknowledge)s:
     /// If too low, `Acknowledge`s will consume too much bandwidth;
@@ -486,8 +486,7 @@ where
                 // If we return `Pending` here, since we did not consume any data, the next
                 // `poll_fill_buf` will return the same data and we will try to send it again.
                 ready!(self.us.poll_obtain_write_permission(cx)).ok_or(BrokenPipe)?;
-                let mut msg_payload =
-                    Vec::from(Frame::new_push(self.us.flow_id, new_buf));
+                let mut msg_payload = Vec::from(Frame::new_push(self.us.flow_id, new_buf));
                 let processed = new_buf.len();
                 let mut cumulated_len = processed;
                 other.as_mut().consume(processed);

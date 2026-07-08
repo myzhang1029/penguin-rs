@@ -122,7 +122,10 @@ pub struct Multiplexor<R = SmallRng> {
     flows: Arc<RwLock<HashMap<u32, FlowSlot, IntHasher>>>,
     /// Where tasks queue messages to be sent
     tx_msg_tx: mpsc::UnboundedSender<Message>,
-    /// We only use this to inform the task that the multiplexor is closed
+    /// Channel for notifying the task of a dropped `MuxStream` (to send the flow ID)
+    /// Sending 0 means that the multiplexor is being dropped and the
+    /// task should exit.
+    /// `Multiplexor` only use this to inform the task that the multiplexor is dropped
     /// and it should stop processing.
     dropped_ports_tx: mpsc::UnboundedSender<u32>,
     /// Channel of received datagram frames for processing.

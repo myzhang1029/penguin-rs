@@ -357,11 +357,7 @@ impl FromStr for Remote {
             },
             _ => {
                 // This should be unreachable since we check in `tokenize_remote`
-                debug_assert!(
-                    false,
-                    "`tokenize_remote` did not catch too many segments (this is a bug)"
-                );
-                return Err(Error::TooManySegments);
+                unreachable!("`tokenize_remote` did not catch too many segments (this is a bug)");
             }
         };
         // Check for invalid cases
