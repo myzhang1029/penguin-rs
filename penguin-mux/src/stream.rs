@@ -7,7 +7,11 @@ use crate::frame;
 use crate::frame::Frame;
 use crate::loom::{Arc, AtomicBool, AtomicU32, AtomicWaker, Ordering};
 use crate::ws::Message;
+#[cfg(feature = "std")]
+use alloc::vec::Vec;
 use bytes::Bytes;
+#[cfg(feature = "std")]
+use futures_util::future::FusedFuture;
 use core::fmt;
 #[cfg(feature = "std")]
 use core::pin::Pin;
@@ -142,7 +146,7 @@ impl AsyncWrite for MuxStream {
         cx: &mut Context<'_>,
         bufs: &[io::IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
-        let mut slices = alloc::vec::Vec::with_capacity(bufs.len());
+        let mut slices = Vec::with_capacity(bufs.len());
         let mut total_len = 0;
         for buf in bufs {
             total_len += buf.len();
@@ -462,54 +466,58 @@ where
         match self.write_state {
             WriteState::Transferring(mut written_amt) => {
                 // Means that the peer still wants to send us data
-                loop {
-                    let mut other = Pin::new(&mut self.other);
-                    trace!("polling other");
-                    let new_buf = if let Poll::Ready(res) = other.as_mut().poll_fill_buf(cx) {
-                        res?
-                    } else {
-                        // Pending. Might want to flush away the data
-                        trace!("flushing other");
-                        ready!(other.as_mut().poll_flush(cx))?;
-                        // Still fine to return `Pending` here because `poll_fill_buf` has our waker
-                        break Poll::Pending;
-                    };
-                    if new_buf.is_empty() {
-                        // The other side is EOF'd
-                        self.us.do_shutdown();
-                        self.write_state = WriteState::Done(written_amt);
-                        break Poll::Ready(Ok(written_amt));
-                    }
-                    ready!(self.us.poll_obtain_write_permission(cx)).ok_or(BrokenPipe)?;
-                    let mut msg_payload =
-                        alloc::vec::Vec::from(Frame::new_push(self.us.flow_id, new_buf));
-                    let processed = new_buf.len();
-                    written_amt += processed;
-                    other.as_mut().consume(processed);
-                    // Check if we can squeeze a bit more data from the other side to send in the same frame
-                    let mut should_shutdown = false;
-                    while let Poll::Ready(Ok(new_buf)) = other.as_mut().poll_fill_buf(cx) {
-                        if new_buf.is_empty() {
-                            // The other side is EOF'd, send what we have and then shutdown
-                            should_shutdown = true;
-                            break;
-                        }
-                        let processed = new_buf.len();
-                        frame::append_push_data(&mut msg_payload, new_buf);
-                        written_amt += processed;
-                        other.as_mut().consume(processed);
-                    }
-                    self.us
-                        .tx_msg_tx
-                        .send(Message::Binary(msg_payload.into()))
-                        .or(Err(BrokenPipe))?;
-                    if should_shutdown {
-                        self.us.do_shutdown();
-                        self.write_state = WriteState::Done(written_amt);
-                        break Poll::Ready(Ok(written_amt));
-                    }
-                    self.write_state = WriteState::Transferring(written_amt);
+                let mut other = Pin::new(&mut self.other);
+                // Initial poll
+                trace!("polling other");
+                let Poll::Ready(res) = other.as_mut().poll_fill_buf(cx) else {
+                    // Even the first poll returns `Pending`. Might want to flush away some data
+                    trace!("flushing other");
+                    ready!(other.as_mut().poll_flush(cx))?;
+                    // Still fine to return `Pending` here because `poll_fill_buf` has our waker
+                    return Poll::Pending;
+                };
+                let new_buf = res?;
+                if new_buf.is_empty() {
+                    // The other side is EOF'd
+                    self.us.do_shutdown();
+                    self.write_state = WriteState::Done(written_amt);
+                    return Poll::Ready(Ok(written_amt));
                 }
+                // If we return `Pending` here, since we did not consume any data, the next
+                // `poll_fill_buf` will return the same data and we will try to send it again.
+                ready!(self.us.poll_obtain_write_permission(cx)).ok_or(BrokenPipe)?;
+                let mut msg_payload =
+                    Vec::from(Frame::new_push(self.us.flow_id, new_buf));
+                let processed = new_buf.len();
+                let mut cumulated_len = processed;
+                other.as_mut().consume(processed);
+                // Check if we can squeeze a bit more data from the other side to send in the same frame
+                let mut should_shutdown = false;
+                while let Poll::Ready(Ok(new_buf)) = other.as_mut().poll_fill_buf(cx) {
+                    if new_buf.is_empty() {
+                        // The other side is EOF'd, send what we have and then shutdown
+                        should_shutdown = true;
+                        break;
+                    }
+                    let processed = new_buf.len();
+                    frame::append_push_data(&mut msg_payload, new_buf);
+                    cumulated_len += processed;
+                    other.as_mut().consume(processed);
+                }
+                self.us
+                    .tx_msg_tx
+                    .send(Message::Binary(msg_payload.into()))
+                    .or(Err(BrokenPipe))?;
+                written_amt += cumulated_len;
+                if should_shutdown {
+                    self.us.do_shutdown();
+                    self.write_state = WriteState::Done(written_amt);
+                    return Poll::Ready(Ok(written_amt));
+                }
+                // Else: we exited the loop because `poll_fill_buf` returned `Pending`
+                // We return `Pending` and `poll_fill_buf` has our waker
+                self.write_state = WriteState::Transferring(written_amt);
+                Poll::Pending
             }
             WriteState::Done(written_amt) => Poll::Ready(Ok(written_amt)),
         }
@@ -529,6 +537,18 @@ where
         let r = self.poll_read_us(cx);
         let w = self.poll_write_us(cx);
         Poll::Ready(Ok((ready!(r)?, ready!(w)?)))
+    }
+}
+
+#[cfg(feature = "std")]
+impl<RW> FusedFuture for CopyBidirectional<RW>
+where
+    RW: AsyncBufRead + AsyncWrite + Unpin,
+{
+    #[inline]
+    fn is_terminated(&self) -> bool {
+        // the underlying state machine can always be polled again without undesired side effects
+        false
     }
 }
 
