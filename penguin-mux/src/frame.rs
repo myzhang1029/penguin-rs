@@ -872,11 +872,39 @@ mod tests {
             frame_back,
             Frame {
                 id: 0x75b_97bb,
-                payload: Payload::Push(PushPayload::Single(CowBytes::Temporary(
-                    &[1, 2, 3, 4, 5, 6, 7, 8]
-                ))),
+                payload: Payload::Push(PushPayload::Single(CowBytes::Temporary(&[
+                    1, 2, 3, 4, 5, 6, 7, 8
+                ]))),
             }
         );
+    }
+
+    #[test]
+    fn test_push_frame_eq() {
+        crate::tests::setup_logging();
+        let frame0 = Frame::new_push_owned(0x75b_97bb, Bytes::from_static(&[1, 2, 3, 4]));
+        let frame1 = Frame::new_push(0x75b_97bb, &[1, 2, 3, 4]);
+        assert_eq!(frame0, frame1);
+        let frame2 = Frame::new_push_vectored(
+            0x75b_97bb,
+            vec![CowBytes::Temporary(&[1, 2]), CowBytes::Temporary(&[3, 4])],
+        );
+        assert_eq!(frame0, frame2);
+        assert_eq!(frame1, frame2);
+        let frame3 = Frame::new_push_vectored(
+            0x75b_97bb,
+            vec![CowBytes::Temporary(&[1, 2]), CowBytes::Temporary(&[3, 5])],
+        );
+        assert_ne!(frame1, frame3);
+        let frame4 = Frame::new_push_vectored(
+            0x75b_97bb,
+            vec![
+                CowBytes::Temporary(&[1]),
+                CowBytes::Temporary(&[2, 3]),
+                CowBytes::Temporary(&[5]),
+            ],
+        );
+        assert_eq!(frame3, frame4);
     }
 
     #[test]

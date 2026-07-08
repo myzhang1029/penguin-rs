@@ -738,6 +738,64 @@ mod tests {
 
     #[tokio::test]
     #[cfg(not(loom))]
+    #[cfg(feature = "std")]
+    async fn test_mux_stream_write_vectored() {
+        setup_logging();
+        test_mux_stream_write_vectored_inner().await;
+    }
+
+    #[test]
+    #[cfg(loom)]
+    #[cfg(feature = "std")]
+    fn test_mux_stream_write_vectored_loom() {
+        loom::model(|| {
+            loom::future::block_on(test_mux_stream_write_vectored_inner());
+        })
+    }
+
+    #[cfg(feature = "std")]
+    async fn test_mux_stream_write_vectored_inner() {
+        let (_, rx_frame_rx) = mpsc::channel(DEFAULT_RWND_THRESHOLD as usize);
+        let (tx_msg_tx, mut tx_msg_rx) = mpsc::unbounded_channel();
+        let (dropped_ports_tx, _) = mpsc::unbounded_channel();
+        let stream = MuxStream {
+            rx_frame_rx,
+            flow_id: 1,
+            dest_host: Bytes::new(),
+            dest_port: 8080,
+            finish_sent: Arc::new(AtomicBool::new(false)),
+            psh_send_remaining: Arc::new(AtomicU32::new(2)),
+            psh_recvd_since: 0,
+            writer_waker: Arc::new(AtomicWaker::new()),
+            tx_msg_tx,
+            buf: Bytes::new(),
+            dropped_ports_tx,
+            rwnd_threshold: DEFAULT_RWND_THRESHOLD,
+        };
+        let mut stream = pin!(stream);
+        let waker = futures_util::task::noop_waker();
+        {
+            let mut cx = Context::from_waker(&waker);
+            let bufs = [io::IoSlice::new(b"hello"), io::IoSlice::new(b"world")];
+            let rs = stream.as_mut().poll_write_vectored(&mut cx, &bufs);
+            assert!(matches!(rs, Poll::Ready(Ok(10))));
+        }
+
+        // Check the frame sent
+        let Binary(msg) = tx_msg_rx.recv().await.unwrap() else {
+            panic!("Expected a binary message");
+        };
+        let frame1 = Frame::try_from(msg).unwrap();
+        assert_eq!(frame1.id, 1);
+        if let Payload::Push(PushPayload::Single(push)) = frame1.payload {
+            assert_eq!(&push.as_ref(), b"helloworld");
+        } else {
+            panic!("Expected a `Push(Single)` frame");
+        }
+    }
+
+    #[tokio::test]
+    #[cfg(not(loom))]
     #[cfg(all(feature = "tokio-io-util", feature = "std"))]
     async fn test_copy_bidirectional_normal() {
         const TX1: Bytes = Bytes::from_static(b"hello from mux");
