@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
+#[cfg(feature = "std")]
+use crate::frame;
 use crate::frame::Frame;
 use crate::loom::{Arc, AtomicBool, AtomicU32, AtomicWaker, Ordering};
 use crate::ws::Message;
@@ -384,20 +386,20 @@ impl MuxStream {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ReadState {
     // We have data
-    Transferring(u64),
+    Transferring(usize),
     // We are done and we are trying to shut down the other side
-    ShuttingDown(u64),
+    ShuttingDown(usize),
     // The other side is EOF'd
-    Done(u64),
+    Done(usize),
 }
 
 #[cfg(feature = "std")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WriteState {
     // Peer has more data
-    Transferring(u64),
+    Transferring(usize),
     // Peer is done
-    Done(u64),
+    Done(usize),
 }
 
 #[cfg(feature = "std")]
@@ -416,7 +418,7 @@ where
 {
     #[tracing::instrument(skip_all, level = "trace")]
     #[inline]
-    fn poll_read_us(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<u64>> {
+    fn poll_read_us(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<usize>> {
         match self.read_state {
             ReadState::Transferring(mut read_amt) => {
                 // Loop until we are done or that some of the polls return `Pending`
@@ -435,7 +437,7 @@ where
                     // write it to the other side.
                     let processed = ready!(Pin::new(&mut self.other).poll_write(cx, new_buf))?;
                     Pin::new(&mut self.us).consume(processed);
-                    read_amt += processed as u64;
+                    read_amt += processed;
                     self.read_state = ReadState::Transferring(read_amt);
                     // If this write finished it, the next `poll_fill` will fetch
                     // more frames. Otherwise, the next loop will simply try to write
@@ -456,7 +458,7 @@ where
     }
 
     #[inline]
-    fn poll_write_us(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<u64>> {
+    fn poll_write_us(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<usize>> {
         match self.write_state {
             WriteState::Transferring(mut written_amt) => {
                 // Means that the peer still wants to send us data
@@ -479,14 +481,11 @@ where
                         break Poll::Ready(Ok(written_amt));
                     }
                     ready!(self.us.poll_obtain_write_permission(cx)).ok_or(BrokenPipe)?;
-                    let mut msg_payload = alloc::vec::Vec::from(Frame::new_push(self.us.flow_id, new_buf));
+                    let mut msg_payload =
+                        alloc::vec::Vec::from(Frame::new_push(self.us.flow_id, new_buf));
                     let processed = new_buf.len();
-                    written_amt += processed as u64;
+                    written_amt += processed;
                     other.as_mut().consume(processed);
-                    // XXX: The current implementation is terrible because it relies on the fact that
-                    // the current on-wire format does not care about the data length and the payload
-                    // is the last part of the frame.
-                    // TODO: design a good API to implement this through `Frame`'s methods.
                     // Check if we can squeeze a bit more data from the other side to send in the same frame
                     let mut should_shutdown = false;
                     while let Poll::Ready(Ok(new_buf)) = other.as_mut().poll_fill_buf(cx) {
@@ -495,12 +494,15 @@ where
                             should_shutdown = true;
                             break;
                         }
-                        msg_payload.extend_from_slice(new_buf);
                         let processed = new_buf.len();
-                        written_amt += processed as u64;
+                        frame::append_push_data(&mut msg_payload, new_buf);
+                        written_amt += processed;
                         other.as_mut().consume(processed);
-                    };
-                    self.us.tx_msg_tx.send(Message::Binary(msg_payload.into())).or(Err(BrokenPipe))?;
+                    }
+                    self.us
+                        .tx_msg_tx
+                        .send(Message::Binary(msg_payload.into()))
+                        .or(Err(BrokenPipe))?;
                     if should_shutdown {
                         self.us.do_shutdown();
                         self.write_state = WriteState::Done(written_amt);
@@ -519,7 +521,7 @@ impl<RW> Future for CopyBidirectional<RW>
 where
     RW: AsyncBufRead + AsyncWrite + Unpin,
 {
-    type Output = io::Result<(u64, u64)>;
+    type Output = io::Result<(usize, usize)>;
 
     #[tracing::instrument(skip_all, level = "trace", fields(flow_id = self.us.flow_id))]
     #[inline]
@@ -840,8 +842,8 @@ mod tests {
         // Get final results
         let (bytes_read, bytes_written) = copy_task.await.unwrap().unwrap();
         // TX is copied from MuxStream to other_stream, which is `read_bytes` in `copy_bidirectional`
-        assert_eq!(bytes_read, (TX1.len() + TX2.len()) as u64);
-        assert_eq!(bytes_written, (RX1.len() + RX2.len() + RX3.len()) as u64);
+        assert_eq!(bytes_read, TX1.len() + TX2.len());
+        assert_eq!(bytes_written, RX1.len() + RX2.len() + RX3.len());
     }
 
     #[tokio::test]

@@ -494,6 +494,15 @@ impl TryFrom<Bytes> for Frame<'_> {
     }
 }
 
+impl TryFrom<Vec<u8>> for Frame<'_> {
+    type Error = Error;
+
+    #[inline]
+    fn try_from(data: Vec<u8>) -> Result<Self, Self::Error> {
+        Frame::try_from(CowBytes::Static(Bytes::from(data)))
+    }
+}
+
 impl<'data> TryFrom<&'data [u8]> for Frame<'data> {
     type Error = Error;
 
@@ -612,6 +621,22 @@ impl From<Frame<'_>> for crate::ws::Message {
     fn from(frame: Frame<'_>) -> Self {
         Self::Binary(Bytes::from(frame))
     }
+}
+
+/// Append data to a `Push` frame after it has been encoded to bytes.
+///
+/// # Panics
+/// Panics if the frame is not a valid frame, or if the `OpCode` is not `Push`.
+#[inline]
+pub fn append_push_data(frame: &mut Vec<u8>, data: &[u8]) {
+    let opcode =
+        OpCode::try_from(frame[0] & 0x0F).expect("`append_push_data` called on invalid data");
+    assert_eq!(
+        opcode,
+        OpCode::Push,
+        "`append_push_data` called on non-Push frame"
+    );
+    frame.extend(data);
 }
 
 #[cfg(test)]
@@ -826,6 +851,32 @@ mod tests {
         );
         let frame_back = Frame::try_from(Bytes::from(bytes)).unwrap();
         assert_eq!(frame, frame_back);
+    }
+
+    #[test]
+    fn test_push_frame_append() {
+        crate::tests::setup_logging();
+        let mut frame = Vec::from(&Frame::new_push(0x75b_97bb, &[1, 2, 3, 4]));
+        append_push_data(&mut frame, &[5, 6, 7, 8]);
+        assert_eq!(
+            frame,
+            vec![
+                0x74, // ver | opcode (u8)
+                0x07, 0x5b, 0x97, 0xbb, // id (u32)
+                0x01, 0x02, 0x03, 0x04, // data (variable)
+                0x05, 0x06, 0x07, 0x08 // appended data
+            ]
+        );
+        let frame_back = Frame::try_from(frame).unwrap();
+        assert_eq!(
+            frame_back,
+            Frame {
+                id: 0x75b_97bb,
+                payload: Payload::Push(PushPayload::Single(CowBytes::Temporary(
+                    &[1, 2, 3, 4, 5, 6, 7, 8]
+                ))),
+            }
+        );
     }
 
     #[test]
