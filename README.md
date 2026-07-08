@@ -61,8 +61,8 @@ Other than that, this project offers these functionalities compared to
 - TLS certificate hot-reload with `SIGUSR1`.
 
 - Higher performance: my crude testing on my machine reveals that `penguin` is
-  a little more than 2x faster than `chisel` on my machine (`penguin`
-  commit `3df9b8ad96` vs `chisel` commit `927abde999`).
+  about 3-4x faster than `chisel` on my machine (`penguin` commit `b423b18ab5` vs
+  `chisel` commit `927abde999`).
 ```
 $ iperf3 -c 127.0.0.1 # chisel without TLS
 [ ID] Interval           Transfer     Bitrate         Retr
@@ -71,8 +71,8 @@ $ iperf3 -c 127.0.0.1 # chisel without TLS
 
 $ iperf3 -c 127.0.0.1 # penguin without TLS
 [ ID] Interval           Transfer     Bitrate         Retr
-[  5]   0.00-10.00  sec  18.9 GBytes  16.2 Gbits/sec    0            sender
-[  5]   0.00-10.00  sec  18.9 GBytes  16.2 Gbits/sec                  receiver
+[  5]   0.00-10.01  sec  34.0 GBytes  29.2 Gbits/sec    0            sender
+[  5]   0.00-10.01  sec  34.0 GBytes  29.2 Gbits/sec                  receiver
 
 $ iperf3 -c 127.0.0.1 # chisel with TLS
 [ ID] Interval           Transfer     Bitrate         Retr
@@ -81,8 +81,8 @@ $ iperf3 -c 127.0.0.1 # chisel with TLS
 
 $ iperf3 -c 127.0.0.1 # penguin with TLS
 [ ID] Interval           Transfer     Bitrate         Retr
-[  5]   0.00-10.00  sec  13.8 GBytes  11.9 Gbits/sec    0            sender
-[  5]   0.00-10.00  sec  13.8 GBytes  11.8 Gbits/sec                  receiver
+[  5]   0.00-10.01  sec  18.0 GBytes  15.4 Gbits/sec    0            sender
+[  5]   0.00-10.13  sec  18.0 GBytes  15.2 Gbits/sec                  receiver
 ```
 
 - All the safety Rust offers.
