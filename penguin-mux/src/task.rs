@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use crate::frame::{ConnectPayload, Frame, Payload, PushPayload};
+use crate::frame::{Connect, ConnectPayload, Frame, Payload, PushPayload};
 use crate::loom::{Arc, AtomicBool, AtomicU32, AtomicWaker, Mutex, RwLock};
 use crate::timing::{OptionalDuration, TimestampProvider};
 use crate::ws::{Message, WebSocket};
@@ -380,18 +380,16 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
     #[inline]
     async fn process_frame(&self, frame: Frame<'static>, ignore_bind: bool) -> Result<()> {
         trace!("received frame {frame:?}");
-        let Frame {
-            id: flow_id,
-            payload,
-        } = frame;
+        let flow_id = frame.flow_id();
         tracing::Span::current().record("flow_id", format_args!("{flow_id:08x}"));
         let send_rst = || {
             self.tx_msg_tx.send(Frame::new_reset(flow_id).into()).ok()
             // Error only happens if the `frame_tx` channel is closed, at which point
             // we don't care about sending a `Reset` frame anymore
         };
-        match payload {
-            Payload::Connect(ConnectPayload {
+        match frame {
+            Frame::Connect(Connect {
+                header: _,
                 rwnd: peer_rwnd,
                 target_host,
                 target_port,

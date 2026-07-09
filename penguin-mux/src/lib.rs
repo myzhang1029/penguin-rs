@@ -28,7 +28,7 @@ mod tests;
 pub mod timing;
 pub mod ws;
 
-use crate::frame::{BindPayload, BindType, Frame};
+use crate::frame::{BindType, Frame};
 use crate::loom::{Arc, AtomicBool, AtomicU32, AtomicWaker, Mutex, Ordering, RwLock};
 use crate::task::Task;
 use crate::timing::TimestampProvider;
@@ -352,11 +352,11 @@ impl<R: Rng + Send> Multiplexor<R> {
         if datagram.target_host.len() > 255 {
             return Err(Error::DatagramHostTooLong);
         }
-        let frame = Frame::new_datagram_owned(
+        let frame = Frame::new_datagram(
             datagram.flow_id,
-            datagram.target_host,
+            &datagram.target_host,
             datagram.target_port,
-            datagram.data,
+            &datagram.data,
         );
         self.tx_msg_tx.send(frame.into()).or(Err(Error::Closed))?;
         Ok(())

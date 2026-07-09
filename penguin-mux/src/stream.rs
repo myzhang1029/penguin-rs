@@ -486,7 +486,7 @@ where
                 // If we return `Pending` here, since we did not consume any data, the next
                 // `poll_fill_buf` will return the same data and we will try to send it again.
                 ready!(self.us.poll_obtain_write_permission(cx)).ok_or(BrokenPipe)?;
-                let mut msg_payload = Vec::from(Frame::new_push(self.us.flow_id, new_buf));
+                let mut frame = Frame::new_push(self.us.flow_id, new_buf);
                 let processed = new_buf.len();
                 let mut cumulated_len = processed;
                 other.as_mut().consume(processed);
@@ -499,14 +499,11 @@ where
                         break;
                     }
                     let processed = new_buf.len();
-                    frame::append_push_data(&mut msg_payload, new_buf);
+                    frame::append_push_data(&mut frame, new_buf);
                     cumulated_len += processed;
                     other.as_mut().consume(processed);
                 }
-                self.us
-                    .tx_msg_tx
-                    .send(Message::Binary(msg_payload.into()))
-                    .or(Err(BrokenPipe))?;
+                self.us.tx_msg_tx.send(frame.into()).or(Err(BrokenPipe))?;
                 written_amt += cumulated_len;
                 if should_shutdown {
                     self.us.do_shutdown();
