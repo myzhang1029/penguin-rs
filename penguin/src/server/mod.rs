@@ -101,19 +101,17 @@ pub async fn server_main(
             "bad pre-set `http2_support`"
         );
     }
-    let state = State::new(
-        args.backend.as_ref(),
-        http2_support,
-        args.ws_psk.as_ref(),
-        &args.not_found_resp,
-        args.obfs,
-        args.reverse,
-        args.outgoing_from_v4.0,
-        args.outgoing_from_v6.0,
-        args.timeout,
-        args.timeout,
-    )
-    .await?;
+    let state = State::new(http2_support)
+        .await?
+        .with_backend(args.backend.as_ref())
+        .backend_add_forwarding_headers(args.backend_add_forwarding_headers)
+        .with_ws_psk(args.ws_psk.as_ref())
+        .with_not_found_resp(&args.not_found_resp)
+        .obfs(args.obfs)
+        .reverse(args.reverse)
+        .with_outgoing_from(args.outgoing_from_v4.0, args.outgoing_from_v6.0)
+        .with_tls_timeout(args.timeout)
+        .with_http_timeout(args.timeout);
     let sockaddrs = arg_to_sockaddrs(args)?;
     let mut listening_tasks = JoinSet::new();
     if let Some(tls_config) = check_start_tls(args).await? {
@@ -208,7 +206,6 @@ pub async fn run_listener(
     state: State,
 ) {
     loop {
-        let new_state = state.clone(); // cheap
         let (stream, peer) = match listener.accept().await {
             Ok((stream, peer)) => (stream, peer),
             Err(err) => {
@@ -217,6 +214,9 @@ pub async fn run_listener(
             }
         };
         debug!("accepted connection from {peer}");
+        let new_state = state
+            .clone() // cheap
+            .with_client_addr(Some(peer));
         if let Some(tls_config) = &tls_config {
             tokio::spawn(serve_connection_tls(
                 stream,

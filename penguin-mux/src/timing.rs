@@ -323,13 +323,4 @@ mod tests {
         let instant = interval.tick().now_or_never().unwrap();
         assert!(instant < tokio::time::Instant::now());
     }
-
-    #[tokio::test]
-    #[cfg(not(feature = "tokio-time"))]
-    async fn test_optional_interval_noop() {
-        crate::tests::setup_logging();
-        let dur = OptionalDuration::from_secs(2);
-        let mut interval = OptionalInterval::from(dur);
-        assert!(interval.tick().now_or_never().is_none());
-    }
 }

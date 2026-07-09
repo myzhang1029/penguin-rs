@@ -5,6 +5,7 @@
 use super::websocket::handle_websocket;
 use crate::arg::BackendUrl;
 use crate::http::body::IncomingOrFullBody;
+use crate::http::proxy;
 use crate::server::io_with_timeout;
 use crate::tls::{self, HyperConnector, MaybeTlsStream};
 use base64::Engine;
@@ -19,7 +20,7 @@ use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::upgrade::{Parts, downcast};
 use penguin_mux::{PROTOCOL_VERSION, timing::OptionalDuration};
 use sha1::{Digest, Sha1};
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::pin::Pin;
 use std::sync::OnceLock;
 use thiserror::Error;
@@ -70,6 +71,10 @@ pub enum Error {
 pub struct State {
     /// Backend URL
     backend: Option<&'static BackendUrl>,
+    /// Whether forwarding headers should be added
+    backend_add_forwarding_headers: bool,
+    /// Address of the client, if known
+    client_addr: Option<SocketAddr>,
     /// Websocket PSK
     ws_psk: Option<&'static HeaderValue>,
     /// 404 response
@@ -95,34 +100,82 @@ pub struct State {
 
 impl State {
     /// Create a new `State`
-    #[expect(clippy::too_many_arguments)]
-    pub async fn new(
-        backend: Option<&'static BackendUrl>,
-        http2_support: &'static OnceLock<bool>,
-        ws_psk: Option<&'static HeaderValue>,
-        not_found_resp: &'static str,
-        obfs: bool,
-        reverse: bool,
-        outgoing_from_v4: Ipv4Addr,
-        outgoing_from_v6: Ipv6Addr,
-        tls_timeout: OptionalDuration,
-        http_timeout: OptionalDuration,
-    ) -> Result<Self, tls::Error> {
+    pub async fn new(http2_support: &'static OnceLock<bool>) -> Result<Self, tls::Error> {
         let client = HyperClient::builder(TokioExecutor::new())
             .build(crate::tls::make_hyper_connector().await?);
         Ok(Self {
-            backend,
-            ws_psk,
-            not_found_resp,
-            obfs,
-            reverse,
-            outgoing_from_v4,
-            outgoing_from_v6,
+            backend: None,
+            backend_add_forwarding_headers: false,
+            client_addr: None,
+            ws_psk: None,
+            not_found_resp: "404 Not Found",
+            obfs: false,
+            reverse: false,
+            outgoing_from_v4: Ipv4Addr::UNSPECIFIED,
+            outgoing_from_v6: Ipv6Addr::UNSPECIFIED,
             client,
             http2_support,
-            tls_timeout,
-            http_timeout,
+            tls_timeout: OptionalDuration::NONE,
+            http_timeout: OptionalDuration::NONE,
         })
+    }
+    #[must_use]
+    pub const fn with_backend(mut self, backend: Option<&'static BackendUrl>) -> Self {
+        self.backend = backend;
+        self
+    }
+    #[must_use]
+    pub const fn backend_add_forwarding_headers(
+        mut self,
+        backend_add_forwarding_headers: bool,
+    ) -> Self {
+        self.backend_add_forwarding_headers = backend_add_forwarding_headers;
+        self
+    }
+    #[must_use]
+    pub const fn with_client_addr(mut self, client_addr: Option<SocketAddr>) -> Self {
+        self.client_addr = client_addr;
+        self
+    }
+    #[must_use]
+    pub const fn with_ws_psk(mut self, ws_psk: Option<&'static HeaderValue>) -> Self {
+        self.ws_psk = ws_psk;
+        self
+    }
+    #[must_use]
+    pub const fn with_not_found_resp(mut self, not_found_resp: &'static str) -> Self {
+        self.not_found_resp = not_found_resp;
+        self
+    }
+    #[must_use]
+    pub const fn obfs(mut self, obfs: bool) -> Self {
+        self.obfs = obfs;
+        self
+    }
+    #[must_use]
+    pub const fn reverse(mut self, reverse: bool) -> Self {
+        self.reverse = reverse;
+        self
+    }
+    #[must_use]
+    pub const fn with_outgoing_from(
+        mut self,
+        outgoing_from_v4: Ipv4Addr,
+        outgoing_from_v6: Ipv6Addr,
+    ) -> Self {
+        self.outgoing_from_v4 = outgoing_from_v4;
+        self.outgoing_from_v6 = outgoing_from_v6;
+        self
+    }
+    #[must_use]
+    pub const fn with_tls_timeout(mut self, tls_timeout: OptionalDuration) -> Self {
+        self.tls_timeout = tls_timeout;
+        self
+    }
+    #[must_use]
+    pub const fn with_http_timeout(mut self, http_timeout: OptionalDuration) -> Self {
+        self.http_timeout = http_timeout;
+        self
     }
 }
 
@@ -230,6 +283,9 @@ impl State {
                 .path_and_query(new_path)
                 .build()?;
             *req.uri_mut() = uri;
+            if self.backend_add_forwarding_headers {
+                proxy::add_headers(req.headers_mut(), self.client_addr);
+            }
             self.exec_request(req).await.or_else(|e| {
                 error!("Failed to proxy request to backend: {e}");
                 self.not_found_handler()
@@ -458,20 +514,10 @@ mod tests {
         TEST_OBFS_OR_NOT_BACKEND_SUPPORTS_HTTP2.set(false).unwrap();
         crate::tests::setup_logging();
         // Test `/health` without obfuscation
-        let state = State::new(
-            None,
-            &TEST_OBFS_OR_NOT_BACKEND_SUPPORTS_HTTP2,
-            None,
-            "not found in the test",
-            false,
-            false,
-            Ipv4Addr::UNSPECIFIED,
-            Ipv6Addr::UNSPECIFIED,
-            OptionalDuration::NONE,
-            OptionalDuration::NONE,
-        )
-        .await
-        .unwrap();
+        let state = State::new(&TEST_OBFS_OR_NOT_BACKEND_SUPPORTS_HTTP2)
+            .await
+            .unwrap()
+            .with_not_found_resp("not found in the test");
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/health")
@@ -482,20 +528,11 @@ mod tests {
         let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(body_bytes, "OK");
         // Test `/health` with obfuscation
-        let state = State::new(
-            None,
-            &TEST_OBFS_OR_NOT_BACKEND_SUPPORTS_HTTP2,
-            None,
-            "not found in the test",
-            true,
-            false,
-            Ipv4Addr::UNSPECIFIED,
-            Ipv6Addr::UNSPECIFIED,
-            OptionalDuration::NONE,
-            OptionalDuration::NONE,
-        )
-        .await
-        .unwrap();
+        let state = State::new(&TEST_OBFS_OR_NOT_BACKEND_SUPPORTS_HTTP2)
+            .await
+            .unwrap()
+            .obfs(true)
+            .with_not_found_resp("not found in the test");
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/health")
@@ -506,20 +543,9 @@ mod tests {
         let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(body_bytes, "not found in the test");
         // Test `/version` without obfuscation
-        let state = State::new(
-            None,
-            &TEST_OBFS_OR_NOT_BACKEND_SUPPORTS_HTTP2,
-            None,
-            "not found in the test",
-            false,
-            false,
-            Ipv4Addr::UNSPECIFIED,
-            Ipv6Addr::UNSPECIFIED,
-            OptionalDuration::NONE,
-            OptionalDuration::NONE,
-        )
-        .await
-        .unwrap();
+        let state = State::new(&TEST_OBFS_OR_NOT_BACKEND_SUPPORTS_HTTP2)
+            .await
+            .unwrap();
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/version")
@@ -530,20 +556,11 @@ mod tests {
         let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(body_bytes, env!("CARGO_PKG_VERSION"));
         // Test `/version` with obfuscation
-        let state = State::new(
-            None,
-            &TEST_OBFS_OR_NOT_BACKEND_SUPPORTS_HTTP2,
-            None,
-            "not found in the test",
-            true,
-            false,
-            Ipv4Addr::UNSPECIFIED,
-            Ipv6Addr::UNSPECIFIED,
-            OptionalDuration::NONE,
-            OptionalDuration::NONE,
-        )
-        .await
-        .unwrap();
+        let state = State::new(&TEST_OBFS_OR_NOT_BACKEND_SUPPORTS_HTTP2)
+            .await
+            .unwrap()
+            .obfs(true)
+            .with_not_found_resp("not found in the test");
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/version")
@@ -556,6 +573,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_backend_add_proxy_headers_or_not() {
+        static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
+        static BACKEND: OnceLock<BackendUrl> = OnceLock::new();
+        crate::tests::setup_logging();
+        let listener = TcpListener::bind(("::1", 0)).await.unwrap();
+        let server_addr = listener.local_addr().unwrap();
+        let (header_tx, mut header_rx) = tokio::sync::mpsc::unbounded_channel();
+        let serv_fn = service_fn(move |req: Request<Incoming>| {
+            let header_tx = header_tx.clone();
+            async move {
+                let headers = req.headers().clone();
+                header_tx.send(headers).unwrap();
+                http_return_status(req).await
+            }
+        });
+        let server_task = tokio::task::spawn(async move {
+            for _ in 0..2 {
+                let (stream, _) = listener.accept().await.unwrap();
+                let io = TokioIo::new(stream);
+                let serv_fn = serv_fn.clone();
+
+                if let Err(err) = hyper::server::conn::http1::Builder::new()
+                    .serve_connection(io, serv_fn)
+                    .await
+                {
+                    eprintln!("Error serving connection: {:?}", err);
+                }
+            }
+        });
+        BACKEND
+            .set(BackendUrl::from_str(&format!("http://{server_addr}")).unwrap())
+            .unwrap();
+        let state = State::new(&BACKEND_SUPPORTS_HTTP2)
+            .await
+            .unwrap()
+            .with_backend(Some(BACKEND.get().unwrap()));
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("http://example.com/200")
+            .header("connection", "close")
+            .body(EmptyBody::new())
+            .unwrap();
+        let resp = state.call(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let state = state
+            .backend_add_forwarding_headers(true)
+            .with_client_addr(Some(SocketAddr::from((Ipv6Addr::LOCALHOST, 12345))));
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("http://example.com/200")
+            .header("host", "example.com")
+            .header("connection", "close")
+            .body(EmptyBody::new())
+            .unwrap();
+        let resp = state.call(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let headers1 = header_rx.recv().await.unwrap();
+        assert!(headers1.get("x-forwarded-for").is_none());
+        assert!(headers1.get("x-forwarded-proto").is_none());
+        assert!(headers1.get("x-forwarded-host").is_none());
+        let headers2 = header_rx.recv().await.unwrap();
+        assert_eq!(headers2.get("x-forwarded-for").unwrap(), "::1");
+        assert_eq!(headers2.get("x-forwarded-proto").unwrap(), "http");
+        assert_eq!(headers2.get("x-forwarded-host").unwrap(), "example.com");
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn test_backend_status() {
         static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
         static BACKEND: OnceLock<BackendUrl> = OnceLock::new();
@@ -565,20 +650,10 @@ mod tests {
             .set(BackendUrl::from_str(&format!("http://{server_addr}")).unwrap())
             .unwrap();
         // Test that the backend is actually working
-        let state = State::new(
-            Some(BACKEND.get().unwrap()),
-            &BACKEND_SUPPORTS_HTTP2,
-            None,
-            "not found in the test",
-            false,
-            false,
-            Ipv4Addr::UNSPECIFIED,
-            Ipv6Addr::UNSPECIFIED,
-            OptionalDuration::NONE,
-            OptionalDuration::NONE,
-        )
-        .await
-        .unwrap();
+        let state = State::new(&BACKEND_SUPPORTS_HTTP2)
+            .await
+            .unwrap()
+            .with_backend(Some(BACKEND.get().unwrap()));
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/200")
@@ -586,20 +661,10 @@ mod tests {
             .unwrap();
         let resp = state.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let state = State::new(
-            Some(BACKEND.get().unwrap()),
-            &BACKEND_SUPPORTS_HTTP2,
-            None,
-            "not found in the test",
-            false,
-            false,
-            Ipv4Addr::UNSPECIFIED,
-            Ipv6Addr::UNSPECIFIED,
-            OptionalDuration::NONE,
-            OptionalDuration::NONE,
-        )
-        .await
-        .unwrap();
+        let state = State::new(&BACKEND_SUPPORTS_HTTP2)
+            .await
+            .unwrap()
+            .with_backend(Some(BACKEND.get().unwrap()));
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/418")
@@ -619,20 +684,10 @@ mod tests {
         BACKEND
             .set(BackendUrl::from_str(&format!("http://{server_addr}")).unwrap())
             .unwrap();
-        let state = State::new(
-            Some(BACKEND.get().unwrap()),
-            &BACKEND_SUPPORTS_HTTP2,
-            None,
-            "not found in the test",
-            false,
-            false,
-            Ipv4Addr::UNSPECIFIED,
-            Ipv6Addr::UNSPECIFIED,
-            OptionalDuration::NONE,
-            OptionalDuration::NONE,
-        )
-        .await
-        .unwrap();
+        let state = State::new(&BACKEND_SUPPORTS_HTTP2)
+            .await
+            .unwrap()
+            .with_backend(Some(BACKEND.get().unwrap()));
         let req = Request::builder()
             .version(http::Version::HTTP_11)
             .method(Method::GET)
@@ -654,20 +709,10 @@ mod tests {
         // Probing should have happened here
         assert_eq!(BACKEND_SUPPORTS_HTTP2.get(), Some(&false));
         // Now create a new state. Both version requests should still work
-        let state = State::new(
-            Some(BACKEND.get().unwrap()),
-            &BACKEND_SUPPORTS_HTTP2,
-            None,
-            "not found in the test",
-            false,
-            false,
-            Ipv4Addr::UNSPECIFIED,
-            Ipv6Addr::UNSPECIFIED,
-            OptionalDuration::NONE,
-            OptionalDuration::NONE,
-        )
-        .await
-        .unwrap();
+        let state = State::new(&BACKEND_SUPPORTS_HTTP2)
+            .await
+            .unwrap()
+            .with_backend(Some(BACKEND.get().unwrap()));
         let req = Request::builder()
             .version(http::Version::HTTP_2)
             .method(Method::GET)
@@ -695,20 +740,10 @@ mod tests {
             LazyLock::new(|| BackendUrl::from_str("https://www.google.com").unwrap());
         crate::tests::setup_logging();
         // Test that the backend is actually working
-        let state = State::new(
-            Some(&BACKEND),
-            &BACKEND_SUPPORTS_HTTP2,
-            None,
-            "not found in the test",
-            false,
-            false,
-            Ipv4Addr::UNSPECIFIED,
-            Ipv6Addr::UNSPECIFIED,
-            OptionalDuration::NONE,
-            OptionalDuration::NONE,
-        )
-        .await
-        .unwrap();
+        let state = State::new(&BACKEND_SUPPORTS_HTTP2)
+            .await
+            .unwrap()
+            .with_backend(Some(&BACKEND));
         // Google does support HTTP/2. We try that here, but let's not expect it to always work
         let req = Request::builder()
             .version(http::Version::HTTP_2)
@@ -718,20 +753,10 @@ mod tests {
             .unwrap();
         let resp = state.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let state = State::new(
-            Some(&BACKEND),
-            &BACKEND_SUPPORTS_HTTP2,
-            None,
-            "not found in the test",
-            false,
-            false,
-            Ipv4Addr::UNSPECIFIED,
-            Ipv6Addr::UNSPECIFIED,
-            OptionalDuration::NONE,
-            OptionalDuration::NONE,
-        )
-        .await
-        .unwrap();
+        let state = State::new(&BACKEND_SUPPORTS_HTTP2)
+            .await
+            .unwrap()
+            .with_backend(Some(&BACKEND));
         assert!(BACKEND_SUPPORTS_HTTP2.get().is_some());
         let req = Request::builder()
             .method(Method::GET)
@@ -748,20 +773,10 @@ mod tests {
         TEST_STEALTH_WEBSOCKET_UPGRADE_METHOD.set(false).unwrap();
         crate::tests::setup_logging();
         // Test non-GET request
-        let state = State::new(
-            None,
-            &TEST_STEALTH_WEBSOCKET_UPGRADE_METHOD,
-            None,
-            "not found in the test",
-            false,
-            false,
-            Ipv4Addr::UNSPECIFIED,
-            Ipv6Addr::UNSPECIFIED,
-            OptionalDuration::NONE,
-            OptionalDuration::NONE,
-        )
-        .await
-        .unwrap();
+        let state = State::new(&TEST_STEALTH_WEBSOCKET_UPGRADE_METHOD)
+            .await
+            .unwrap()
+            .with_not_found_resp("not found in the test");
         let req = Request::builder()
             .method(Method::POST)
             .header("connection", "UpGrAdE")
@@ -785,20 +800,10 @@ mod tests {
             .unwrap();
         crate::tests::setup_logging();
         // Test missing upgrade header
-        let state = State::new(
-            None,
-            &TEST_STEALTH_WEBSOCKET_UPGRADE_MISSING_KEY_HEADER,
-            None,
-            "not found in the test",
-            false,
-            false,
-            Ipv4Addr::UNSPECIFIED,
-            Ipv6Addr::UNSPECIFIED,
-            OptionalDuration::NONE,
-            OptionalDuration::NONE,
-        )
-        .await
-        .unwrap();
+        let state = State::new(&TEST_STEALTH_WEBSOCKET_UPGRADE_MISSING_KEY_HEADER)
+            .await
+            .unwrap()
+            .with_not_found_resp("not found in the test");
         let req = Request::builder()
             .method(Method::GET)
             .header("connection", "UpGrAdE")
@@ -820,20 +825,11 @@ mod tests {
         // Test wrong PSK
         static PSK: HeaderValue = HeaderValue::from_static("correct PSK");
         crate::tests::setup_logging();
-        let state = State::new(
-            None,
-            &TEST_STEALTH_WEBSOCKET_UPGRADE_WRONG_PSK,
-            Some(&PSK),
-            "not found in the test",
-            false,
-            false,
-            Ipv4Addr::UNSPECIFIED,
-            Ipv6Addr::UNSPECIFIED,
-            OptionalDuration::NONE,
-            OptionalDuration::NONE,
-        )
-        .await
-        .unwrap();
+        let state = State::new(&TEST_STEALTH_WEBSOCKET_UPGRADE_WRONG_PSK)
+            .await
+            .unwrap()
+            .with_ws_psk(Some(&PSK))
+            .with_not_found_resp("not found in the test");
         let req = Request::builder()
             .method(Method::GET)
             .header("connection", "UpGrAdE")
@@ -859,20 +855,10 @@ mod tests {
         // Test correct PSK
         static PSK: HeaderValue = HeaderValue::from_static("correct PSK");
         crate::tests::setup_logging();
-        let state = State::new(
-            None,
-            &TEST_STEALTH_WEBSOCKET_UPGRADE_CORRECT_PSK,
-            Some(&PSK),
-            "not found in the test",
-            false,
-            false,
-            Ipv4Addr::UNSPECIFIED,
-            Ipv6Addr::UNSPECIFIED,
-            OptionalDuration::NONE,
-            OptionalDuration::NONE,
-        )
-        .await
-        .unwrap();
+        let state = State::new(&TEST_STEALTH_WEBSOCKET_UPGRADE_CORRECT_PSK)
+            .await
+            .unwrap()
+            .with_ws_psk(Some(&PSK));
         let on_upgrade = hyper::upgrade::on(http::Request::new(EmptyBody::new()));
         let req = Request::builder()
             .uri("wss://example.com/ws")

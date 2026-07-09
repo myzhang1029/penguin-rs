@@ -279,6 +279,10 @@ pub struct ServerArgs {
     /// plain sight.
     #[arg(long)]
     pub backend: Option<BackendUrl>,
+    /// Whether HTTP forwarding headers should be added to requests proxied to
+    /// the backend.
+    #[arg(long, default_value_t = false)]
+    pub backend_add_forwarding_headers: bool,
     /// Try harder to hide from Active Probes (disable /health and
     /// /version endpoints and HTTP headers that could potentially be used
     /// to fingerprint penguin). It is strongly recommended to use --ws-psk
@@ -669,6 +673,7 @@ mod tests {
             "5678",
             "--backend",
             "https://example.com",
+            "--backend-add-forwarding-headers",
             "--obfs",
             "--404-resp",
             "404",
