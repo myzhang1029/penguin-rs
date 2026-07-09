@@ -9,7 +9,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-use crate::proto_version;
+use crate::proto_version::PROTOCOL_VERSION_NUMBER;
 use alloc::vec::Vec;
 use bytes::{Buf, BufMut, Bytes};
 use core::{
@@ -61,21 +61,22 @@ impl TryFrom<u8> for BindType {
 /// Operation codes
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u8)]
+#[expect(clippy::identity_op, reason = "OR 0 for clarity")]
 pub enum OpCode {
     /// Initiating stream connection by the client
-    Connect = 0,
+    Connect = 0 | PROTOCOL_VERSION_NUMBER << 4,
     /// Confirming data reception or establishing connection
-    Acknowledge = 1,
+    Acknowledge = 1 | PROTOCOL_VERSION_NUMBER << 4,
     /// Aborting connection or rejecting operation
-    Reset = 2,
+    Reset = 2 | PROTOCOL_VERSION_NUMBER << 4,
     /// Closing stream connection or completing operation
-    Finish = 3,
+    Finish = 3 | PROTOCOL_VERSION_NUMBER << 4,
     /// Sending stream data
-    Push = 4,
+    Push = 4 | PROTOCOL_VERSION_NUMBER << 4,
     /// Binding a port
-    Bind = 5,
+    Bind = 5 | PROTOCOL_VERSION_NUMBER << 4,
     /// Sending datagram
-    Datagram = 6,
+    Datagram = 6 | PROTOCOL_VERSION_NUMBER << 4,
 }
 
 impl TryFrom<u8> for OpCode {
@@ -84,7 +85,11 @@ impl TryFrom<u8> for OpCode {
     /// Parse a `u8` into an `OpCode`
     #[inline]
     fn try_from(value: u8) -> Result<Self, Error> {
-        match value {
+        // Allow both version-filled and zero-filled variants
+        if value >> 4 != PROTOCOL_VERSION_NUMBER && value >> 4 != 0 {
+            return Err(Error::FrameVersion(value >> 4));
+        }
+        match value & 0x0F {
             0 => Ok(Self::Connect),
             1 => Ok(Self::Acknowledge),
             2 => Ok(Self::Reset),
@@ -431,12 +436,7 @@ impl<'data> TryFrom<CowBytes<'data>> for Frame<'data> {
     #[inline]
     fn try_from(mut data: CowBytes<'data>) -> Result<Self, Self::Error> {
         check_remaining!(data, size_of::<u8>() + size_of::<u32>());
-        let firstbyte = data.get_u8();
-        let ver = firstbyte >> 4;
-        if ver != proto_version::PROTOCOL_VERSION_NUMBER {
-            return Err(Error::FrameVersion(ver));
-        }
-        let opcode = OpCode::try_from(firstbyte & 0x0F)?;
+        let opcode = OpCode::try_from(data.get_u8())?;
         let id = data.get_u32();
         let payload = match opcode {
             OpCode::Connect => {
@@ -536,10 +536,9 @@ impl From<&Frame<'_>> for Vec<u8> {
     #[inline]
     fn from(frame: &Frame<'_>) -> Self {
         let size = size_of::<u8>() + size_of::<u32>() + frame.payload.len();
-        let opcode = OpCode::from(&frame.payload) as u8;
-        let firstbyte = opcode | (proto_version::PROTOCOL_VERSION_NUMBER << 4);
+        let ver_opcode = OpCode::from(&frame.payload) as u8;
         let mut encoded = Self::with_capacity(size);
-        encoded.put_u8(firstbyte);
+        encoded.put_u8(ver_opcode);
         encoded.put_u32(frame.id);
         match &frame.payload {
             Payload::Connect(ConnectPayload {
