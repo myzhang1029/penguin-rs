@@ -203,12 +203,6 @@ impl<R: Rng + Send> Multiplexor<R> {
         options: config::Options,
         rng: R,
     ) -> (Self, TaskData<S, T>) {
-        #[cfg(not(feature = "tokio-time"))]
-        if options.keepalive_interval.is_some() || options.keepalive_timeout.is_some() {
-            warn!(
-                "`keepalive_interval` and `keepalive_timeout` are ignored because the `tokio-time` feature is not enabled"
-            );
-        }
         let (datagram_tx, datagram_rx) = mpsc::channel(options.datagram_buffer_size);
         let (con_recv_stream_tx, con_recv_stream_rx) = mpsc::channel(options.stream_buffer_size);
         // This one is unbounded because the protocol itself provides flow control for `Push` frames

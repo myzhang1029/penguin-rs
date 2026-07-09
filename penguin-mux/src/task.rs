@@ -145,6 +145,10 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
                 debug!("`process_message_to_send_task` task finished: {r:?}");
                 (false, r)
             }
+            r = self.schedule_ping_task().fuse() => {
+                debug!("`schedule_ping_task` task errored: {r:?}");
+                (false, r)
+            }
             () = self.process_dropped_flows_task(&mut dropped_flows_rx).fuse() => {
                 debug!("`process_dropped_flows_task` task finished");
                 (true, Ok(()))
@@ -183,6 +187,49 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
         unreachable!("dropped flows receiver should not be closed (this is a bug)");
     }
 
+    #[cfg(feature = "tokio-time")]
+    async fn schedule_ping_task(&self) -> Result<()> {
+        let mut interval = crate::timing::OptionalInterval::from(self.keepalive_interval);
+        // If we missed a tick, this task was probably preempted by networking, so we don't need to
+        // make up for it.
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut last_ping_sent = T::now();
+        loop {
+            let _ = interval.tick().await;
+            trace!("sending keepalive ping");
+            // Check if we have received a pong recently enough
+            let last_pong_timestamp = *self.last_pong_timestamp.lock();
+            debug!(
+                "ping/pong round trip time: {:?}",
+                last_pong_timestamp.duration_since(last_ping_sent)
+            );
+            let elapsed_since_last_pong = T::now().duration_since(last_pong_timestamp);
+            if self
+                .keepalive_timeout
+                .cmp_duration(&elapsed_since_last_pong)
+                == core::cmp::Ordering::Less
+            {
+                warn!("No pong received for {elapsed_since_last_pong:?}");
+                return Err(Error::KeepaliveTimeout);
+            }
+            self.tx_msg_tx.send(Message::Ping).map_err(|_| {
+                debug_assert!(false, "`tx_msg_tx` should not be closed (this is a bug)");
+                Error::ChannelClosed("tx_msg_tx")
+            })?;
+            last_ping_sent = T::now();
+        }
+    }
+    #[cfg(not(feature = "tokio-time"))]
+    async fn schedule_ping_task(&self) -> Result<()> {
+        if self.keepalive_interval.is_some() || self.keepalive_timeout.is_some() {
+            warn!(
+                "`keepalive_interval` and `keepalive_timeout` are ignored because the `tokio-time` feature is not enabled"
+            );
+        }
+        core::future::pending::<()>().await;
+        unreachable!();
+    }
+
     /// Poll `tx_msg_rx`, queue the message received, and send keepalive pings as needed.
     /// It propagates errors from the `Sink` processing.
     ///
@@ -195,35 +242,8 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
         &self,
         tx_msg_rx: &mut mpsc::UnboundedReceiver<Message>,
     ) -> Result<()> {
-        let mut interval = crate::timing::OptionalInterval::from(self.keepalive_interval);
-        #[cfg(feature = "tokio-time")]
-        // If we missed a tick, it is probably doing networking, so we don't need to
-        // make up for it.
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        let mut last_ping_sent = T::now();
-
         loop {
-            futures_util::select_biased! {
-                r = poll_fn(|cx| self.poll_reserve_space_queue_message(cx, tx_msg_rx)).fuse() => {
-                    r?;
-                }
-                _ = interval.tick().fuse() => {
-                    trace!("sending keepalive ping");
-                    // Check if we have received a pong recently enough
-                    let last_pong_timestamp = *self.last_pong_timestamp.lock();
-                    debug!("ping/pong round trip time: {:?}", last_pong_timestamp.duration_since(last_ping_sent));
-                    let elapsed_since_last_pong = T::now().duration_since(last_pong_timestamp);
-                    if self.keepalive_timeout.cmp_duration(&elapsed_since_last_pong) == core::cmp::Ordering::Less {
-                        warn!("No pong received for {elapsed_since_last_pong:?}");
-                        return Err(Error::KeepaliveTimeout);
-                    }
-                    self.tx_msg_tx.send(Message::Ping).map_err(|_| {
-                        debug_assert!(false, "`tx_msg_tx` should not be closed (this is a bug)");
-                        Error::ChannelClosed("tx_msg_tx")
-                    })?;
-                    last_ping_sent = T::now();
-                }
-            }
+            poll_fn(|cx| self.poll_reserve_space_queue_message(cx, tx_msg_rx)).await?;
             poll_fn(|cx| self.ws.lock().poll_flush_unpin(cx)).await?;
         }
         // This returns if we cannot sink or cannot receive from `frame_rx` anymore,

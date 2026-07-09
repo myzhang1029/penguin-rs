@@ -174,13 +174,14 @@ impl Ord for OptionalDuration {
     }
 }
 
+#[cfg(feature = "tokio-time")]
 /// An optional interval
 #[derive(Debug, Default)]
-pub struct OptionalInterval(#[cfg(feature = "tokio-time")] Option<tokio::time::Interval>);
+pub struct OptionalInterval(Option<tokio::time::Interval>);
 
+#[cfg(feature = "tokio-time")]
 impl OptionalInterval {
     /// Defines the behavior of the internal [`tokio::time::Interval`] when it misses a tick.
-    #[cfg(feature = "tokio-time")]
     pub fn set_missed_tick_behavior(&mut self, behavior: tokio::time::MissedTickBehavior) {
         if let Some(interval) = &mut self.0 {
             interval.set_missed_tick_behavior(behavior);
@@ -188,7 +189,6 @@ impl OptionalInterval {
     }
 
     /// Completes when the next instant in the interval has been reached.
-    #[cfg(feature = "tokio-time")]
     pub async fn tick(&mut self) -> tokio::time::Instant {
         if let Some(interval) = &mut self.0 {
             interval.tick().await
@@ -197,22 +197,12 @@ impl OptionalInterval {
             core::future::pending::<tokio::time::Instant>().await
         }
     }
-
-    /// Never resolves.
-    #[cfg(not(feature = "tokio-time"))]
-    pub async fn tick(&mut self) {
-        core::future::pending::<()>().await
-    }
 }
 
+#[cfg(feature = "tokio-time")]
 impl From<OptionalDuration> for OptionalInterval {
-    #[cfg(feature = "tokio-time")]
     fn from(dur: OptionalDuration) -> Self {
         Self(dur.0.map(tokio::time::interval))
-    }
-    #[cfg(not(feature = "tokio-time"))]
-    fn from(_dur: OptionalDuration) -> Self {
-        Self()
     }
 }
 
