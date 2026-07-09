@@ -501,16 +501,16 @@ impl FlowSlot {
         &mut self,
         data: EstablishedStreamData,
     ) -> Option<oneshot::Sender<Option<MuxStream>>> {
-        // Make sure it is not replaced in the error case
-        if matches!(self, Self::Established(_) | Self::BindRequested(_)) {
+        // Make sure `self` is not replaced in the error case
+        if matches!(self, Self::Requested(_)) {
+            let Self::Requested(sender) = core::mem::replace(self, Self::Established(data)) else {
+                unreachable!()
+            };
+            Some(sender)
+        } else {
             error!("Establishing an established or invalid slot");
-            return None;
+            None
         }
-        let sender = match core::mem::replace(self, Self::Established(data)) {
-            Self::Requested(sender) => sender,
-            Self::Established(_) | Self::BindRequested(_) => unreachable!(),
-        };
-        Some(sender)
     }
 
     /// If the slot is established, send data. Otherwise, return `None`.
