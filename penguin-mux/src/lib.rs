@@ -37,8 +37,8 @@ use alloc::boxed::Box;
 use bytes::Bytes;
 use core::future::poll_fn;
 use hashbrown::HashMap;
+use rand::Rng;
 use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng};
 use thiserror::Error;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot};
@@ -152,6 +152,7 @@ impl Multiplexor<SmallRng> {
     #[inline]
     #[cfg(all(feature = "tokio-rt", feature = "std"))]
     pub fn new<S: WebSocket>(ws: S) -> Self {
+        use rand::SeedableRng;
         let rng = SmallRng::from_rng(&mut rand::rng());
         let (mux, taskdata) =
             Self::new_detailed::<_, std::time::Instant>(ws, config::Options::default(), rng);
@@ -179,6 +180,7 @@ impl Multiplexor<SmallRng> {
         options: config::Options,
         task_joinset: Option<&mut tokio::task::JoinSet<Result<()>>>,
     ) -> Self {
+        use rand::SeedableRng;
         let rng = SmallRng::from_rng(&mut rand::rng());
         let (mux, taskdata) = Self::new_detailed::<_, std::time::Instant>(ws, options, rng);
         taskdata.spawn(task_joinset);
