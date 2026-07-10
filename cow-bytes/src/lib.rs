@@ -12,12 +12,15 @@ extern crate alloc;
 extern crate std;
 
 mod macros;
+mod pbuf;
 
 use alloc::borrow::Borrow;
 use alloc::vec::Vec;
 use bytes::{Buf, Bytes};
 use core::{cmp::Ordering, fmt, ops::Deref};
 use macros::{impl_by_as_ref, impl_by_delegate};
+
+pub use pbuf::LongChain;
 
 /// A special version of `std::borrow::Cow` whose owned variant is [`Bytes`].
 ///
@@ -55,6 +58,13 @@ impl_by_as_ref! {
     #[cfg(feature = "std")]
     impl std::io::Read {
         #[inline] fn read(&mut Self, buf: &mut [u8]) -> std::io::Result<usize>
+    }
+}
+
+impl<const N: usize> PartialEq<&[u8; N]> for CowBytes<'_> {
+    #[inline]
+    fn eq(&self, other: &&[u8; N]) -> bool {
+        self.as_ref() == *other
     }
 }
 
@@ -110,7 +120,7 @@ impl fmt::UpperHex for CowBytes<'_> {
 }
 
 impl CowBytes<'_> {
-    /// Creates a new `CowBytes` instance from a static slice of bytes.
+    /// Create a new `CowBytes` instance from a static slice of bytes.
     ///
     /// The resulting `CowBytes` will be in the `Static` variant.
     /// This operation does not involve any heap allocation.
@@ -120,7 +130,7 @@ impl CowBytes<'_> {
         Self::Static(Bytes::from_static(data))
     }
 
-    /// Convert the `CowBytes` into a `Bytes` instance.
+    /// Convert this `CowBytes` into a `Bytes` instance.
     #[inline]
     pub fn into_static(self) -> Bytes {
         match self {
@@ -139,7 +149,7 @@ impl CowBytes<'_> {
         pub [const] fn is_empty(&Self) -> bool
     }
 
-    /// Splits the bytes into two at the given index.
+    /// Split this `CowBytes` into two at the given index.
     ///
     /// See [`Bytes::split_to`] for more details. This is an `O(1)` operation.
     #[inline]
@@ -155,7 +165,7 @@ impl CowBytes<'_> {
         }
     }
 
-    /// Splits the bytes into two at the given index.
+    /// Split this `CowBytes` into two at the given index.
     ///
     /// See [`Bytes::split_off`] for more details. This is an `O(1)` operation.
     #[inline]
@@ -171,7 +181,7 @@ impl CowBytes<'_> {
         }
     }
 
-    /// Shortens the buffer, keeping the first `len` bytes and dropping the rest.
+    /// Shorten the buffer, keeping the first `len` bytes and dropping the rest.
     #[inline]
     pub fn truncate(&mut self, len: usize) {
         match self {
