@@ -125,10 +125,14 @@ where
 }
 
 #[tracing::instrument(skip_all, level = "debug")]
-pub(super) async fn handle_http<L: AsyncAcceptable + Send + Sync>(
+pub(super) async fn handle_http<L>(
     listener: L,
     hr: &'static HandlerResources,
-) -> Result<(), super::FatalError> {
+) -> Result<(), super::FatalError>
+where
+    L: AsyncAcceptable + Send + Sync,
+    <L as AsyncAcceptable>::Stream: Unpin,
+{
     loop {
         let (stream, peer_addr) = listener
             .accept_with_sockaddr()

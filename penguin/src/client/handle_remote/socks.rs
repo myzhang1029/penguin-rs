@@ -35,11 +35,15 @@ pub enum Error {
     Fatal(#[from] FatalError),
 }
 
-pub(super) async fn handle_socks<L: AsyncAcceptable + Send + Sync>(
+pub(super) async fn handle_socks<L>(
     listener: L,
     lhost: &'static str,
     hr: &'static HandlerResources,
-) -> Result<(), FatalError> {
+) -> Result<(), FatalError>
+where
+    L: AsyncAcceptable + Send + Sync,
+    <L as AsyncAcceptable>::Stream: Unpin,
+{
     let mut socks_jobs: JoinSet<Result<(), FatalError>> = JoinSet::new();
     loop {
         tokio::select! {

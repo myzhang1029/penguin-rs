@@ -11,7 +11,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 /// A Listener that can accept connections asynchronously.
 pub trait AsyncAcceptable {
     /// The type of stream that will be returned by `accept()`
-    type Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static;
+    type Stream: AsyncRead + AsyncWrite + Send + 'static;
 
     /// Poll accept a connection asynchronously.
     fn poll_accept(&self, cx: &mut Context<'_>) -> Poll<io::Result<Self::Stream>>;

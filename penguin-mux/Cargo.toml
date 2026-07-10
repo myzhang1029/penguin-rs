@@ -27,6 +27,7 @@ futures-util = { version = "0.3", features = ["async-await-macro", "async-await"
 hashbrown = { version = "0.17", features = ["default-hasher"], default-features = false }
 nohash-hasher = { version = "0.2", default-features = false , optional = true }
 parking_lot = { version = "0.12", optional = true }
+pin-project-lite = "0.2"
 rand = { version = "0.10", default-features = false }
 spin = { version = "0.12", features = ["use_ticket_mutex", "rwlock", "lock_api"], default-features = false }
 thiserror = { version = "2", default-features = false }

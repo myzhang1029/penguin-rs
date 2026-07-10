@@ -1713,6 +1713,7 @@ dependencies = [
  "nohash-hasher",
  "parking_lot",
  "penguin-mux",
+ "pin-project-lite",
  "rand 0.10.2",
  "spin",
  "thiserror",
