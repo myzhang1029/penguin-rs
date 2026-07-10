@@ -1,10 +1,8 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use penguin_mux::timing::OptionalDuration;
 use rusty_penguin_lib::{server, tls};
 use std::io::ErrorKind;
-use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::OnceLock;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
@@ -21,22 +19,8 @@ fn init() {
                 .enable_all()
                 .build()
                 .unwrap()
-                .block_on(async {
-                    server::State::new(
-                        None,
-                        &HTTP2_SUPPORT,
-                        None,
-                        "",
-                        false,
-                        false,
-                        Ipv4Addr::UNSPECIFIED,
-                        Ipv6Addr::UNSPECIFIED,
-                        OptionalDuration::NONE,
-                        OptionalDuration::NONE,
-                    )
-                    .await
-                    .unwrap()
-                }),
+                .block_on(server::State::new(&HTTP2_SUPPORT))
+                .unwrap(),
         )
         .unwrap();
 }
