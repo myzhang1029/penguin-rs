@@ -538,9 +538,9 @@ where
     #[tracing::instrument(skip_all, level = "trace", fields(flow_id = %format_args!("{:08x}", self.us.flow_id)))]
     #[inline]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let r = self.as_mut().poll_read_us(cx);
-        let w = self.poll_write_us(cx);
-        Poll::Ready(Ok((ready!(r)?, ready!(w)?)))
+        let r = self.as_mut().poll_read_us(cx)?;
+        let w = self.poll_write_us(cx)?;
+        Poll::Ready(Ok((ready!(r), ready!(w))))
     }
 }
 
