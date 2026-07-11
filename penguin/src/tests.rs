@@ -773,10 +773,11 @@ async fn test_http_proxy() {
         &SERVER_ARGS,
         &BACKEND_SUPPORTS_HTTP2,
     ));
+    let target_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target_addr = target_listener.local_addr().unwrap();
     let target_server_task = tokio::spawn(async move {
-        let listener = TcpListener::bind("127.0.0.1:19539").await.unwrap();
         for _ in 0..64 {
-            let (mut stream, _) = listener.accept().await.unwrap();
+            let (mut stream, _) = target_listener.accept().await.unwrap();
             let mut buf = vec![0u8; 16];
             stream.read_exact(&mut buf).await.unwrap();
             assert_eq!(&buf[..4], b"GET ");
@@ -789,34 +790,51 @@ async fn test_http_proxy() {
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    // It would be nice to use `loom`
     for _ in 0..32 {
-        let mut proxy = TcpStream::connect("127.0.0.1:17535").await.unwrap();
-        proxy
-            .write_all(b"GET http://127.0.0.1:19539 HTTP/1.1\r\n\r\n")
-            .await
+        use http_body_util::BodyExt;
+
+        let proxy = TcpStream::connect("127.0.0.1:17535").await.unwrap();
+        let io = hyper_util::rt::TokioIo::new(proxy);
+        let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await.unwrap();
+        let conn_task = tokio::spawn(conn);
+        let url = http::Uri::from_str(&format!("http://{target_addr}")).unwrap();
+        let req = http::Request::builder()
+            .method(http::Method::GET)
+            .uri(url)
+            .header("Host", "localhost")
+            .body(http_body_util::Empty::<bytes::Bytes>::new())
             .unwrap();
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        let mut buf = vec![0u8; 1024];
-        let n = proxy.read(&mut buf).await.unwrap();
-        let buf = &buf[..n];
-        assert_eq!(&buf[..15], b"HTTP/1.1 200 OK");
-        let str_resp = str::from_utf8(buf).unwrap().trim_end();
-        assert_eq!(&str_resp[str_resp.len() - 4..], "Good");
+        let response = sender.send_request(req).await.unwrap();
+        let (parts, body) = response.into_parts();
+        assert_eq!(parts.status, http::StatusCode::OK);
+        let body = body.collect().await.unwrap().to_bytes();
+        assert_eq!(&*body, b"Good");
+        conn_task.await.unwrap().unwrap();
 
         let mut proxy = TcpStream::connect("127.0.0.1:17535").await.unwrap();
         proxy
-            .write_all(b"CONNECT 127.0.0.1:19539 HTTP/1.1\r\n\r\n")
+            .write_all(format!("CONNECT {target_addr} HTTP/1.1\r\n\r\n").as_bytes())
             .await
             .unwrap();
-        proxy.write_all(b"GET / HTTP/1.1\r\n\r\n").await.unwrap();
-        tokio::time::sleep(Duration::from_millis(10)).await;
         let mut buf = vec![0u8; 1024];
         let n = proxy.read(&mut buf).await.unwrap();
-        let buf = &buf[..n];
-        assert_eq!(&buf[..15], b"HTTP/1.1 200 OK");
-        let str_resp = str::from_utf8(buf).unwrap().trim_end();
-        assert_eq!(&str_resp[str_resp.len() - 4..], "Good");
+        let response_str = std::str::from_utf8(&buf[..n]).unwrap();
+        assert!(response_str.starts_with("HTTP/1.1 200"));
+        let io = hyper_util::rt::TokioIo::new(proxy);
+        let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await.unwrap();
+        let conn_task = tokio::spawn(conn);
+        let req = http::Request::builder()
+            .method(http::Method::GET)
+            .uri("/")
+            .header("Host", "localhost")
+            .body(http_body_util::Empty::<bytes::Bytes>::new())
+            .unwrap();
+        let response = sender.send_request(req).await.unwrap();
+        let (parts, body) = response.into_parts();
+        assert_eq!(parts.status, http::StatusCode::OK);
+        let body = body.collect().await.unwrap().to_bytes();
+        assert_eq!(&*body, b"Good");
+        conn_task.await.unwrap().unwrap();
     }
 
     target_server_task.await.unwrap();

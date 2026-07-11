@@ -82,7 +82,7 @@ ring = ["instant-acme?/ring", "rcgen?/ring", "rustls/ring"]
 aws-lc-rs = ["instant-acme?/aws-lc-rs", "rcgen?/aws_lc_rs", "rustls/aws-lc-rs", "rustls/prefer-post-quantum", "rustls-webpki/aws-lc-rs"]
 
 # Dependencies for testing
-__dev-dependencies = ["dep:rcgen", "tracing-subscriber/env-filter", "tokio/process"]
+__dev-dependencies = ["dep:hyper", "dep:rcgen", "tracing-subscriber/env-filter", "tokio/process"]
 # Allow some tests that require real internet connection
 tests-real-internet4 = []
 tests-real-internet6 = []
