@@ -17,6 +17,7 @@ pub struct LongChain<'data> {
 impl LongChain<'_> {
     /// Create a new empty [`LongChain`].
     #[inline]
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             data: Vec::new(),
@@ -28,6 +29,7 @@ impl LongChain<'_> {
     ///
     /// Note that this is the number of [`CowBytes`] instances instead of the number of bytes.
     #[inline]
+    #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             data: Vec::with_capacity(capacity),
@@ -46,6 +48,7 @@ impl LongChain<'_> {
 
     /// Get the total length of all data in the [`LongChain`].
     #[inline]
+    #[must_use]
     pub const fn len(&self) -> usize {
         #[cfg(debug_assertions)]
         self.verify_invariants();
@@ -54,6 +57,7 @@ impl LongChain<'_> {
 
     /// Check if the [`LongChain`] is empty.
     #[inline]
+    #[must_use]
     pub const fn is_empty(&self) -> bool {
         #[cfg(debug_assertions)]
         self.verify_invariants();
@@ -153,8 +157,7 @@ impl<'a> LongChain<'a> {
             split_index += 1;
         }
         let new_chain = if remaining == 0 {
-            let new_chain = self.data.split_off(split_index);
-            new_chain
+            self.data.split_off(split_index)
         } else {
             let mut new_chain = Vec::with_capacity(1 + self.data.len() - split_index);
             let split_elem = self.data[split_index].split_off(remaining);
