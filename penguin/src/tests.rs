@@ -875,8 +875,9 @@ async fn test_socks5_connect_reliability_v4() {
     // server will not receive the data.
     let input_bytes: Vec<u8> = (0..16).map(|_| rand::random::<u8>()).collect();
     let input_len = input_bytes.len();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target_addr = listener.local_addr().unwrap();
     let target_server_task = tokio::spawn(async move {
-        let listener = TcpListener::bind("127.0.0.1:26307").await.unwrap();
         for _ in 0..64 {
             let (mut stream, _) = listener.accept().await.unwrap();
             let mut output_bytes = vec![0u8; input_len];
@@ -895,9 +896,10 @@ async fn test_socks5_connect_reliability_v4() {
         let n = sock.read(&mut buf).await.unwrap();
         assert_eq!(n, 2);
         assert_eq!(&buf[..n], b"\x05\x00");
-        sock.write_all(b"\x05\x01\x00\x01\x7f\x00\x00\x01\x66\xc3")
-            .await
-            .unwrap();
+        let mut socks_command = vec![0x05, 0x01, 0x00];
+        socks_command.extend_from_slice(b"\x01\x7f\x00\x00\x01");
+        socks_command.extend_from_slice(&target_addr.port().to_be_bytes());
+        sock.write_all(&socks_command).await.unwrap();
         let n = sock.read(&mut buf).await.unwrap();
         assert!(n > 3);
         assert_eq!(&buf[..3], b"\x05\x00\x00");
@@ -946,8 +948,9 @@ async fn test_socks5_connect_reliability_v6() {
     // server will not receive the data.
     let input_bytes: Vec<u8> = (0..16).map(|_| rand::random::<u8>()).collect();
     let input_len = input_bytes.len();
+    let listener = TcpListener::bind("[::1]:0").await.unwrap();
+    let target_addr = listener.local_addr().unwrap();
     let target_server_task = tokio::spawn(async move {
-        let listener = TcpListener::bind("[::1]:13384").await.unwrap();
         for _ in 0..64 {
             let (mut stream, _) = listener.accept().await.unwrap();
             let mut output_bytes = vec![0u8; input_len];
@@ -965,9 +968,12 @@ async fn test_socks5_connect_reliability_v6() {
         let n = sock.read(&mut buf).await.unwrap();
         assert_eq!(n, 2);
         assert_eq!(&buf[..n], b"\x05\x00");
-        sock.write_all(b"\x05\x01\x00\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x34\x48")
-            .await
-            .unwrap();
+        let mut socks_command = vec![0x05, 0x01, 0x00];
+        socks_command.extend_from_slice(
+            b"\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01",
+        );
+        socks_command.extend_from_slice(&target_addr.port().to_be_bytes());
+        sock.write_all(&socks_command).await.unwrap();
         let n = sock.read(&mut buf).await.unwrap();
         assert!(n > 3);
         assert_eq!(&buf[..3], b"\x05\x00\x00");
@@ -1477,8 +1483,9 @@ async fn test_socks4_works() {
     let input_bytes: Vec<u8> = (0..1024).map(|_| rand::random::<u8>()).collect();
     let input_len = input_bytes.len();
 
+    let listener = TcpListener::bind("127.0.0.1:20591").await.unwrap();
+    let target_addr = listener.local_addr().unwrap();
     let target_server_task = tokio::spawn(async move {
-        let listener = TcpListener::bind("127.0.0.1:20591").await.unwrap();
         let (mut stream, _) = listener.accept().await.unwrap();
         let mut output_bytes = vec![0u8; input_len];
         stream.read_exact(&mut output_bytes).await.unwrap();
@@ -1489,9 +1496,12 @@ async fn test_socks4_works() {
 
     let mut sock = TcpStream::connect("127.0.0.1:23213").await.unwrap();
     // Just put the IP in the domain field to test `socks4a` as well.
-    sock.write_all(b"\x04\x01\x50\x6f\x00\x00\x00\x01\x00\x31\x32\x37\x2e\x30\x2e\x30\x2e\x31\x00")
-        .await
-        .unwrap();
+    let mut socks_command = vec![0x04, 0x01];
+    socks_command.extend_from_slice(&target_addr.port().to_be_bytes());
+    socks_command.extend_from_slice(b"\x00\x00\x00\x01\x00");
+    socks_command.extend_from_slice(b"127.0.0.1");
+    socks_command.push(0x00);
+    sock.write_all(&socks_command).await.unwrap();
     sock.flush().await.unwrap();
     let mut buf = vec![0u8; 32];
     let n = sock.read(&mut buf).await.unwrap();
