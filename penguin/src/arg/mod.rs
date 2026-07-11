@@ -122,6 +122,11 @@ When PROTOCOL is omitted, it defaults to `tcp`.
 
 LOCAL_HOST and REMOTE_HOST must be enclosed in brackets if they are IPv6 addresses, e.g. `[::1]`.
 
+The prefix `R:` indicates that the roles of the server and client are reversed (for only this remote).
+That is, the server will listen on LOCAL_HOST:LOCAL_PORT and forward connections to
+REMOTE_HOST:REMOTE_PORT on the client. Reverse remotes does not support `stdio` or unix domain sockets
+as LOCAL_SPEC, nor `socks`, `http`, or `tproxy` as REMOTE_SPEC.
+
 Examples:
 - 3000
 - R:3000/udp

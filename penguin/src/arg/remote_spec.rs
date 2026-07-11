@@ -75,7 +75,7 @@ pub enum Error {
     #[error("invalid protocol `{0}`")]
     Protocol(String),
     #[error("cannot use {0} with {1}")]
-    UnsupportedCombination(&'static str, &'static str),
+    UnsupportedCombination(String, String),
     #[error("found more than four colon-separated segments")]
     TooManySegments,
     #[error("invalid domain name `{0}`")]
@@ -211,6 +211,12 @@ fn tokenize_remote(s: &str) -> Result<Vec<&str>, Error> {
     }
 }
 
+macro_rules! unsupported {
+    ($one:expr, $other:expr) => {
+        Error::UnsupportedCombination($one.to_string(), $other.to_string())
+    };
+}
+
 impl FromStr for Remote {
     type Err = Error;
 
@@ -286,10 +292,7 @@ impl FromStr for Remote {
                 reversed: reverse,
             },
             ["stdio", "tproxy"] => {
-                return Err(Error::UnsupportedCombination(
-                    "stdio local",
-                    "tproxy remote",
-                ));
+                return Err(unsupported!(LocalSpec::Stdio, RemoteSpec::Tproxy));
             }
             ["stdio", port] => Self {
                 local_addr: LocalSpec::Stdio,
@@ -394,41 +397,45 @@ impl FromStr for Remote {
             }
         };
         // Check for invalid cases
-        if matches!(
-            result,
-            Self {
-                remote_addr: RemoteSpec::Socks | RemoteSpec::Http,
-                protocol: Protocol::Udp,
-                ..
-            }
-        ) {
-            return Err(Error::UnsupportedCombination("socks or http local", "udp"));
+        if let Self {
+            remote_addr: r @ (RemoteSpec::Socks | RemoteSpec::Http),
+            protocol: p @ Protocol::Udp,
+            ..
+        } = result
+        {
+            return Err(unsupported!(r, p));
         }
-        if matches!(
-            result,
-            Self {
-                local_addr: LocalSpec::DomainSocket(_),
-                protocol: Protocol::Udp,
-                ..
-            }
-        ) {
-            return Err(Error::UnsupportedCombination(
-                "unix domain socket local",
-                "udp",
-            ));
+        if let Self {
+            local_addr: l @ LocalSpec::DomainSocket(_),
+            protocol: p @ Protocol::Udp,
+            ..
+        } = result
+        {
+            return Err(unsupported!(l, p));
         }
-        if matches!(
-            result,
-            Self {
-                local_addr: LocalSpec::DomainSocket(_),
-                remote_addr: RemoteSpec::Tproxy,
-                ..
-            }
-        ) {
-            return Err(Error::UnsupportedCombination(
-                "unix domain socket local",
-                "tproxy remote",
-            ));
+        if let Self {
+            local_addr: l @ LocalSpec::DomainSocket(_),
+            remote_addr: r @ RemoteSpec::Tproxy,
+            ..
+        } = result
+        {
+            return Err(unsupported!(l, r));
+        }
+        if let Self {
+            local_addr: l @ (LocalSpec::Stdio | LocalSpec::DomainSocket(_)),
+            reversed: true,
+            ..
+        } = result
+        {
+            return Err(unsupported!(l, "reversed"));
+        }
+        if let Self {
+            remote_addr: r @ (RemoteSpec::Socks | RemoteSpec::Http | RemoteSpec::Tproxy),
+            reversed: true,
+            ..
+        } = result
+        {
+            return Err(unsupported!(r, "reversed"));
         }
         Ok(result)
     }
@@ -632,19 +639,6 @@ mod tests {
                 },
             ),
             (
-                "R:socks",
-                format!(
-                    "R:{}:{SOCKS_DEFAULT_PORT}:socks/tcp",
-                    add_brackets!(default_host!(local))
-                ),
-                Remote {
-                    local_addr: LocalSpec::Inet((default_host!(local), SOCKS_DEFAULT_PORT)),
-                    remote_addr: RemoteSpec::Socks,
-                    protocol: Protocol::Tcp,
-                    reversed: true,
-                },
-            ),
-            (
                 "9050:socks",
                 format!("{}:9050:socks/tcp", default_host!([local])),
                 Remote {
@@ -652,16 +646,6 @@ mod tests {
                     remote_addr: RemoteSpec::Socks,
                     protocol: Protocol::Tcp,
                     reversed: false,
-                },
-            ),
-            (
-                "R:9050:socks",
-                format!("R:{}:9050:socks/tcp", add_brackets!(default_host!(local))),
-                Remote {
-                    local_addr: LocalSpec::Inet((default_host!(local), 9050)),
-                    remote_addr: RemoteSpec::Socks,
-                    protocol: Protocol::Tcp,
-                    reversed: true,
                 },
             ),
             (
@@ -675,16 +659,6 @@ mod tests {
                 },
             ),
             (
-                "R:127.0.0.1:1081:socks",
-                String::from("R:127.0.0.1:1081:socks/tcp"),
-                Remote {
-                    local_addr: LocalSpec::Inet((String::from("127.0.0.1"), 1081)),
-                    remote_addr: RemoteSpec::Socks,
-                    protocol: Protocol::Tcp,
-                    reversed: true,
-                },
-            ),
-            (
                 "r:1081:socks",
                 String::from("r:1081:socks/tcp"),
                 Remote {
@@ -695,16 +669,6 @@ mod tests {
                 },
             ),
             (
-                "R:R:1081:socks",
-                String::from("R:R:1081:socks/tcp"),
-                Remote {
-                    local_addr: LocalSpec::Inet((String::from("R"), 1081)),
-                    remote_addr: RemoteSpec::Socks,
-                    protocol: Protocol::Tcp,
-                    reversed: true,
-                },
-            ),
-            (
                 "http",
                 format!("{}:{HTTP_DEFAULT_PORT}:http/TCP", default_host!([local])),
                 Remote {
@@ -712,19 +676,6 @@ mod tests {
                     remote_addr: RemoteSpec::Http,
                     protocol: Protocol::Tcp,
                     reversed: false,
-                },
-            ),
-            (
-                "R:http",
-                format!(
-                    "R:{}:{HTTP_DEFAULT_PORT}:http/TCP",
-                    add_brackets!(default_host!(local))
-                ),
-                Remote {
-                    local_addr: LocalSpec::Inet((default_host!(local), HTTP_DEFAULT_PORT)),
-                    remote_addr: RemoteSpec::Http,
-                    protocol: Protocol::Tcp,
-                    reversed: true,
                 },
             ),
             (
@@ -1090,23 +1041,57 @@ mod tests {
             ),
             (
                 "socks/udp",
-                Error::UnsupportedCombination("socks or http local", "udp"),
+                Error::UnsupportedCombination("socks".to_string(), "udp".to_string()),
             ),
             (
                 "http/udp",
-                Error::UnsupportedCombination("socks or http local", "udp"),
+                Error::UnsupportedCombination("http".to_string(), "udp".to_string()),
             ),
             (
                 "stdio:tproxy",
-                Error::UnsupportedCombination("stdio local", "tproxy remote"),
+                Error::UnsupportedCombination("stdio".to_string(), "tproxy".to_string()),
             ),
             (
                 "[unix:/tmp/socket]:tproxy/udp",
-                Error::UnsupportedCombination("unix domain socket local", "udp"),
+                Error::UnsupportedCombination("[unix:/tmp/socket]".to_string(), "udp".to_string()),
             ),
             (
                 "[unix:/tmp/socket]:tproxy",
-                Error::UnsupportedCombination("unix domain socket local", "tproxy remote"),
+                Error::UnsupportedCombination(
+                    "[unix:/tmp/socket]".to_string(),
+                    "tproxy".to_string(),
+                ),
+            ),
+            (
+                "R:stdio:80",
+                Error::UnsupportedCombination("stdio".to_string(), "reversed".to_string()),
+            ),
+            (
+                "R:[unix:/tmp/socket]:80",
+                Error::UnsupportedCombination(
+                    "[unix:/tmp/socket]".to_string(),
+                    "reversed".to_string(),
+                ),
+            ),
+            (
+                "R:R:1081:socks",
+                Error::UnsupportedCombination("socks".to_string(), "reversed".to_string()),
+            ),
+            (
+                "R:socks",
+                Error::UnsupportedCombination("socks".to_string(), "reversed".to_string()),
+            ),
+            (
+                "R:9050:socks",
+                Error::UnsupportedCombination("socks".to_string(), "reversed".to_string()),
+            ),
+            (
+                "R:127.0.0.1:1081:socks",
+                Error::UnsupportedCombination("socks".to_string(), "reversed".to_string()),
+            ),
+            (
+                "R:http",
+                Error::UnsupportedCombination("http".to_string(), "reversed".to_string()),
             ),
         ];
         for (s, expected) in tests {
