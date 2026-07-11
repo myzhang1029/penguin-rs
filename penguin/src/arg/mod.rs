@@ -419,6 +419,7 @@ mod tests {
                     local_addr: LocalSpec::Inet((crate::arg::default_host!(unspec), 1234)),
                     remote_addr: RemoteSpec::Inet((crate::arg::default_host!(local), 1234)),
                     protocol: Protocol::Tcp,
+                    reversed: false,
                 }]
             );
         }
@@ -466,11 +467,13 @@ mod tests {
                         local_addr: LocalSpec::Stdio,
                         remote_addr: RemoteSpec::Inet(("localhost".to_string(), 53)),
                         protocol: Protocol::Udp,
+                        reversed: false,
                     },
                     Remote {
                         local_addr: LocalSpec::Inet(("192.168.1.1".to_string(), 8080)),
                         remote_addr: RemoteSpec::Inet(("localhost".to_string(), 80)),
                         protocol: Protocol::Tcp,
+                        reversed: false,
                     },
                 ]
             );
