@@ -123,7 +123,7 @@ impl AsyncWrite for MuxStream {
         Poll::Ready(Ok(buf.len()))
     }
 
-    #[tracing::instrument(skip(_cx), level = "trace", fields(flow_id = self.flow_id))]
+    #[tracing::instrument(skip(_cx), level = "trace", fields(flow_id = %format_args!("{:08x}", self.flow_id)))]
     #[inline]
     fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         // All writes are flushed immediately, so we don't need to do anything
@@ -133,7 +133,7 @@ impl AsyncWrite for MuxStream {
     /// Close the write end of the stream (`shutdown(SHUT_WR)`).
     /// This function will send a [`Finish`](crate::frame::OpCode::Finish) frame
     /// to the remote peer.
-    #[tracing::instrument(skip(_cx), level = "trace", fields(flow_id = self.flow_id))]
+    #[tracing::instrument(skip(_cx), level = "trace", fields(flow_id = %format_args!("{:08x}", self.flow_id)))]
     #[inline]
     fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.do_shutdown();
@@ -202,7 +202,7 @@ impl MuxStream {
     ///
     /// # Panics
     /// This function will panic if the internal buffer still has data.
-    #[tracing::instrument(skip_all, level = "trace", fields(flow_id = self.flow_id))]
+    #[tracing::instrument(skip_all, level = "trace", fields(flow_id = %format_args!("{:08x}", self.flow_id)))]
     #[inline]
     pub fn poll_for_push(&mut self, cx: &mut Context<'_>) -> Poll<usize> {
         let Some(next) = ready!(self.rx_frame_rx.poll_recv(cx)) else {
@@ -236,7 +236,7 @@ impl MuxStream {
     }
 
     /// Write a `Push` frame to the stream.
-    #[tracing::instrument(skip_all, level = "trace", fields(flow_id = self.flow_id))]
+    #[tracing::instrument(skip_all, level = "trace", fields(flow_id = %format_args!("{:08x}", self.flow_id)))]
     #[inline]
     pub fn poll_write_push(&self, cx: &Context<'_>, buf: &[u8]) -> Poll<Option<()>> {
         let Some(()) = ready!(self.poll_obtain_write_permission(cx)) else {
@@ -535,7 +535,7 @@ where
 {
     type Output = io::Result<(usize, usize)>;
 
-    #[tracing::instrument(skip_all, level = "trace", fields(flow_id = self.us.flow_id))]
+    #[tracing::instrument(skip_all, level = "trace", fields(flow_id = %format_args!("{:08x}", self.us.flow_id)))]
     #[inline]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let r = self.as_mut().poll_read_us(cx);

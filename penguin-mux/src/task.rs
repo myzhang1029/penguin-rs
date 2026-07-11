@@ -396,7 +396,7 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
     ///   - If the receiver is closed or the port does not exist, send back a
     ///     `Reset` frame.
     #[expect(clippy::too_many_lines)]
-    #[tracing::instrument(skip_all, fields(flow_id), level = "debug")]
+    #[tracing::instrument(skip_all, fields(flow_id = %format_args!("{:08x}", frame.id)), level = "debug")]
     #[inline]
     async fn process_frame(&self, frame: Frame<'static>, ignore_bind: bool) -> Result<()> {
         trace!("received frame {frame:?}");
@@ -404,7 +404,6 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
             id: flow_id,
             payload,
         } = frame;
-        tracing::Span::current().record("flow_id", format_args!("{flow_id:08x}"));
         let send_rst = || {
             self.tx_msg_tx.send(Frame::new_reset(flow_id).into()).ok()
             // Error only happens if the `frame_tx` channel is closed, at which point
