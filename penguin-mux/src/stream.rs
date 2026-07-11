@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-#[cfg(feature = "std")]
-use crate::frame;
 use crate::frame::Frame;
 use crate::loom::{Arc, AtomicBool, AtomicU32, AtomicWaker, Ordering};
 use crate::ws::Message;
@@ -21,9 +19,12 @@ use futures_util::future::FusedFuture;
 #[cfg(feature = "std")]
 use std::io::{self, ErrorKind::BrokenPipe};
 #[cfg(feature = "std")]
-use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite};
+use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, BufReader, ReadBuf};
 use tokio::sync::mpsc;
 use tracing::{debug, trace, warn};
+
+#[cfg(feature = "std")]
+const BUF_SIZE: usize = 8192;
 
 /// All parameters of a stream channel
 pub struct MuxStream {
@@ -358,30 +359,43 @@ impl MuxStream {
     /// data loss.
     #[inline]
     #[cfg(all(feature = "std", feature = "tokio-io-util"))]
-    pub fn into_copy_bidirectional<RW>(
-        self,
-        other: RW,
-    ) -> CopyBidirectional<tokio::io::BufReader<RW>>
+    pub fn into_copy_bidirectional<RW>(self, other: RW) -> CopyBidirectional<RW>
     where
         RW: AsyncRead + AsyncWrite,
-    {
-        let other_bufreader = tokio::io::BufReader::new(other);
-        self.into_copy_bidirectional_with_buf(other_bufreader)
-    }
-
-    /// See [`into_copy_bidirectional`](Self::into_copy_bidirectional). This version allows you to
-    /// provide your own read buffer for the other side.
-    #[inline]
-    #[cfg(feature = "std")]
-    pub const fn into_copy_bidirectional_with_buf<BRW>(self, other: BRW) -> CopyBidirectional<BRW>
-    where
-        BRW: AsyncBufRead + AsyncWrite,
     {
         CopyBidirectional {
             us: self,
             other,
+            buffer: alloc::vec![0u8; BUF_SIZE].into_boxed_slice(),
+            buf_pos: 0,
+            saved_read_other_error: None,
             read_state: ReadState::Transferring(0),
-            write_state: WriteState::Transferring(0),
+            write_state: WriteState::Transferring(0, true),
+        }
+    }
+
+    /// See [`into_copy_bidirectional`](Self::into_copy_bidirectional), but with an [`BufReader`] instance
+    /// that might contain some leftover data in its internal buffer.
+    #[inline]
+    #[cfg(feature = "std")]
+    pub fn into_copy_bidirectional_with_leftover<RW>(
+        self,
+        other: BufReader<RW>,
+    ) -> CopyBidirectional<RW>
+    where
+        RW: AsyncRead + AsyncWrite,
+    {
+        let mut buffer = alloc::vec![0u8; BUF_SIZE].into_boxed_slice();
+        let buf_pos = other.buffer().len();
+        buffer[..buf_pos].copy_from_slice(other.buffer());
+        CopyBidirectional {
+            us: self,
+            other: other.into_inner(),
+            buffer,
+            buf_pos,
+            saved_read_other_error: None,
+            read_state: ReadState::Transferring(0),
+            write_state: WriteState::Transferring(0, true),
         }
     }
 }
@@ -401,7 +415,7 @@ enum ReadState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WriteState {
     // Peer has more data
-    Transferring(usize),
+    Transferring(usize, bool),
     // Peer is done
     Done(usize),
 }
@@ -413,6 +427,14 @@ pin_project_lite::pin_project! {
         us: MuxStream,
         #[pin]
         other: RW,
+        buffer: alloc::boxed::Box<[u8]>,
+        // To indicate where to start writing (NOT where to start the frame payload: always index 0)
+        // This is used for
+        // 1. the leftover data from `MuxStream::into_copy_bidirectional_with_leftover`
+        // 2. when `poll_obtain_write_permission` says no and `poll_write_us` needs to try again
+        buf_pos: usize,
+        // For when the other side's read returns an error but we still have data to drain into our side
+        saved_read_other_error: Option<io::Error>,
         read_state: ReadState,
         write_state: WriteState,
     }
@@ -421,7 +443,7 @@ pin_project_lite::pin_project! {
 #[cfg(feature = "std")]
 impl<RW> CopyBidirectional<RW>
 where
-    RW: AsyncBufRead + AsyncWrite,
+    RW: AsyncRead + AsyncWrite,
 {
     #[tracing::instrument(skip_all, level = "trace")]
     #[inline]
@@ -465,65 +487,107 @@ where
         }
     }
 
+    /// Read the other side into the buffer until the buffer is full or the other side returns `Pending`.
+    ///
+    /// # Returns
+    /// - `Poll::Ready(Ok(true))` if the buffer is full
+    /// - `Poll::Ready(Ok(false))` if the other side is EOF
+    /// - `Poll::Pending` if the other side is not ready to read, in which case the buffer may be partially filled
+    /// - `Poll::Ready(Err(e))` if the other side returns an error, in which case the buffer may be partially filled
+    ///
+    /// The task will be woken up only if the returned value is `Poll::Pending`.
     #[inline]
-    fn poll_write_us(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<usize>> {
-        let this = self.project();
-        match *this.write_state {
-            WriteState::Transferring(mut written_amt) => {
-                // Means that the peer still wants to send us data
-                let mut other = this.other;
-                // Initial poll
-                trace!("polling other");
-                let Poll::Ready(res) = other.as_mut().poll_fill_buf(cx) else {
-                    // Even the first poll returns `Pending`. Might want to flush away some data
+    fn poll_read_other_fill_buf_until_pending(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<io::Result<bool>> {
+        let mut this = self.as_mut().project();
+        let mut readbuf = ReadBuf::new(&mut this.buffer[*this.buf_pos..]);
+        let mut filled_len = 0;
+        while readbuf.remaining() > 0 {
+            if this
+                .other
+                .as_mut()
+                .poll_read(cx, &mut readbuf)?
+                .is_pending()
+            {
+                trace!("other is pending");
+                if filled_len == 0 {
                     trace!("flushing other");
-                    ready!(other.as_mut().poll_flush(cx))?;
-                    // Still fine to return `Pending` here because `poll_fill_buf` has our waker
+                    ready!(this.other.poll_flush(cx))?;
+                    // Return `Pending` and `poll_read` and `poll_flush` have our waker
                     return Poll::Pending;
-                };
-                let new_buf = res?;
-                if new_buf.is_empty() {
-                    // The other side is EOF'd
-                    this.us.do_shutdown();
-                    *this.write_state = WriteState::Done(written_amt);
-                    return Poll::Ready(Ok(written_amt));
                 }
-                // If we return `Pending` here, since we did not consume any data, the next
-                // `poll_fill_buf` will return the same data and we will try to send it again.
-                ready!(this.us.poll_obtain_write_permission(cx)).ok_or(BrokenPipe)?;
-                let mut msg_payload = Vec::from(Frame::new_push(this.us.flow_id, new_buf));
-                let processed = new_buf.len();
-                let mut cumulated_len = processed;
-                other.as_mut().consume(processed);
-                // Check if we can squeeze a bit more data from the other side to send in the same frame
-                let mut should_shutdown = false;
-                while let Poll::Ready(Ok(new_buf)) = other.as_mut().poll_fill_buf(cx) {
-                    if new_buf.is_empty() {
-                        // The other side is EOF'd, send what we have and then shutdown
-                        should_shutdown = true;
-                        break;
+                // Not returning `Pending` because we have already read some data in previous iterations
+                // Not EOF either because `poll_read` said `Pending`
+                return Poll::Ready(Ok(true));
+            }
+            // Else: not pending
+            let filled_this_time = readbuf.filled().len() - filled_len;
+            trace!("read other {filled_this_time} bytes");
+            filled_len += filled_this_time;
+            *this.buf_pos += filled_this_time;
+            if filled_this_time == 0 {
+                // EOF
+                return Poll::Ready(Ok(false));
+            }
+        }
+        Poll::Ready(Ok(true))
+    }
+
+    #[inline]
+    fn poll_write_us(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<usize>> {
+        match self.write_state {
+            WriteState::Transferring(mut written_amt, mut should_poll_other_again) => {
+                // Means that the peer still wants to send us data
+                loop {
+                    // Always try to read something from the other side unless the buffer is full
+                    // or they have already EOF'd or errored.
+                    // in the hope that we will get a larger chunk to send in one frame.
+                    if should_poll_other_again {
+                        // Delay processing the Err variant until we flush away all the data we have
+                        match ready!(self.as_mut().poll_read_other_fill_buf_until_pending(cx)) {
+                            Err(e) => {
+                                *self.as_mut().project().saved_read_other_error = Some(e);
+                                should_poll_other_again = false;
+                            }
+                            Ok(not_eof) => should_poll_other_again = not_eof,
+                        }
                     }
-                    let processed = new_buf.len();
-                    frame::append_push_data(&mut msg_payload, new_buf);
-                    cumulated_len += processed;
-                    other.as_mut().consume(processed);
+                    let this = self.as_mut().project();
+                    // As long as there is something to send, try to send it
+                    if *this.buf_pos > 0 {
+                        debug_assert!(*this.buf_pos <= this.buffer.len());
+                        ready!(this.us.poll_obtain_write_permission(cx)).ok_or(BrokenPipe)?;
+                        // Send everything until the last filled byte. Note that we do NOT
+                        // start from `buf_pos`. See the comment in `CopyBidirectional.buf_pos`
+                        let buf = &this.buffer[..*this.buf_pos];
+                        let len = *this.buf_pos;
+                        let msg = Frame::new_push(this.us.flow_id, buf).into();
+                        this.us.tx_msg_tx.send(msg).or(Err(BrokenPipe))?;
+                        // Good, stuff got sent. Reset the buffer position to 0 for the next read.
+                        *this.buf_pos = 0;
+                        trace!("wrote us {len} bytes");
+                        written_amt += len;
+                        *this.write_state =
+                            WriteState::Transferring(written_amt, should_poll_other_again);
+                    }
+                    // loop back when the result from `poll_read_other_fill_buf_until_pending` is `true`
+                    // (i.e. the buffer is full)
+                    if *this.buf_pos == 0 && !should_poll_other_again {
+                        // The other side is EOF'd, we are done
+                        this.us.do_shutdown();
+                        *this.write_state = WriteState::Done(written_amt);
+                        break Poll::Ready(
+                            this.saved_read_other_error
+                                .take()
+                                .map_or(Ok(written_amt), Err),
+                        );
+                    }
                 }
-                this.us
-                    .tx_msg_tx
-                    .send(Message::Binary(msg_payload.into()))
-                    .or(Err(BrokenPipe))?;
-                written_amt += cumulated_len;
-                if should_shutdown {
-                    this.us.do_shutdown();
-                    *this.write_state = WriteState::Done(written_amt);
-                    return Poll::Ready(Ok(written_amt));
-                }
-                // Else: we exited the loop because `poll_fill_buf` returned `Pending`
-                // We return `Pending` and `poll_fill_buf` has our waker
-                *this.write_state = WriteState::Transferring(written_amt);
-                Poll::Pending
             }
             WriteState::Done(written_amt) => Poll::Ready(Ok(written_amt)),
+            // It is slightly not ideal that we cannot use `saved_read_other_error` here, since `std::io::Error` is `!Clone`.
         }
     }
 }
@@ -531,7 +595,7 @@ where
 #[cfg(feature = "std")]
 impl<RW> Future for CopyBidirectional<RW>
 where
-    RW: AsyncBufRead + AsyncWrite,
+    RW: AsyncRead + AsyncWrite,
 {
     type Output = io::Result<(usize, usize)>;
 
@@ -547,7 +611,7 @@ where
 #[cfg(feature = "std")]
 impl<RW> FusedFuture for CopyBidirectional<RW>
 where
-    RW: AsyncBufRead + AsyncWrite,
+    RW: AsyncRead + AsyncWrite,
 {
     #[inline]
     fn is_terminated(&self) -> bool {

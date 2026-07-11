@@ -13,7 +13,7 @@ use penguin_socks::{Error as SocksError, magics, v4, v5};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use thiserror::Error;
-use tokio::io::{AsyncBufRead, AsyncRead, AsyncReadExt, AsyncWrite, BufReader};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, BufReader};
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
@@ -54,7 +54,7 @@ where
             result = listener.accept() => {
                 // A failed accept() is a fatal error and should be propagated.
                 let stream = result.map_err(super::FatalError::ClientIo)?;
-                socks_jobs.spawn(on_socks_accept_wrapped(Box::new(BufReader::new(stream)), lhost, hr));
+                socks_jobs.spawn(on_socks_accept_wrapped(BufReader::new(stream), lhost, hr));
             }
         }
     }
@@ -62,7 +62,7 @@ where
 
 #[inline]
 async fn on_socks_accept_wrapped<RW>(
-    bufreader: Box<BufReader<RW>>,
+    bufreader: BufReader<RW>,
     local_addr: &str,
     hr: &'static HandlerResources,
 ) -> Result<(), FatalError>
@@ -86,7 +86,7 @@ where
 /// We need to be able to request additional channels, so we need `hr`
 #[tracing::instrument(skip(bufreader, hr), level = "trace")]
 async fn on_socks_accept<RW>(
-    mut bufreader: Box<BufReader<RW>>,
+    mut bufreader: BufReader<RW>,
     local_addr: &str,
     hr: &'static HandlerResources,
 ) -> Result<(), Error>
@@ -98,18 +98,18 @@ where
         .await
         .map_err(|e| SocksError::ProcessSocksRequest("read version", e))?;
     match version {
-        magics::VER_4 => socks4(bufreader.as_mut(), hr).await,
-        magics::VER_5 => socks5(bufreader.as_mut(), local_addr, hr).await,
+        magics::VER_4 => socks4(bufreader, hr).await,
+        magics::VER_5 => socks5(bufreader, local_addr, hr).await,
         version => Err(Error::Socks(SocksError::SocksVersion(version))),
     }
 }
 
 #[tracing::instrument(skip_all, fields(host, port, cmd))]
-async fn socks4<RW>(stream: &mut RW, hr: &HandlerResources) -> Result<(), Error>
+async fn socks4<RW>(mut stream: BufReader<RW>, hr: &HandlerResources) -> Result<(), Error>
 where
-    RW: AsyncBufRead + AsyncWrite + Unpin,
+    RW: AsyncRead + AsyncWrite + Unpin,
 {
-    let (command, rhost, rport) = v4::read_request(stream).await?;
+    let (command, rhost, rport) = v4::read_request(&mut stream).await?;
     tracing::Span::current().record("host", format_args!("{}", String::from_utf8_lossy(&rhost)));
     tracing::Span::current().record("port", rport);
     tracing::Span::current().record("cmd", command);
@@ -123,33 +123,33 @@ where
             .or(Err(FatalError::RequestStream))?;
         handle_connect(stream, rhost.into(), rport, stream_command_tx_permit, false).await
     } else {
-        v4::write_response(stream, magics::REP_V4_FAIL).await?;
+        v4::write_response(&mut stream, magics::REP_V4_FAIL).await?;
         Err(Error::Socks(SocksError::InvalidCommand(command)))
     }
 }
 
 #[tracing::instrument(skip_all, fields(host, port, cmd, local = %local_addr))]
 async fn socks5<RW>(
-    stream: &mut RW,
+    mut stream: BufReader<RW>,
     local_addr: &str,
     hr: &'static HandlerResources,
 ) -> Result<(), Error>
 where
-    RW: AsyncBufRead + AsyncWrite + Unpin,
+    RW: AsyncRead + AsyncWrite + Unpin,
 {
     // Complete the handshake
-    let methods = v5::read_auth_methods(stream).await?;
+    let methods = v5::read_auth_methods(&mut stream).await?;
     if !methods.contains(&magics::AUTH_NOAUTH) {
         // Send back NO ACCEPTABLE METHODS
         // Note that we are not compliant with RFC 1928 here, as we MUST
         // support GSSAPI and SHOULD support USERNAME/PASSWORD
-        v5::write_auth_method(stream, magics::AUTH_NOACCEPT).await?;
+        v5::write_auth_method(&mut stream, magics::AUTH_NOACCEPT).await?;
         return Err(Error::OtherAuth);
     }
     // Send back NO AUTHENTICATION REQUIRED
-    v5::write_auth_method(stream, magics::AUTH_NOAUTH).await?;
+    v5::write_auth_method(&mut stream, magics::AUTH_NOAUTH).await?;
     // Read the request
-    let (command, rhost, rport) = v5::read_request(stream).await?;
+    let (command, rhost, rport) = v5::read_request(&mut stream).await?;
     tracing::Span::current().record("host", format_args!("{}", String::from_utf8_lossy(&rhost)));
     tracing::Span::current().record("port", rport);
     tracing::Span::current().record("cmd", command);
@@ -166,10 +166,10 @@ where
             handle_connect(stream, rhost.into(), rport, stream_command_tx_permit, true).await
         }
         // UDP ASSOCIATE
-        magics::CMD_ASSOC => handle_associate(stream, local_addr, hr).await,
+        magics::CMD_ASSOC => handle_associate(&mut stream, local_addr, hr).await,
         // We don't support BIND because I can't ask the remote host to bind
         _ => {
-            v5::write_response_unspecified(stream, magics::REP_CMDUNSUP).await?;
+            v5::write_response_unspecified(&mut stream, magics::REP_CMDUNSUP).await?;
             Err(Error::Socks(SocksError::InvalidCommand(command)))
         }
     }
@@ -177,14 +177,14 @@ where
 
 #[tracing::instrument(skip_all, level = "trace")]
 async fn handle_connect<RW>(
-    stream: &mut RW,
+    mut stream: BufReader<RW>,
     rhost: Bytes,
     rport: u16,
     stream_command_tx_permit: mpsc::Permit<'_, StreamCommand>,
     version_is_5: bool,
 ) -> Result<(), Error>
 where
-    RW: AsyncBufRead + AsyncWrite + Unpin,
+    RW: AsyncRead + AsyncWrite + Unpin,
 {
     // Establish a connection to the remote host
     let channel = request_tcp_channel(stream_command_tx_permit, rhost, rport)
@@ -192,13 +192,13 @@ where
         .or(Err(FatalError::MainLoopExitWithoutSendingStream))?;
     // Send back a successful response
     if version_is_5 {
-        v5::write_response_unspecified(stream, magics::REP_SUCC).await?;
+        v5::write_response_unspecified(&mut stream, magics::REP_SUCC).await?;
     } else {
-        v4::write_response(stream, magics::REP_V4_SUCC).await?;
+        v4::write_response(&mut stream, magics::REP_V4_SUCC).await?;
     }
     trace!("SOCKS starting copy");
     channel
-        .into_copy_bidirectional_with_buf(stream)
+        .into_copy_bidirectional_with_leftover(stream)
         .await
         .map_err(Error::DataTransfer)?;
     Ok(())
