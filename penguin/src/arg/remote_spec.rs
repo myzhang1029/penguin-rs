@@ -6,29 +6,39 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use thiserror::Error;
 
-#[cfg(not(feature = "default-is-ipv6"))]
 /// Default host for local and unspecified addresses.
+#[cfg(not(feature = "default-is-ipv6"))]
 macro_rules! default_host {
-    (local) => {
-        String::from("127.0.0.1")
+    (local, str) => {
+        "127.0.0.1"
     };
-    (unspec) => {
-        String::from("0.0.0.0")
+    (unspec, str) => {
+        "0.0.0.0"
+    };
+    ($kw:ident) => {
+        ::std::string::String::from($crate::arg::default_host!($kw, str))
+    };
+    ([$kw:ident]) => {
+        $crate::arg::default_host!($kw, str)
     };
 }
 #[cfg(feature = "default-is-ipv6")]
-/// Default host for local and unspecified addresses.
 macro_rules! default_host {
-    (local) => {
-        String::from("::1")
+    (local, str) => {
+        "::1"
     };
-    (unspec) => {
-        String::from("::")
+    (unspec, str) => {
+        "::"
+    };
+    ($kw:ident) => {
+        ::std::string::String::from($crate::arg::default_host!($kw, str))
+    };
+    ([$kw:ident]) => {
+        concat!("[", $crate::arg::default_host!($kw, str), "]")
     };
 }
 
-// Export this macro for use in tests
-#[cfg(all(test, feature = "client"))]
+#[cfg(feature = "client")]
 pub(crate) use default_host;
 
 /// Default SOCKS port
@@ -457,8 +467,8 @@ mod tests {
                 "3000",
                 format!(
                     "{}:3000:{}:3000/tcp",
-                    add_brackets!(default_host!(unspec)),
-                    add_brackets!(default_host!(local))
+                    default_host!([unspec]),
+                    default_host!([local])
                 ),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(unspec), 3000)),
@@ -470,8 +480,8 @@ mod tests {
                 "4000/udp",
                 format!(
                     "{}:4000:{}:4000/udp",
-                    add_brackets!(default_host!(unspec)),
-                    add_brackets!(default_host!(local))
+                    default_host!([unspec]),
+                    default_host!([local])
                 ),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(unspec), 4000)),
@@ -481,10 +491,7 @@ mod tests {
             ),
             (
                 "google.com:80",
-                format!(
-                    "{}:80:google.com:80/tcp",
-                    add_brackets!(default_host!(unspec))
-                ),
+                format!("{}:80:google.com:80/tcp", default_host!([unspec])),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(unspec), 80)),
                     remote_addr: RemoteSpec::Inet((String::from("google.com"), 80)),
@@ -495,7 +502,7 @@ mod tests {
                 "テスト.テスト:80",
                 format!(
                     "{}:80:XN--ZCKZAH.XN--ZCKZAH:80/tcp",
-                    add_brackets!(default_host!(unspec))
+                    default_host!([unspec])
                 ),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(unspec), 80)),
@@ -505,10 +512,7 @@ mod tests {
             ),
             (
                 "8080:example.com:80",
-                format!(
-                    "{}:8080:example.com:80/tcp",
-                    add_brackets!(default_host!(unspec))
-                ),
+                format!("{}:8080:example.com:80/tcp", default_host!([unspec])),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(unspec), 8080)),
                     remote_addr: RemoteSpec::Inet((String::from("example.com"), 80)),
@@ -517,10 +521,7 @@ mod tests {
             ),
             (
                 "socks",
-                format!(
-                    "{}:{SOCKS_DEFAULT_PORT}:socks/tcp",
-                    add_brackets!(default_host!(local))
-                ),
+                format!("{}:{SOCKS_DEFAULT_PORT}:socks/tcp", default_host!([local])),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(local), SOCKS_DEFAULT_PORT)),
                     remote_addr: RemoteSpec::Socks,
@@ -529,7 +530,7 @@ mod tests {
             ),
             (
                 "9050:socks",
-                format!("{}:9050:socks/tcp", add_brackets!(default_host!(local))),
+                format!("{}:9050:socks/tcp", default_host!([local])),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(local), 9050)),
                     remote_addr: RemoteSpec::Socks,
@@ -547,10 +548,7 @@ mod tests {
             ),
             (
                 "http",
-                format!(
-                    "{}:{HTTP_DEFAULT_PORT}:http/TCP",
-                    add_brackets!(default_host!(local))
-                ),
+                format!("{}:{HTTP_DEFAULT_PORT}:http/TCP", default_host!([local])),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(local), HTTP_DEFAULT_PORT)),
                     remote_addr: RemoteSpec::Http,
@@ -559,7 +557,7 @@ mod tests {
             ),
             (
                 "8888:http",
-                format!("{}:8888:http/tcp", add_brackets!(default_host!(local))),
+                format!("{}:8888:http/tcp", default_host!([local])),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(local), 8888)),
                     remote_addr: RemoteSpec::Http,
@@ -579,7 +577,7 @@ mod tests {
                 "tproxy",
                 format!(
                     "{}:{TPROXY_DEFAULT_PORT}:tproxy/tcp",
-                    add_brackets!(default_host!(local))
+                    default_host!([local])
                 ),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(local), TPROXY_DEFAULT_PORT)),
@@ -591,7 +589,7 @@ mod tests {
                 "tproxy/udp",
                 format!(
                     "{}:{TPROXY_DEFAULT_PORT}:tproxy/udp",
-                    add_brackets!(default_host!(local))
+                    default_host!([local])
                 ),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(local), TPROXY_DEFAULT_PORT)),
@@ -601,7 +599,7 @@ mod tests {
             ),
             (
                 "5000:tproxy",
-                format!("{}:5000:tproxy/tcp", add_brackets!(default_host!(local))),
+                format!("{}:5000:tproxy/tcp", default_host!([local])),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(local), 5000)),
                     remote_addr: RemoteSpec::Tproxy,
@@ -610,7 +608,7 @@ mod tests {
             ),
             (
                 "4567:tproxy/udp",
-                format!("{}:4567:tproxy/udp", add_brackets!(default_host!(local))),
+                format!("{}:4567:tproxy/udp", default_host!([local])),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(local), 4567)),
                     remote_addr: RemoteSpec::Tproxy,
@@ -646,10 +644,7 @@ mod tests {
             ),
             (
                 "[unix:/tmp/socket]:8080",
-                format!(
-                    "[unix:/tmp/socket]:{}:8080/tcp",
-                    add_brackets!(default_host!(local))
-                ),
+                format!("[unix:/tmp/socket]:{}:8080/tcp", default_host!([local])),
                 Remote {
                     local_addr: LocalSpec::DomainSocket(PathBuf::from("/tmp/socket")),
                     remote_addr: RemoteSpec::Inet((default_host!(local), 8080)),
@@ -694,7 +689,7 @@ mod tests {
             ),
             (
                 "1.1.1.1:53/udp",
-                format!("{}:53:1.1.1.1:53/udp", add_brackets!(default_host!(unspec))),
+                format!("{}:53:1.1.1.1:53/udp", default_host!([unspec])),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(unspec), 53)),
                     remote_addr: RemoteSpec::Inet((String::from("1.1.1.1"), 53)),
@@ -712,10 +707,7 @@ mod tests {
             ),
             (
                 "22:example.com:22",
-                format!(
-                    "{}:22:example.com:22/tcp",
-                    add_brackets!(default_host!(unspec))
-                ),
+                format!("{}:22:example.com:22/tcp", default_host!([unspec])),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(unspec), 22)),
                     remote_addr: RemoteSpec::Inet((String::from("example.com"), 22)),
@@ -726,7 +718,7 @@ mod tests {
                 "5444:example.테스트:5442",
                 format!(
                     "{}:5444:example.XN--9T4B11YI5A:5442/tcp",
-                    add_brackets!(default_host!(unspec))
+                    default_host!([unspec])
                 ),
                 Remote {
                     local_addr: LocalSpec::Inet((default_host!(unspec), 5444)),
@@ -785,7 +777,7 @@ mod tests {
             ),
             (
                 "stdio:443",
-                format!("stdio:{}:443/tcp", add_brackets!(default_host!(local))),
+                format!("stdio:{}:443/tcp", default_host!([local])),
                 Remote {
                     local_addr: LocalSpec::Stdio,
                     remote_addr: RemoteSpec::Inet((default_host!(local), 443)),
@@ -794,7 +786,7 @@ mod tests {
             ),
             (
                 "stdio:5353/udp",
-                format!("stdio:{}:5353/udp", add_brackets!(default_host!(local))),
+                format!("stdio:{}:5353/udp", default_host!([local])),
                 Remote {
                     local_addr: LocalSpec::Stdio,
                     remote_addr: RemoteSpec::Inet((default_host!(local), 5353)),

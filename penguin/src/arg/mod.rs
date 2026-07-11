@@ -9,6 +9,7 @@ mod bind_addr;
 #[cfg(feature = "client")]
 mod header;
 #[cfg(feature = "client")]
+#[macro_use]
 mod remote_spec;
 #[cfg(feature = "client")]
 mod server_url;
@@ -26,7 +27,7 @@ pub use self::{
     server_url::ServerUrl,
 };
 // Export this macro for use in tests
-#[cfg(all(test, feature = "client"))]
+#[cfg(feature = "client")]
 pub(crate) use self::remote_spec::default_host;
 
 #[cfg(feature = "acme")]
@@ -94,7 +95,74 @@ pub enum Commands {
     Server(ServerArgs),
 }
 
-// Descriptions are mainly directly stripped from myzhang1029/penguin
+#[cfg(feature = "client")]
+const REMOTE_SPEC_HELP: &str = concat!(
+    r#"Remote connections tunneled through the server, each of which come in the form:
+
+[R:][LOCAL_SPEC:]REMOTE_SPEC[/PROTOCOL]
+
+where
+
+- LOCAL_SPEC is { [LOCAL_HOST:]LOCAL_PORT | stdio | \[unix:PATH\] }
+- REMOTE_SPEC is { [REMOTE_HOST:]REMOTE_PORT | socks | http | tproxy }
+- PROTOCOL is { tcp | udp }
+
+When REMOTE_HOST is omitted, it defaults to `"#,
+    default_host!([local]),
+    r#"` (server localhost).
+When LOCAL_HOST is omitted, it defaults to `"#,
+    default_host!([unspec]),
+    r#"` (all interfaces),
+with the exception of `socks`, `http`, and `tproxy` remotes, whose default LOCAL_HOST is
+`"#,
+    default_host!([local]),
+    r#"` (client localhost).
+When LOCAL_PORT is omitted, it defaults to REMOTE_PORT.
+When PROTOCOL is omitted, it defaults to `tcp`.
+
+LOCAL_HOST and REMOTE_HOST must be enclosed in brackets if they are IPv6 addresses, e.g. `[::1]`.
+
+Examples:
+- 3000
+- R:3000/udp
+- example.com:3000
+- 3000:google.com:80
+- R:192.168.0.5:3000:google.com:80
+- socks
+- 5000:socks
+- stdio:example.com:22
+- 1.1.1.1:53/udp
+- tproxy/udp
+- 5000:tproxy
+- [::1]:12345:tproxy/udp
+
+When REMOTE_SPEC is `socks`, penguin listens on `LOCAL_HOST:LOCAL_PORT` and
+acts as a SOCKS4/SOCKS5 proxy server (both versions supported).
+The default LOCAL_PORT of a `socks` remote is `1080`. `socks` remotes cannot be UDP.
+
+When REMOTE_SPEC is `http`, penguin listens on `LOCAL_HOST:LOCAL_PORT` and
+acts as an HTTP proxy server (GET or CONNECT).
+The default LOCAL_PORT of an `http` remote is `8080`. `http` remotes cannot be UDP.
+
+When REMOTE_SPEC is `tproxy`, penguin listens on `LOCAL_HOST:LOCAL_PORT` and
+forwards traffic to the destination address obtained from `SO_ORIGINAL_DST` (Linux)
+or `/dev/pf` (BSD, in progress). The default LOCAL_PORT of a `tproxy` remote is `1234`.
+`tproxy` remotes cannot be used with `stdio` or `unix` sockets.
+
+When LOCAL_SPEC is `stdio`, penguin connects standard input/output of this program with
+the remote. For example, one may use this option with ssh ProxyCommand:
+```sh
+ssh -o ProxyCommand='penguin client <server> stdio:%h:%p'
+    user@example.com
+```
+to connect to an SSH server through the tunnel.
+Only one `stdio` remote is allowed, but it can be combined with other remotes.
+
+When LOCAL_SPEC is a unix domain socket, penguin listens on the specified path instead of
+an `AF_INET[6]` socket. Unix UDP sockets and Windows named pipes are not supported.
+"#
+);
+
 /// Penguin client arguments.
 #[expect(clippy::doc_markdown, clippy::pub_underscore_fields)]
 #[cfg(feature = "client")]
@@ -102,73 +170,11 @@ pub enum Commands {
 pub struct ClientArgs {
     /// URL to the penguin server.
     pub server: ServerUrl,
-    /// Remote connections tunneled through the server, each of
-    /// which come in the form:
-    /// ```text
-    /// <local-host>:<local-port>:<remote-host>:<remote-port>/<protocol>
-    /// ```
-    /// - local-host defaults to `0.0.0.0` (all interfaces).
-    ///
-    /// - local-port defaults to remote-port.
-    ///
-    /// - remote-port is required*.
-    ///
-    /// - remote-host defaults to `127.0.0.1` (server localhost).
-    ///
-    /// - protocol defaults to `tcp`.
-    ///
-    /// which shares <remote-host>:<remote-port> from the server to the client
-    /// as <local-host>:<local-port>.
-    ///
-    /// example remotes:
-    /// ```text
-    /// 3000
-    ///
-    /// example.com:3000
-    ///
-    /// 3000:google.com:80
-    ///
-    /// 192.168.0.5:3000:google.com:80
-    ///
-    /// socks
-    ///
-    /// 5000:socks
-    ///
-    /// stdio:example.com:22
-    ///
-    /// 1.1.1.1:53/udp
-    ///
-    /// tproxy/udp
-    ///
-    /// 5000:tproxy
-    ///
-    /// [::1]:12345:tproxy/udp
-    /// ```
-    ///
-    /// The word `socks` may be in the place of `remote-host` and `remote-port`
-    /// to create a SOCKS4/SOCKS5 proxy server. The default local host and
-    /// port for a `socks` remote is `127.0.0.1:1080`. `socks` remotes cannot
-    /// be UDP.
-    ///
-    /// The word `tproxy` may be in the place of `remote-host` and `remote-port`.
-    /// The default local host and port for a `tproxy` remote is
-    /// `127.0.0.1:1234`. This only works on Linux. The local listening socket
-    /// will have the `IP_TRANSPARENT` option set, allowing it to accept
-    /// connections to any IP address, which will then be tunneled to the
-    /// server. `tproxy` cannot be used with `stdio`.
-    ///
-    /// When `stdio` is used as `local-host`, the tunnel will connect standard
-    /// input/output of this program with the remote. This is useful when
-    /// combined with ssh ProxyCommand. You can use
-    /// ```sh
-    /// ssh -o ProxyCommand='penguin client <server> stdio:%h:%p'
-    ///     user@example.com
-    /// ```
-    /// to connect to an SSH server through the tunnel.
+    /// Remote port forwarding specifications.
     // The underlying port is a `u16`, which gives `0..=65535`; 0 is not allowed,
     // so the range of available ports is `1..=65535`,
     // giving 65535 available remotes.
-    #[arg(num_args=1..=65535, required = true)]
+    #[arg(num_args=1..=65535, required = true, help = crate::arg::REMOTE_SPEC_HELP)]
     pub remote: Vec<Remote>,
     /// An optional Pre-Shared Key for WebSocket upgrade to present
     /// to the server in the HTTP header X-Penguin-PSK. If the server requires
