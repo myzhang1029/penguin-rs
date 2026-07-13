@@ -1,5 +1,8 @@
 #![allow(unused_imports)]
 
+#[cfg(all(feature = "client", feature = "server"))]
+mod tcptunnelchecker;
+
 #[cfg(feature = "client")]
 use crate::arg::{Remote, ServerUrl};
 use crate::tls::make_tls_identity;
