@@ -60,6 +60,7 @@ webpki-roots = { version = "1", optional = true }
 [dev-dependencies]
 divan = "0.1"
 tempfile = "3"
+paste = "1"
 # Hack; https://stackoverflow.com/q/73015087
 rusty-penguin = { path = ".", default-features = false, features = ["__dev-dependencies"] }
 
