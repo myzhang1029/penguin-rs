@@ -2,26 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
 
-#[cfg(feature = "std")]
-use crate::frame;
 use crate::frame::Frame;
 use crate::loom::{Arc, AtomicBool, AtomicU32, AtomicWaker, Ordering};
 use crate::ws::Message;
-#[cfg(feature = "std")]
-use alloc::vec::Vec;
 use bytes::Bytes;
 use core::fmt;
-#[cfg(feature = "std")]
-use core::pin::Pin;
 use core::task::{Context, Poll, ready};
-#[cfg(feature = "std")]
-use cow_bytes::CowBytes;
-#[cfg(feature = "std")]
-use futures_util::future::FusedFuture;
-#[cfg(feature = "std")]
-use std::io::{self, ErrorKind::BrokenPipe};
-#[cfg(feature = "std")]
-use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tracing::{debug, trace, warn};
 
@@ -82,115 +68,6 @@ impl Drop for MuxStream {
             .send(self.flow_id)
             // Maybe the task has already exited, who knows
             .ok();
-    }
-}
-
-#[cfg(feature = "std")]
-impl AsyncRead for MuxStream {
-    /// Read data from the stream.
-    /// There are two cases where this function gives EOF:
-    /// 1. One `Frame` contains an empty payload.
-    /// 2. `Sink`'s sender is dropped.
-    #[tracing::instrument(skip_all, level = "trace")]
-    #[inline]
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        let got = ready!(self.as_mut().poll_fill_buf(cx))?;
-        let amt = core::cmp::min(got.len(), buf.remaining());
-        buf.put_slice(&got[..amt]);
-        self.consume(amt);
-        Poll::Ready(Ok(()))
-    }
-}
-
-#[cfg(feature = "std")]
-impl AsyncWrite for MuxStream {
-    /// Write data to the stream. Each invocation of this method will send a
-    /// separate frame in a new [`Message`](crate::ws::Message), so it may be
-    /// beneficial to wrap it in a [`BufWriter`](tokio::io::BufWriter) where
-    /// appropriate.
-    #[inline]
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        ready!(self.as_ref().poll_write_push(cx, buf)).ok_or(BrokenPipe)?;
-        trace!("sent a frame");
-        Poll::Ready(Ok(buf.len()))
-    }
-
-    #[tracing::instrument(skip(_cx), level = "trace", fields(flow_id = %format_args!("{:08x}", self.flow_id)))]
-    #[inline]
-    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        // All writes are flushed immediately, so we don't need to do anything
-        Poll::Ready(Ok(()))
-    }
-
-    /// Close the write end of the stream (`shutdown(SHUT_WR)`).
-    /// This function will send a [`Finish`](crate::frame::OpCode::Finish) frame
-    /// to the remote peer.
-    #[tracing::instrument(skip(_cx), level = "trace", fields(flow_id = %format_args!("{:08x}", self.flow_id)))]
-    #[inline]
-    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        self.do_shutdown();
-        Poll::Ready(Ok(()))
-    }
-
-    #[inline]
-    fn poll_write_vectored(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        bufs: &[io::IoSlice<'_>],
-    ) -> Poll<io::Result<usize>> {
-        let mut slices = Vec::with_capacity(bufs.len());
-        let mut total_len = 0;
-        for buf in bufs {
-            total_len += buf.len();
-            slices.push(CowBytes::Temporary(buf));
-        }
-        let Some(()) = ready!(self.poll_obtain_write_permission(cx)) else {
-            return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
-        };
-        let frame = Frame::new_push_vectored(self.flow_id, slices).into();
-        self.tx_msg_tx
-            .send(frame)
-            .map_err(|_| io::Error::from(io::ErrorKind::BrokenPipe))?;
-        Poll::Ready(Ok(total_len))
-    }
-
-    #[inline]
-    fn is_write_vectored(&self) -> bool {
-        true
-    }
-}
-
-#[cfg(feature = "std")]
-impl AsyncBufRead for MuxStream {
-    /// Poll for another `Push` frame to fill the internal buffer.
-    /// Returns a reference to the internal buffer on success.
-    /// See [`AsyncBufRead::poll_fill_buf`].
-    #[inline]
-    fn poll_fill_buf(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<&[u8]>> {
-        if self.buf.is_empty() {
-            trace!("polling the stream");
-            if ready!(self.as_mut().poll_for_push(cx)) == 0 {
-                return Poll::Ready(Ok(&[]));
-            }
-        } else {
-            trace!("using the remaining buffer");
-        }
-
-        Poll::Ready(Ok(&self.get_mut().buf))
-    }
-
-    #[inline]
-    fn consume(mut self: Pin<&mut Self>, amt: usize) {
-        use bytes::Buf;
-        self.buf.advance(amt);
     }
 }
 
@@ -341,218 +218,354 @@ impl MuxStream {
             .ok()?;
         Some(())
     }
+}
 
-    /// A specialized version of [`tokio::io::copy_bidirectional`] that
-    /// works better on a `MuxStream` because of the lack of an extra copy.
-    ///
-    /// The returned future will resolve to `io::Result<(u64, u64)>` where
-    /// the first value is the number of bytes read from `self` and
-    /// the second value is the number of bytes written to `self`.
-    ///
-    /// # Errors
-    /// Returns the underlying error if any of the IO operations fail. When
-    /// this happens, some data from the other side might be lost.
-    ///
-    /// # Cancel Safety
-    /// This function is not cancel safe. Cancelling the future might cause
-    /// data loss.
-    #[inline]
-    #[cfg(all(feature = "std", feature = "tokio-io-util"))]
-    pub fn into_copy_bidirectional<RW>(
-        self,
-        other: RW,
-    ) -> CopyBidirectional<tokio::io::BufReader<RW>>
-    where
-        RW: AsyncRead + AsyncWrite,
-    {
-        let other_bufreader = tokio::io::BufReader::new(other);
-        self.into_copy_bidirectional_with_buf(other_bufreader)
+#[cfg(feature = "std")]
+mod tokio_io_impls {
+    use super::MuxStream;
+    use crate::frame::Frame;
+    use alloc::vec::Vec;
+    use core::pin::Pin;
+    use core::task::{Context, Poll, ready};
+    use cow_bytes::CowBytes;
+    use std::io;
+    use std::io::ErrorKind::BrokenPipe;
+    use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite};
+    use tracing::trace;
+
+    impl AsyncRead for MuxStream {
+        /// Read data from the stream.
+        /// There are two cases where this function gives EOF:
+        /// 1. One `Frame` contains an empty payload.
+        /// 2. `Sink`'s sender is dropped.
+        #[tracing::instrument(skip_all, level = "trace")]
+        #[inline]
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            let got = ready!(self.as_mut().poll_fill_buf(cx))?;
+            let amt = core::cmp::min(got.len(), buf.remaining());
+            buf.put_slice(&got[..amt]);
+            self.consume(amt);
+            Poll::Ready(Ok(()))
+        }
     }
 
-    /// See [`into_copy_bidirectional`](Self::into_copy_bidirectional). This version allows you to
-    /// provide your own read buffer for the other side.
-    #[inline]
-    #[cfg(feature = "std")]
-    pub const fn into_copy_bidirectional_with_buf<BRW>(self, other: BRW) -> CopyBidirectional<BRW>
-    where
-        BRW: AsyncBufRead + AsyncWrite,
-    {
-        CopyBidirectional {
-            us: self,
-            other,
-            read_state: ReadState::Transferring(0),
-            write_state: WriteState::Transferring(0),
+    impl AsyncWrite for MuxStream {
+        /// Write data to the stream. Each invocation of this method will send a
+        /// separate frame in a new [`Message`](crate::ws::Message), so it may be
+        /// beneficial to wrap it in a [`BufWriter`](tokio::io::BufWriter) where
+        /// appropriate.
+        #[inline]
+        fn poll_write(
+            self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            ready!(self.as_ref().poll_write_push(cx, buf)).ok_or(BrokenPipe)?;
+            trace!("sent a frame");
+            Poll::Ready(Ok(buf.len()))
+        }
+
+        #[tracing::instrument(skip(_cx), level = "trace", fields(flow_id = %format_args!("{:08x}", self.flow_id)))]
+        #[inline]
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            // All writes are flushed immediately, so we don't need to do anything
+            Poll::Ready(Ok(()))
+        }
+
+        /// Close the write end of the stream (`shutdown(SHUT_WR)`).
+        /// This function will send a [`Finish`](crate::frame::OpCode::Finish) frame
+        /// to the remote peer.
+        #[tracing::instrument(skip(_cx), level = "trace", fields(flow_id = %format_args!("{:08x}", self.flow_id)))]
+        #[inline]
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            self.do_shutdown();
+            Poll::Ready(Ok(()))
+        }
+
+        #[inline]
+        fn poll_write_vectored(
+            self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            bufs: &[io::IoSlice<'_>],
+        ) -> Poll<io::Result<usize>> {
+            let mut slices = Vec::with_capacity(bufs.len());
+            let mut total_len = 0;
+            for buf in bufs {
+                total_len += buf.len();
+                slices.push(CowBytes::Temporary(buf));
+            }
+            let Some(()) = ready!(self.poll_obtain_write_permission(cx)) else {
+                return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
+            };
+            let frame = Frame::new_push_vectored(self.flow_id, slices).into();
+            self.tx_msg_tx
+                .send(frame)
+                .map_err(|_| io::Error::from(io::ErrorKind::BrokenPipe))?;
+            Poll::Ready(Ok(total_len))
+        }
+
+        #[inline]
+        fn is_write_vectored(&self) -> bool {
+            true
+        }
+    }
+
+    impl AsyncBufRead for MuxStream {
+        /// Poll for another `Push` frame to fill the internal buffer.
+        /// Returns a reference to the internal buffer on success.
+        /// See [`AsyncBufRead::poll_fill_buf`].
+        #[inline]
+        fn poll_fill_buf(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+        ) -> Poll<io::Result<&[u8]>> {
+            if self.buf.is_empty() {
+                trace!("polling the stream");
+                if ready!(self.as_mut().poll_for_push(cx)) == 0 {
+                    return Poll::Ready(Ok(&[]));
+                }
+            } else {
+                trace!("using the remaining buffer");
+            }
+
+            Poll::Ready(Ok(&self.get_mut().buf))
+        }
+
+        #[inline]
+        fn consume(mut self: Pin<&mut Self>, amt: usize) {
+            use bytes::Buf;
+            self.buf.advance(amt);
         }
     }
 }
 
 #[cfg(feature = "std")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ReadState {
-    // We have data
-    Transferring(usize),
-    // We are done and we are trying to shut down the other side
-    ShuttingDown(usize),
-    // The other side is EOF'd
-    Done(usize),
-}
+mod copy_tools {
+    use super::MuxStream;
+    use crate::frame::{self, Frame};
+    use crate::ws::Message;
+    use alloc::vec::Vec;
+    use core::pin::Pin;
+    use core::task::{Context, Poll, ready};
+    use futures_util::future::FusedFuture;
+    use std::io;
+    use std::io::ErrorKind::BrokenPipe;
+    use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite};
+    use tracing::trace;
 
-#[cfg(feature = "std")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum WriteState {
-    // Peer has more data
-    Transferring(usize),
-    // Peer is done
-    Done(usize),
-}
+    impl MuxStream {
+        /// A specialized version of [`tokio::io::copy_bidirectional`] that
+        /// works better on a `MuxStream` because of the lack of an extra copy.
+        ///
+        /// The returned future will resolve to `io::Result<(u64, u64)>` where
+        /// the first value is the number of bytes read from `self` and
+        /// the second value is the number of bytes written to `self`.
+        ///
+        /// # Errors
+        /// Returns the underlying error if any of the IO operations fail. When
+        /// this happens, some data from the other side might be lost.
+        ///
+        /// # Cancel Safety
+        /// This function is not cancel safe. Cancelling the future might cause
+        /// data loss.
+        #[inline]
+        #[cfg(feature = "tokio-io-util")]
+        pub fn into_copy_bidirectional<RW>(
+            self,
+            other: RW,
+        ) -> CopyBidirectional<tokio::io::BufReader<RW>>
+        where
+            RW: AsyncRead + AsyncWrite,
+        {
+            let other_bufreader = tokio::io::BufReader::new(other);
+            self.into_copy_bidirectional_with_buf(other_bufreader)
+        }
 
-#[cfg(feature = "std")]
-pin_project_lite::pin_project! {
-    #[derive(Debug)]
-    pub struct CopyBidirectional<RW> {
-        us: MuxStream,
-        #[pin]
-        other: RW,
-        read_state: ReadState,
-        write_state: WriteState,
-    }
-}
-
-#[cfg(feature = "std")]
-impl<RW> CopyBidirectional<RW>
-where
-    RW: AsyncBufRead + AsyncWrite,
-{
-    #[tracing::instrument(skip_all, level = "trace")]
-    #[inline]
-    fn poll_read_us(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<usize>> {
-        let mut this = self.project();
-        match *this.read_state {
-            ReadState::Transferring(mut read_amt) => {
-                // Loop until we are done or that some of the polls return `Pending`
-                loop {
-                    trace!("polling us");
-                    let new_buf = ready!(Pin::new(&mut *this.us).poll_fill_buf(cx))?;
-                    if new_buf.is_empty() {
-                        // Our side EOF
-                        *this.read_state = ReadState::ShuttingDown(read_amt);
-                        ready!(this.other.poll_shutdown(cx))?;
-                        // If they return `Poll::Ready(Ok(()))`, we are done
-                        *this.read_state = ReadState::Done(read_amt);
-                        break Poll::Ready(Ok(read_amt));
-                    }
-                    // We either still have data or we got some new data. Try to
-                    // write it to the other side.
-                    let processed = ready!(this.other.as_mut().poll_write(cx, new_buf))?;
-                    Pin::new(&mut *this.us).consume(processed);
-                    read_amt += processed;
-                    *this.read_state = ReadState::Transferring(read_amt);
-                    // If this write finished it, the next `poll_fill` will fetch
-                    // more frames. Otherwise, the next loop will simply try to write
-                    // the rest of the buffer.
-                }
+        /// See [`into_copy_bidirectional`](Self::into_copy_bidirectional). This version allows you to
+        /// provide your own read buffer for the other side.
+        #[inline]
+        pub const fn into_copy_bidirectional_with_buf<BRW>(
+            self,
+            other: BRW,
+        ) -> CopyBidirectional<BRW>
+        where
+            BRW: AsyncBufRead + AsyncWrite,
+        {
+            CopyBidirectional {
+                us: self,
+                other,
+                read_state: ReadState::Transferring(0),
+                write_state: WriteState::Transferring(0),
             }
-            ReadState::ShuttingDown(read_amt) => {
-                // We are done reading, but we need to shut down the other side
-                // and wait for EOF
-                ready!(this.other.poll_shutdown(cx))?;
-                *this.read_state = ReadState::Done(read_amt);
-                Poll::Ready(Ok(read_amt))
-            }
-            // We are done reading and the other side is EOF'd
-            // We don't need to do anything here
-            ReadState::Done(read_amt) => Poll::Ready(Ok(read_amt)),
         }
     }
 
-    #[inline]
-    fn poll_write_us(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<usize>> {
-        let this = self.project();
-        match *this.write_state {
-            WriteState::Transferring(mut written_amt) => {
-                // Means that the peer still wants to send us data
-                let mut other = this.other;
-                // Initial poll
-                trace!("polling other");
-                let Poll::Ready(res) = other.as_mut().poll_fill_buf(cx) else {
-                    // Even the first poll returns `Pending`. Might want to flush away some data
-                    trace!("flushing other");
-                    ready!(other.as_mut().poll_flush(cx))?;
-                    // Still fine to return `Pending` here because `poll_fill_buf` has our waker
-                    return Poll::Pending;
-                };
-                let new_buf = res?;
-                if new_buf.is_empty() {
-                    // The other side is EOF'd
-                    this.us.do_shutdown();
-                    *this.write_state = WriteState::Done(written_amt);
-                    return Poll::Ready(Ok(written_amt));
-                }
-                // If we return `Pending` here, since we did not consume any data, the next
-                // `poll_fill_buf` will return the same data and we will try to send it again.
-                ready!(this.us.poll_obtain_write_permission(cx)).ok_or(BrokenPipe)?;
-                let mut msg_payload = Vec::from(Frame::new_push(this.us.flow_id, new_buf));
-                let processed = new_buf.len();
-                let mut cumulated_len = processed;
-                other.as_mut().consume(processed);
-                // Check if we can squeeze a bit more data from the other side to send in the same frame
-                let mut should_shutdown = false;
-                while let Poll::Ready(Ok(new_buf)) = other.as_mut().poll_fill_buf(cx) {
-                    if new_buf.is_empty() {
-                        // The other side is EOF'd, send what we have and then shutdown
-                        should_shutdown = true;
-                        break;
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum ReadState {
+        // We have data
+        Transferring(usize),
+        // We are done and we are trying to shut down the other side
+        ShuttingDown(usize),
+        // The other side is EOF'd
+        Done(usize),
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum WriteState {
+        // Peer has more data
+        Transferring(usize),
+        // Peer is done
+        Done(usize),
+    }
+
+    pin_project_lite::pin_project! {
+        #[derive(Debug)]
+        pub struct CopyBidirectional<RW> {
+            us: MuxStream,
+            #[pin]
+            other: RW,
+            read_state: ReadState,
+            write_state: WriteState,
+        }
+    }
+
+    impl<RW> CopyBidirectional<RW>
+    where
+        RW: AsyncBufRead + AsyncWrite,
+    {
+        #[tracing::instrument(skip_all, level = "trace")]
+        #[inline]
+        fn poll_read_us(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<usize>> {
+            let mut this = self.project();
+            match *this.read_state {
+                ReadState::Transferring(mut read_amt) => {
+                    // Loop until we are done or that some of the polls return `Pending`
+                    loop {
+                        trace!("polling us");
+                        let new_buf = ready!(Pin::new(&mut *this.us).poll_fill_buf(cx))?;
+                        if new_buf.is_empty() {
+                            // Our side EOF
+                            *this.read_state = ReadState::ShuttingDown(read_amt);
+                            ready!(this.other.poll_shutdown(cx))?;
+                            // If they return `Poll::Ready(Ok(()))`, we are done
+                            *this.read_state = ReadState::Done(read_amt);
+                            break Poll::Ready(Ok(read_amt));
+                        }
+                        // We either still have data or we got some new data. Try to
+                        // write it to the other side.
+                        let processed = ready!(this.other.as_mut().poll_write(cx, new_buf))?;
+                        Pin::new(&mut *this.us).consume(processed);
+                        read_amt += processed;
+                        *this.read_state = ReadState::Transferring(read_amt);
+                        // If this write finished it, the next `poll_fill` will fetch
+                        // more frames. Otherwise, the next loop will simply try to write
+                        // the rest of the buffer.
                     }
+                }
+                ReadState::ShuttingDown(read_amt) => {
+                    // We are done reading, but we need to shut down the other side
+                    // and wait for EOF
+                    ready!(this.other.poll_shutdown(cx))?;
+                    *this.read_state = ReadState::Done(read_amt);
+                    Poll::Ready(Ok(read_amt))
+                }
+                // We are done reading and the other side is EOF'd
+                // We don't need to do anything here
+                ReadState::Done(read_amt) => Poll::Ready(Ok(read_amt)),
+            }
+        }
+
+        #[inline]
+        fn poll_write_us(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<usize>> {
+            let this = self.project();
+            match *this.write_state {
+                WriteState::Transferring(mut written_amt) => {
+                    // Means that the peer still wants to send us data
+                    let mut other = this.other;
+                    // Initial poll
+                    trace!("polling other");
+                    let Poll::Ready(res) = other.as_mut().poll_fill_buf(cx) else {
+                        // Even the first poll returns `Pending`. Might want to flush away some data
+                        trace!("flushing other");
+                        ready!(other.as_mut().poll_flush(cx))?;
+                        // Still fine to return `Pending` here because `poll_fill_buf` has our waker
+                        return Poll::Pending;
+                    };
+                    let new_buf = res?;
+                    if new_buf.is_empty() {
+                        // The other side is EOF'd
+                        this.us.do_shutdown();
+                        *this.write_state = WriteState::Done(written_amt);
+                        return Poll::Ready(Ok(written_amt));
+                    }
+                    // If we return `Pending` here, since we did not consume any data, the next
+                    // `poll_fill_buf` will return the same data and we will try to send it again.
+                    ready!(this.us.poll_obtain_write_permission(cx)).ok_or(BrokenPipe)?;
+                    let mut msg_payload = Vec::from(Frame::new_push(this.us.flow_id, new_buf));
                     let processed = new_buf.len();
-                    frame::append_push_data(&mut msg_payload, new_buf);
-                    cumulated_len += processed;
+                    let mut cumulated_len = processed;
                     other.as_mut().consume(processed);
+                    // Check if we can squeeze a bit more data from the other side to send in the same frame
+                    let mut should_shutdown = false;
+                    while let Poll::Ready(Ok(new_buf)) = other.as_mut().poll_fill_buf(cx) {
+                        if new_buf.is_empty() {
+                            // The other side is EOF'd, send what we have and then shutdown
+                            should_shutdown = true;
+                            break;
+                        }
+                        let processed = new_buf.len();
+                        frame::append_push_data(&mut msg_payload, new_buf);
+                        cumulated_len += processed;
+                        other.as_mut().consume(processed);
+                    }
+                    this.us
+                        .tx_msg_tx
+                        .send(Message::Binary(msg_payload.into()))
+                        .or(Err(BrokenPipe))?;
+                    written_amt += cumulated_len;
+                    if should_shutdown {
+                        this.us.do_shutdown();
+                        *this.write_state = WriteState::Done(written_amt);
+                        return Poll::Ready(Ok(written_amt));
+                    }
+                    // Else: we exited the loop because `poll_fill_buf` returned `Pending`
+                    // We return `Pending` and `poll_fill_buf` has our waker
+                    *this.write_state = WriteState::Transferring(written_amt);
+                    Poll::Pending
                 }
-                this.us
-                    .tx_msg_tx
-                    .send(Message::Binary(msg_payload.into()))
-                    .or(Err(BrokenPipe))?;
-                written_amt += cumulated_len;
-                if should_shutdown {
-                    this.us.do_shutdown();
-                    *this.write_state = WriteState::Done(written_amt);
-                    return Poll::Ready(Ok(written_amt));
-                }
-                // Else: we exited the loop because `poll_fill_buf` returned `Pending`
-                // We return `Pending` and `poll_fill_buf` has our waker
-                *this.write_state = WriteState::Transferring(written_amt);
-                Poll::Pending
+                WriteState::Done(written_amt) => Poll::Ready(Ok(written_amt)),
             }
-            WriteState::Done(written_amt) => Poll::Ready(Ok(written_amt)),
         }
     }
-}
 
-#[cfg(feature = "std")]
-impl<RW> Future for CopyBidirectional<RW>
-where
-    RW: AsyncBufRead + AsyncWrite,
-{
-    type Output = io::Result<(usize, usize)>;
+    impl<RW> Future for CopyBidirectional<RW>
+    where
+        RW: AsyncBufRead + AsyncWrite,
+    {
+        type Output = io::Result<(usize, usize)>;
 
-    #[tracing::instrument(skip_all, level = "trace", fields(flow_id = %format_args!("{:08x}", self.us.flow_id)))]
-    #[inline]
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let r = self.as_mut().poll_read_us(cx)?;
-        let w = self.poll_write_us(cx)?;
-        Poll::Ready(Ok((ready!(r), ready!(w))))
+        #[tracing::instrument(skip_all, level = "trace", fields(flow_id = %format_args!("{:08x}", self.us.flow_id)))]
+        #[inline]
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            let r = self.as_mut().poll_read_us(cx)?;
+            let w = self.poll_write_us(cx)?;
+            Poll::Ready(Ok((ready!(r), ready!(w))))
+        }
     }
-}
 
-#[cfg(feature = "std")]
-impl<RW> FusedFuture for CopyBidirectional<RW>
-where
-    RW: AsyncBufRead + AsyncWrite,
-{
-    #[inline]
-    fn is_terminated(&self) -> bool {
-        // the underlying state machine can always be polled again without undesired side effects
-        false
+    impl<RW> FusedFuture for CopyBidirectional<RW>
+    where
+        RW: AsyncBufRead + AsyncWrite,
+    {
+        #[inline]
+        fn is_terminated(&self) -> bool {
+            // the underlying state machine can always be polled again without undesired side effects
+            false
+        }
     }
 }
 
@@ -564,6 +577,10 @@ mod tests {
     use crate::ws::Message::Binary;
     use alloc::vec;
     use core::pin::{Pin, pin};
+    #[cfg(feature = "std")]
+    use std::io;
+    #[cfg(feature = "std")]
+    use tokio::io::{AsyncRead, AsyncWrite};
     #[cfg(feature = "tokio-io-util")]
     use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadBuf};
 
