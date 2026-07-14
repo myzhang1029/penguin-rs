@@ -432,7 +432,7 @@ where
                 // Loop until we are done or that some of the polls return `Pending`
                 loop {
                     trace!("polling us");
-                    let new_buf = ready!(Pin::new(&mut this.us).poll_fill_buf(cx))?;
+                    let new_buf = ready!(Pin::new(&mut *this.us).poll_fill_buf(cx))?;
                     if new_buf.is_empty() {
                         // Our side EOF
                         *this.read_state = ReadState::ShuttingDown(read_amt);
@@ -444,7 +444,7 @@ where
                     // We either still have data or we got some new data. Try to
                     // write it to the other side.
                     let processed = ready!(this.other.as_mut().poll_write(cx, new_buf))?;
-                    Pin::new(&mut this.us).consume(processed);
+                    Pin::new(&mut *this.us).consume(processed);
                     read_amt += processed;
                     *this.read_state = ReadState::Transferring(read_amt);
                     // If this write finished it, the next `poll_fill` will fetch
