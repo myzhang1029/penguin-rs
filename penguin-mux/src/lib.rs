@@ -22,6 +22,7 @@ mod hashmap;
 mod loom;
 mod proto_version;
 mod stream;
+mod stream_tools;
 mod task;
 #[cfg(test)]
 mod tests;
