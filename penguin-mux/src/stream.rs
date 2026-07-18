@@ -661,10 +661,24 @@ mod tests {
     #[cfg(not(loom))]
     #[cfg(all(feature = "tokio-io-util", feature = "std"))]
     async fn test_flow_control() {
+        setup_logging();
+        test_flow_control_inner().await;
+    }
+
+    #[test]
+    #[cfg(loom)]
+    #[cfg(all(feature = "tokio-io-util", feature = "std"))]
+    fn test_flow_control_loom() {
+        loom::model(|| {
+            loom::future::block_on(test_flow_control_inner());
+        })
+    }
+
+    #[cfg(all(feature = "tokio-io-util", feature = "std"))]
+    async fn test_flow_control_inner() {
         const TEST_ACK_THRESHOLD: usize = 5;
         const TEST_ACK_THRESHOLD_U32: u32 = 5;
         assert_eq!(TEST_ACK_THRESHOLD, TEST_ACK_THRESHOLD_U32 as usize);
-        setup_logging();
         let (rx_frame_tx, rx_frame_rx) = mpsc::channel(TEST_ACK_THRESHOLD);
         let (tx_msg_tx, mut tx_msg_rx) = mpsc::unbounded_channel();
         let (dropped_flows_tx, _) = mpsc::unbounded_channel();
@@ -713,51 +727,54 @@ mod tests {
             panic!("Expected an `Acknowledge` frame");
         }
         // Now test with `copy_bidirectional`
-        let task = tokio::spawn(mux_stream.into_copy_bidirectional(other_stream));
-        for i in 0..2 * TEST_ACK_THRESHOLD {
-            debug!("sending frame {i}");
-            rx_frame_tx
-                .send(Bytes::from_static(b"hello"))
-                .await
-                .unwrap();
-        }
-        let Binary(msg) = tx_msg_rx.recv().await.unwrap() else {
-            panic!("Expected a binary message");
+        let copy_task = mux_stream.into_copy_bidirectional(other_stream);
+        let main_task = async {
+            for i in 0..2 * TEST_ACK_THRESHOLD {
+                debug!("sending frame {i}");
+                rx_frame_tx
+                    .send(Bytes::from_static(b"hello"))
+                    .await
+                    .unwrap();
+            }
+            let Binary(msg) = tx_msg_rx.recv().await.unwrap() else {
+                panic!("Expected a binary message");
+            };
+            let frame = Frame::try_from(msg).unwrap();
+            assert_eq!(frame.id, 1);
+            if let Payload::Acknowledge(ack) = frame.payload {
+                assert_eq!(ack, TEST_ACK_THRESHOLD_U32);
+            } else {
+                panic!("Expected an `Acknowledge` frame");
+            }
+            let Binary(msg) = tx_msg_rx.recv().await.unwrap() else {
+                panic!("Expected a binary message");
+            };
+            let frame = Frame::try_from(msg).unwrap();
+            assert_eq!(frame.id, 1);
+            if let Payload::Acknowledge(ack) = frame.payload {
+                assert_eq!(ack, TEST_ACK_THRESHOLD_U32);
+            } else {
+                panic!("Expected an `Acknowledge` frame");
+            }
+            // Check for data
+            let mut buf = [0u8; 5 * 2 * TEST_ACK_THRESHOLD];
+            let n = check_side.read_exact(&mut buf).await.unwrap();
+            assert_eq!(n, 5 * 2 * TEST_ACK_THRESHOLD);
+            assert_eq!(
+                &buf[..n],
+                b"hello".repeat(2 * TEST_ACK_THRESHOLD).as_slice()
+            );
+            drop(rx_frame_tx);
+            // Write in the other side
+            for i in 0..TEST_ACK_THRESHOLD {
+                debug!("sending data chunk {i}");
+                check_side.write_all(b"hello").await.unwrap();
+                check_side.flush().await.unwrap();
+            }
+            check_side.shutdown().await.unwrap();
         };
-        let frame = Frame::try_from(msg).unwrap();
-        assert_eq!(frame.id, 1);
-        if let Payload::Acknowledge(ack) = frame.payload {
-            assert_eq!(ack, TEST_ACK_THRESHOLD_U32);
-        } else {
-            panic!("Expected an `Acknowledge` frame");
-        }
-        let Binary(msg) = tx_msg_rx.recv().await.unwrap() else {
-            panic!("Expected a binary message");
-        };
-        let frame = Frame::try_from(msg).unwrap();
-        assert_eq!(frame.id, 1);
-        if let Payload::Acknowledge(ack) = frame.payload {
-            assert_eq!(ack, TEST_ACK_THRESHOLD_U32);
-        } else {
-            panic!("Expected an `Acknowledge` frame");
-        }
-        // Check for data
-        let mut buf = [0u8; 5 * 2 * TEST_ACK_THRESHOLD];
-        let n = check_side.read_exact(&mut buf).await.unwrap();
-        assert_eq!(n, 5 * 2 * TEST_ACK_THRESHOLD);
-        assert_eq!(
-            &buf[..n],
-            b"hello".repeat(2 * TEST_ACK_THRESHOLD).as_slice()
-        );
-        drop(rx_frame_tx);
-        // Write in the other side
-        for i in 0..TEST_ACK_THRESHOLD {
-            debug!("sending data chunk {i}");
-            check_side.write_all(b"hello").await.unwrap();
-            check_side.flush().await.unwrap();
-        }
-        check_side.shutdown().await.unwrap();
-        task.await.unwrap().unwrap();
+        let ((), r) = tokio::join!(main_task, copy_task);
+        r.unwrap();
         // Check that the data has been sent
         let mut buf = [0u8; 5 * TEST_ACK_THRESHOLD];
         while let Some(Binary(msg)) = tx_msg_rx.recv().await {
