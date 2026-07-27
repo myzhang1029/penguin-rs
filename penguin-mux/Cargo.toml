@@ -66,5 +66,5 @@ deadlock-detection = ["std", "parking_lot/deadlock_detection"]
 
 __dev-dependencies = ["tokio-rt", "tokio/macros", "tokio/net", "tokio/rt-multi-thread"]
 
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)', 'cfg(loom)'] }
+[lints]
+workspace = true

@@ -124,8 +124,8 @@ tproxy = ["dep:socket2"]
 # Enable HTTP proxy remote support
 http-proxy = ["dep:http-body-util", "hyper/client", "dep:hyper-util"]
 
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(dhat)', 'cfg(fuzzing)', 'cfg(loom)'] }
+[lints]
+workspace = true
 
 [package.metadata.deb]
 depends = "$auto"
