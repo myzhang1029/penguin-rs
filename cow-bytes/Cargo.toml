@@ -10,10 +10,10 @@ license = "Apache-2.0 OR GPL-3.0-or-later"
 keywords = ["buffers", "zero-copy", "io"]
 categories = ["network-programming", "data-structures", "no-std"]
 
-
 [dependencies]
-bytes = { version = "^1, >=1.11.1", default-features = false }
-derive_more = { version = "2", default-features = false, features = ["from", "is_variant"] }
+bytes = { workspace = true }
+derive_more = { workspace = true, features = ["from", "is_variant"] }
+
 [features]
 default = ["std"]
 std = ["bytes/std", "derive_more/std"]

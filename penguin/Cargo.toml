@@ -27,21 +27,21 @@ clap = { version = "4", features = ["cargo", "derive", "string"] }
 console-subscriber = { version = "0.5", features = ["parking_lot"], optional = true }
 derive_more = { version = "2", features = ["as_ref", "deref", "debug", "display", "from", "from_str"] }
 dn42-root-ca = { version = "1", optional = true }
-futures-util = { version = "0.3", default-features = false }
+futures-util = { workspace = true }
 http = "1"
-http-body-util = { version = "0.1", optional = true }
-hyper = { version = "1", features = ["server", "http1", "http2"], optional = true }
+http-body-util = { workspace = true, optional = true }
+hyper = { workspace = true, features = ["server", "http1", "http2"], optional = true }
 hyper-rustls = { version = "0.27", features = ["http1", "http2", "logging", "tls12"], default-features = false, optional = true }
 hyper-tls = { version = "0.6", features = ["alpn"], optional = true }
-hyper-util = { version = "0.1", features = ["client", "client-legacy", "server", "server-auto", "tokio"], optional = true }
+hyper-util = { workspace = true, features = ["client", "client-legacy", "server", "server-auto", "tokio"], optional = true }
 idna = "1"
 instant-acme = { version = "0.8", features = ["rcgen", "hyper-rustls"], default-features = false, optional = true }
 log = { version = "0.4", optional = true }
-nohash-hasher = { version = "0.2", optional = true }
-parking_lot = "0.12"
+nohash-hasher = { workspace = true, optional = true }
+parking_lot = { workspace = true }
 penguin-mux = { version = "0.8", path = "../penguin-mux", features = ["tungstenite"] }
 penguin-socks = { version = "0.1", path = "../penguin-socks", optional = true }
-rand = "0.10"
+rand = { workspace = true }
 rcgen = { version = "0.14", features = ["pem"], default-features = false, optional = true }
 rustls = { version = "^0.23, >=0.23.18", features = ["brotli", "logging", "std", "tls12"], default-features = false, optional = true }
 rustls-native-certs = { version = "0.8", optional = true }
@@ -49,17 +49,16 @@ rustls-pemfile = { version = "2", optional = true }
 rustls-webpki = { version = "^0.103, >=0.103.13", optional = true }
 sha1 = { version = "0.11", optional = true }
 socket2 = { version = "0.6", features = ["all"], optional = true }
-thiserror = "2"
-tokio = { version = "^1, >=1.23.1", features = ["fs", "io-util", "macros", "net", "parking_lot", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "parking_lot", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-native-tls = { version = "0.3", optional = true }
 tokio-rustls = { version = "0.26", features = ["logging", "tls12"], default-features = false, optional = true }
-tokio-tungstenite = { version = "0.30", features = ["handshake"], default-features = false }
-tracing = "0.1"
-tracing-subscriber = "^0.3, >=0.3.20"
+tokio-tungstenite = { workspace = true, features = ["handshake"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 webpki-roots = { version = "1", optional = true }
 
 [dev-dependencies]
-divan = "0.1"
 tempfile = "3"
 # Hack; https://stackoverflow.com/q/73015087
 rusty-penguin = { path = ".", default-features = false, features = ["__dev-dependencies"] }

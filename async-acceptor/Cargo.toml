@@ -11,8 +11,8 @@ keywords = ["async", "listener", "tokio"]
 categories = ["asynchronous"]
 
 [dependencies]
-futures-util = { version = "0.3", default-features = false }
-tokio = "^1, >=1.23.1"
+futures-util = { workspace = true }
+tokio = { workspace = true }
 
 [dev-dependencies]
 async-acceptor = { path = ".", features = ["__dev-dependencies"] }

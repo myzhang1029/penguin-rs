@@ -3,6 +3,22 @@ resolver = "3"
 members = ["penguin-mux", "penguin", "async-acceptor", "penguin-socks", "cow-bytes"]
 exclude = ["fuzz"]
 
+[workspace.dependencies]
+bytes = { version = "^1, >=1.11.1", default-features = false }
+derive_more = { version = "2", default-features = false }
+futures-util = { version = "0.3", default-features = false }
+http-body-util = "0.1"
+hyper = "1"
+hyper-util = "0.1"
+nohash-hasher = { version = "0.2", default-features = false }
+parking_lot = "0.12"
+rand = { version = "0.10", default-features = false }
+thiserror = { version = "2", default-features = false }
+tokio = "^1, >=1.23.1"
+tokio-tungstenite = { version = "0.30", default-features = false }
+tracing = { version = "0.1", features = ["attributes"], default-features = false }
+tracing-subscriber = "^0.3, >=0.3.20"
+
 [profile.release]
 strip = true
 codegen-units = 1

@@ -2121,7 +2121,6 @@ dependencies = [
  "console-subscriber",
  "derive_more",
  "dhat",
- "divan",
  "dn42-root-ca",
  "futures-util",
  "http",

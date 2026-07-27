@@ -11,9 +11,9 @@ keywords = ["async", "socks", "socks4", "socks5"]
 categories = ["network-programming"]
 
 [dependencies]
-bytes = "^1, >=1.11.1"
-thiserror = "2"
-tokio = { version = "^1, >=1.23.1", features = ["io-util"] }
+bytes = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["io-util"] }
 
 [dev-dependencies]
 penguin-socks = { path = ".", features = ["__dev-dependencies"] }
