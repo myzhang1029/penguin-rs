@@ -708,6 +708,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dn42-root-ca"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "51984ad3a3652471455fa382b213034a17830af47b25ef72eaf95b0832b9dda3"
+dependencies = [
+ "rustls-pki-types",
+]
+
+[[package]]
 name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2131,6 +2140,7 @@ dependencies = [
  "derive_more",
  "dhat",
  "divan",
+ "dn42-root-ca",
  "futures-util",
  "http",
  "http-body-util",

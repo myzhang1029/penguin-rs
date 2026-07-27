@@ -33,7 +33,7 @@ cargo nextest run --all-targets "$VERBOSE" --no-default-features --package pengu
 
 # Run cargo tests with more features on, permuting through TLS CA and rustls configurations
 for backend in ring aws-lc-rs; do
-  for root in "" system-roots webpki-roots "system-roots,webpki-roots"; do
+  for root in "" system-roots webpki-roots dn42-roots "system-roots,webpki-roots" "webpki-roots,dn42-roots" "system-roots,webpki-roots,dn42-roots"; do
     cargo nextest run --all-targets "$VERBOSE" --features "$TLS",$root,$backend,tests-real-internet4,tests-acme-has-pebble,penguin-binary,acme,default-is-ipv6,tokio-console,deadlock-detection --no-default-features
   done
 done

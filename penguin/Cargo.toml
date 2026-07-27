@@ -26,6 +26,7 @@ bytes = "^1, >=1.11.1"
 clap = { version = "4", features = ["cargo", "derive", "string"] }
 console-subscriber = { version = "0.5", features = ["parking_lot"], optional = true }
 derive_more = { version = "2", features = ["as_ref", "deref", "debug", "display", "from", "from_str"] }
+dn42-root-ca = { version = "1", optional = true }
 futures-util = { version = "0.3", default-features = false }
 http = "1"
 http-body-util = { version = "0.1", optional = true }
@@ -78,6 +79,7 @@ tls-native = ["dep:tokio-native-tls", "dep:hyper-tls"]
 # For rustls only: source of root certificates
 webpki-roots = ["dep:webpki-roots"]
 system-roots = ["dep:rustls-native-certs"]
+dn42-roots = ["dep:dn42-root-ca"]
 # Use ring or aws-lc-rs
 ring = ["instant-acme?/ring", "rcgen?/ring", "rustls/ring"]
 aws-lc-rs = ["instant-acme?/aws-lc-rs", "rcgen?/aws_lc_rs", "rustls/aws-lc-rs", "rustls/prefer-post-quantum", "rustls-webpki/aws-lc-rs"]

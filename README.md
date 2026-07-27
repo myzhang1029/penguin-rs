@@ -111,13 +111,16 @@ Executable features:
 - `tls-rustls` (default): use `rustls`
 - `system-roots` (default): use `rustls` with system CA. Has no effect if `tls-native` is enabled.
 - `webpki-roots`: use `rustls` with bundled webpki CA. Has no effect if `tls-native` is enabled.
+- `dn42-roots`: use `rustls` with the dn42 root CA. Has no effect if `nativetls` is enabled.
+  You likely would want to enable at least one of the other root CA features as well,
+  otherwise the resulting client would only accept dn42 domains.
 - `ring`: use `ring` as the crypto provider for `rustls`. Has no effect if `tls-native` is enabled.
 - `aws-lc-rs` (default): use `aws-lc-rs` as the crypto provider for `rustls`. Has no effect if `tls-native` is enabled.
 
 It is fine to enable both `system-roots` and `webpki-roots`, in which case the certificates
 from both sources will be merged (whatever doing so might be useful for).
 If neither `system-roots` nor `webpki-roots` is enabled, no root certificates will be available
-and the user would have to provide their own CA roots via the `--tls-ca` command line option.
+and the user would have to provide their own root CA bundle via the `--tls-ca` command line option.
 
 - `default-is-ipv6`: use `::`/`::1` instead of `0.0.0.0`/`127.0.0.1` when an IP address is omitted in the client command line
 

@@ -156,6 +156,8 @@ async fn generate_rustls_rootcertstore(
         }
         #[cfg(feature = "webpki-roots")]
         roots.extend(webpki_roots::TLS_SERVER_ROOTS.to_vec());
+        #[cfg(feature = "dn42-roots")]
+        roots.extend(dn42_root_ca::TLS_SERVER_ROOTS.to_vec());
     }
     Ok(roots)
 }
