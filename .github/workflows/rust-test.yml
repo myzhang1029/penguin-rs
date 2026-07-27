@@ -61,6 +61,7 @@ jobs:
 
     - name: Run cargo tests
       run: .github/workflows/full-test.sh ${{ matrix.tls }} ${{ matrix.config.name }}
+      shell: bash
       env:
         RUSTFLAGS: -Cinstrument-coverage
 
