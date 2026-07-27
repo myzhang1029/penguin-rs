@@ -731,7 +731,14 @@ mod tests {
         server_task.abort();
     }
 
-    #[cfg(any(feature = "tests-real-internet4", feature = "tests-real-internet6"))]
+    #[cfg(all(
+        any(feature = "tests-real-internet4", feature = "tests-real-internet6"),
+        any(
+            feature = "tls-native",
+            feature = "system-roots",
+            feature = "webpki-roots"
+        ),
+    ))]
     #[tokio::test]
     async fn test_backend_tls() {
         use std::sync::LazyLock;

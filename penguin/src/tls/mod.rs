@@ -5,16 +5,16 @@
 #[cfg(feature = "aws-lc-rs")]
 pub mod aws_lc_rs_chromium;
 mod maybe_tls;
-#[cfg(feature = "nativetls")]
+#[cfg(feature = "tls-native")]
 mod native;
-#[cfg(feature = "__rustls")]
+#[cfg(feature = "tls-rustls")]
 mod rustls;
 
-#[cfg(all(feature = "nativetls", feature = "acme"))]
+#[cfg(all(feature = "tls-native", feature = "acme"))]
 use self::native::make_server_config_from_pem;
-#[cfg(all(feature = "__rustls", feature = "acme"))]
+#[cfg(all(feature = "tls-rustls", feature = "acme"))]
 use self::rustls::make_server_config_from_pem;
-#[cfg(feature = "__rustls")]
+#[cfg(feature = "tls-rustls")]
 use ::rustls::pki_types::InvalidDnsNameError;
 use arc_swap::ArcSwap;
 use std::sync::Arc;
@@ -22,19 +22,19 @@ use thiserror::Error;
 #[cfg(any(feature = "client", test))]
 use tokio::io::{AsyncRead, AsyncWrite};
 
-#[cfg(all(feature = "__rustls", feature = "server"))]
+#[cfg(all(feature = "tls-rustls", feature = "server"))]
 pub use self::rustls::{HyperConnector, make_hyper_connector};
 #[expect(clippy::module_name_repetitions)]
-#[cfg(feature = "__rustls")]
+#[cfg(feature = "tls-rustls")]
 pub use self::rustls::{TlsIdentityInner, make_client_config, make_server_config};
-#[cfg(all(feature = "nativetls", feature = "server"))]
+#[cfg(all(feature = "tls-native", feature = "server"))]
 pub use native::{HyperConnector, make_hyper_connector};
-#[cfg(feature = "nativetls")]
+#[cfg(feature = "tls-native")]
 pub use native::{TlsIdentityInner, make_client_config, make_server_config};
 
-#[cfg(feature = "nativetls")]
+#[cfg(feature = "tls-native")]
 use tokio_native_tls::TlsStream;
-#[cfg(feature = "__rustls")]
+#[cfg(feature = "tls-rustls")]
 use tokio_rustls::TlsStream;
 
 pub use maybe_tls::MaybeTlsStream;
@@ -54,19 +54,19 @@ pub enum Error {
     TcpConnect(std::io::Error),
     /// Errors from `rustls`
     #[error("rustls error: {0}")]
-    #[cfg(feature = "__rustls")]
+    #[cfg(feature = "tls-rustls")]
     Rustls(#[from] ::rustls::Error),
     /// Could not determine the server name for SNI
-    #[cfg(feature = "__rustls")]
+    #[cfg(feature = "tls-rustls")]
     #[error("unable to determine server name for SNI")]
     DnsName(#[from] InvalidDnsNameError),
     /// Could not create a TLS verifier for `rustls`
     #[error("verifier error: {0}")]
-    #[cfg(feature = "__rustls")]
+    #[cfg(feature = "tls-rustls")]
     Verifier(#[from] ::rustls::client::VerifierBuilderError),
     /// Failed to parse certificates
     #[error("failed to parse certificates: {0}")]
-    #[cfg(feature = "nativetls")]
+    #[cfg(feature = "tls-native")]
     CertParse(#[from] tokio_native_tls::native_tls::Error),
     /// Unsupported feature
     #[error("{0} is not supported: {1}")]
@@ -115,12 +115,12 @@ where
 {
     let config =
         make_client_config(tls_cert, tls_key, tls_ca, tls_insecure, Some(&["http/1.1"])).await?;
-    #[cfg(feature = "nativetls")]
+    #[cfg(feature = "tls-native")]
     let tls_stream = {
         let connector = tokio_native_tls::TlsConnector::from(config);
         connector.connect(server_name, underlying_io).await?
     };
-    #[cfg(feature = "__rustls")]
+    #[cfg(feature = "tls-rustls")]
     let tls_stream = {
         let connector: tokio_rustls::TlsConnector = Arc::new(config).into();
         let server_name = ::rustls::pki_types::ServerName::try_from(server_name.to_string())?;

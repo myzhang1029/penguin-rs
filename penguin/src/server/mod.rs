@@ -47,7 +47,7 @@ pub enum Error {
     Io(#[from] std::io::Error),
     /// Additional `native-tls` errors
     #[error("TLS error: {0}")]
-    #[cfg(feature = "nativetls")]
+    #[cfg(feature = "tls-native")]
     NativeTls(#[from] tokio_native_tls::native_tls::Error),
     /// ACME client errors
     #[cfg(feature = "acme")]
@@ -236,9 +236,9 @@ pub async fn serve_connection_tls(
     tls_config: Arc<TlsIdentityInner>,
 ) {
     let tls_timeout = state.tls_timeout;
-    #[cfg(feature = "__rustls")]
+    #[cfg(feature = "tls-rustls")]
     let stream_future = tokio_rustls::TlsAcceptor::from(tls_config).accept(stream);
-    #[cfg(feature = "nativetls")]
+    #[cfg(feature = "tls-native")]
     let stream_future = tls_config.accept(stream);
 
     let stream = state.tls_timeout.timeout(stream_future).await;

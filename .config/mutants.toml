@@ -17,7 +17,8 @@ features = [
     "tests-real-internet4",
     "default-is-ipv6",
     "ring",
-    "rustls-native-roots",
+    "tls-rustls",
+    "system-roots",
 ]
 test_tool = "cargo"
 profile = "dev"

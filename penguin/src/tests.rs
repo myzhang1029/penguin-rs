@@ -9,7 +9,7 @@ use penguin_mux::timing::OptionalDuration;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::{LazyLock, OnceLock};
 use std::{str::FromStr, time::Duration};
-#[cfg(not(all(feature = "nativetls", any(target_os = "macos", target_os = "windows"))))]
+#[cfg(not(all(feature = "tls-native", any(target_os = "macos", target_os = "windows"))))]
 use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
@@ -56,7 +56,7 @@ fn make_client_args(servhost: &str, servport: u16, remotes: Vec<Remote>) -> arg:
 
 /// Generate a self-signed server cert into a temporary directory.
 /// Returns the path to the directory. The cert is named `cert.pem` and the key is named `privkey.pem`.
-#[cfg(not(all(feature = "nativetls", any(target_os = "macos", target_os = "windows"))))]
+#[cfg(not(all(feature = "tls-native", any(target_os = "macos", target_os = "windows"))))]
 async fn make_server_cert_ecdsa(dest: Option<&str>) -> (Option<TempDir>, rcgen::Certificate) {
     let cert_params = rcgen::CertificateParams::new(vec!["localhost".to_string()]).unwrap();
     let keypair = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P384_SHA384).unwrap();
@@ -436,7 +436,7 @@ async fn test_setting_outgoing_ip_works() {
 // `native_tls` on macOS and Windows doesn't support reading Ed25519 nor ECDSA-based certificates.
 #[tokio::test]
 #[cfg(all(feature = "client", feature = "server"))]
-#[cfg(not(all(feature = "nativetls", any(target_os = "macos", target_os = "windows"))))]
+#[cfg(not(all(feature = "tls-native", any(target_os = "macos", target_os = "windows"))))]
 async fn test_it_works_tls_simple() {
     static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
     static SERVER_ARGS: OnceLock<arg::ServerArgs> = OnceLock::new();
@@ -508,7 +508,7 @@ async fn test_it_works_tls_simple() {
 #[tokio::test]
 #[cfg(unix)]
 #[cfg(feature = "server")]
-#[cfg(not(all(feature = "nativetls", any(target_os = "macos", target_os = "windows"))))]
+#[cfg(not(all(feature = "tls-native", any(target_os = "macos", target_os = "windows"))))]
 async fn test_tls_reload() {
     static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
 
@@ -537,7 +537,7 @@ async fn test_tls_reload() {
     let stream = tls_connect(tcp_stream, "localhost", None, None, None, true)
         .await
         .unwrap();
-    #[cfg(feature = "nativetls")]
+    #[cfg(feature = "tls-native")]
     {
         let peer_cert = stream
             .get_ref()
@@ -548,7 +548,7 @@ async fn test_tls_reload() {
             .unwrap();
         assert_eq!(peer_cert, **cert.der());
     }
-    #[cfg(feature = "__rustls")]
+    #[cfg(feature = "tls-rustls")]
     {
         let (_, common_state) = stream.get_ref();
         let peer_cert = common_state.peer_certificates().unwrap();
@@ -577,7 +577,7 @@ async fn test_tls_reload() {
     let stream = tls_connect(tcp_stream, "localhost", None, None, None, true)
         .await
         .unwrap();
-    #[cfg(feature = "nativetls")]
+    #[cfg(feature = "tls-native")]
     {
         let peer_cert = stream
             .get_ref()
@@ -588,7 +588,7 @@ async fn test_tls_reload() {
             .unwrap();
         assert_eq!(peer_cert, **new_cert.der());
     }
-    #[cfg(feature = "__rustls")]
+    #[cfg(feature = "tls-rustls")]
     {
         let (_, common_state) = stream.get_ref();
         let peer_cert = common_state.peer_certificates().unwrap();
@@ -621,7 +621,7 @@ async fn check_http_host<T: AsyncRead + Unpin>(stream: &mut T, expected_host: &s
 // `native_tls` on macOS and Windows doesn't support reading Ed25519 nor ECDSA-based certificates.
 #[tokio::test]
 #[cfg(feature = "client")]
-#[cfg(not(all(feature = "nativetls", any(target_os = "macos", target_os = "windows"))))]
+#[cfg(not(all(feature = "tls-native", any(target_os = "macos", target_os = "windows"))))]
 async fn test_http_host_and_sni() {
     static CLIENT_ARGS_PLAIN: OnceLock<arg::ClientArgs> = OnceLock::new();
     static CLIENT_ARGS_HAS_HOSTNAME: OnceLock<arg::ClientArgs> = OnceLock::new();
@@ -642,9 +642,9 @@ async fn test_http_host_and_sni() {
         .await
         .unwrap()
         .load_full();
-    #[cfg(feature = "__rustls")]
+    #[cfg(feature = "tls-rustls")]
     let acceptor = tokio_rustls::TlsAcceptor::from(tls_cfg);
-    #[cfg(feature = "nativetls")]
+    #[cfg(feature = "tls-native")]
     let acceptor = tls_cfg;
 
     // The client will be in the task and the server will be the main task
@@ -714,7 +714,7 @@ async fn test_http_host_and_sni() {
     // First test: expect both Host to be the socket address and SNI to be unset
     let (stream, _) = listener.accept().await.unwrap();
     let mut tls_stream = acceptor.accept(stream).await.unwrap();
-    #[cfg(feature = "__rustls")]
+    #[cfg(feature = "tls-rustls")]
     {
         let sni = tls_stream.get_ref().1.server_name().map(|s| s.to_string());
         assert!(sni.is_none());
@@ -725,7 +725,7 @@ async fn test_http_host_and_sni() {
     // Second test: expect Host and SNI to be "test-hostname"
     let (stream, _) = listener.accept().await.unwrap();
     let mut tls_stream = acceptor.accept(stream).await.unwrap();
-    #[cfg(feature = "__rustls")]
+    #[cfg(feature = "tls-rustls")]
     {
         let sni = tls_stream.get_ref().1.server_name().map(|s| s.to_string());
         assert_eq!(sni, Some("test-hostname".to_string()));
@@ -735,7 +735,7 @@ async fn test_http_host_and_sni() {
     // Third test: expect Host to be "test-hostname" and SNI to be "test-sni"
     let (stream, _) = listener.accept().await.unwrap();
     let mut tls_stream = acceptor.accept(stream).await.unwrap();
-    #[cfg(feature = "__rustls")]
+    #[cfg(feature = "tls-rustls")]
     {
         let sni = tls_stream.get_ref().1.server_name().map(|s| s.to_string());
         assert_eq!(sni, Some("test-sni".to_string()));

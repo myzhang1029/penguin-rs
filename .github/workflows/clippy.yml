@@ -22,9 +22,8 @@ jobs:
       fail-fast: false
       matrix:
         tls:
-        - nativetls
-        - rustls-native-roots
-        - rustls-webpki-roots
+        - tls-native
+        - tls-rustls
     permissions:
       contents: read
       security-events: write
@@ -43,7 +42,7 @@ jobs:
         run:
           cargo clippy
           --no-default-features
-          --features ${{ matrix.tls }},ring,tests-real-internet4,tests-real-internet6,tokio-console,deadlock-detection,penguin-binary,acme,tungstenite
+          --features ${{ matrix.tls }},system-roots,webpki-roots,aws-lc-rs,tests-real-internet4,tests-real-internet6,tokio-console,deadlock-detection,penguin-binary,acme,tungstenite
           --message-format=json
           --
           -D warnings --verbose | clippy-sarif | tee rust-clippy-results.sarif | sarif-fmt

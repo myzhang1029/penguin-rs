@@ -3,7 +3,6 @@
 TLS=$1
 CONFIG_NAME=$2
 VERBOSE=${3:---verbose}
-export RUSTFLAGS="-Cinstrument-coverage"
 
 # Run async-acceptor tests only
 cargo nextest run --all-targets "$VERBOSE" --package async-acceptor
@@ -32,27 +31,34 @@ cargo nextest run --all-targets "$VERBOSE" --no-default-features --package pengu
 
 
 
-# Run cargo tests with more features on
-cargo nextest run --all-targets "$VERBOSE" --features "$TLS",ring,tests-real-internet4,tests-acme-has-pebble,penguin-binary,acme,default-is-ipv6,tokio-console,deadlock-detection --no-default-features
+# Run cargo tests with more features on, permuting through TLS CA and rustls configurations
+for backend in ring aws-lc-rs; do
+  for root in "" system-roots webpki-roots "system-roots,webpki-roots"; do
+    cargo nextest run --all-targets "$VERBOSE" --features "$TLS",$root,$backend,tests-real-internet4,tests-acme-has-pebble,penguin-binary,acme,default-is-ipv6,tokio-console,deadlock-detection --no-default-features
+  done
+done
 
 # Run cargo tests with default features
 case "$CONFIG_NAME" in
   *linux-gnu)
     printf '[target.%s]\nrunner="sudo -E"' "$(rustc -vV | sed -n 's,host: ,,p')" > ~/.cargo/config.toml
     cargo nextest run --all-targets "$VERBOSE" --features "$TLS",ring,tests-real-internet4,acme,penguin-binary,tproxy --no-default-features
+    cargo nextest run --all-targets "$VERBOSE" --features "$TLS",aws-lc-rs,tests-real-internet4,acme,penguin-binary,tproxy --no-default-features
     rm ~/.cargo/config.toml
     ;;
   *)
     cargo nextest run --all-targets "$VERBOSE" --features "$TLS",ring,tests-real-internet4,acme,penguin-binary,tproxy --no-default-features
+    cargo nextest run --all-targets "$VERBOSE" --features "$TLS",aws-lc-rs,tests-real-internet4,acme,penguin-binary,tproxy --no-default-features
     ;;
 esac
 
 # Run cargo tests with the nohash hashmap
 cargo nextest run --all-targets "$VERBOSE" --features "$TLS",ring,tests-real-internet4,acme,penguin-binary,nohash --no-default-features
+cargo nextest run --all-targets "$VERBOSE" --features "$TLS",aws-lc-rs,tests-real-internet4,acme,penguin-binary,nohash --no-default-features
 
 # Run cargo tests with PENGUIN_TLS_CHROMIUM_LIKE enabled
-if [ "$TLS" != "nativetls" ]; then
-  PENGUIN_TLS_CHROMIUM_LIKE=on cargo nextest run --all-targets "$VERBOSE" --features "$TLS",ring,tests-real-internet4,acme,penguin-binary --no-default-features
+if [ "$TLS" == "tls-rustls" ]; then
+  PENGUIN_TLS_CHROMIUM_LIKE=on cargo nextest run --all-targets "$VERBOSE" --features "$TLS",aws-lc-rs,tests-real-internet4,acme,penguin-binary --no-default-features
 fi
 
 

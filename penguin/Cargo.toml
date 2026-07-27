@@ -67,16 +67,17 @@ rusty-penguin = { path = ".", default-features = false, features = ["__dev-depen
 dhat = { version = "0.3" }
 
 [features]
-default = ["rustls-native-roots", "tests-real-internet4", "tests-udp", "penguin-binary", "acme", "aws-lc-rs", "tproxy", "http-proxy"]
+default = ["tls-rustls", "system-roots", "tests-real-internet4", "tests-udp", "penguin-binary", "acme", "aws-lc-rs", "tproxy", "http-proxy"]
 
 ## TLS options
-# Note that it does not make sense to use more than one TLS implementations
+# Note that it does not make sense to use both TLS implementations
 # at the same time, but there must be at least one if `penguin-binary` is
 # enabled.
-rustls-webpki-roots = ["dep:webpki-roots", "__rustls"]
-rustls-native-roots = ["dep:rustls-native-certs", "__rustls"]
-__rustls = ["dep:rustls", "dep:rustls-pemfile", "dep:tokio-rustls", "dep:hyper-rustls"]
-nativetls = ["dep:tokio-native-tls", "dep:hyper-tls"]
+tls-rustls = ["dep:rustls", "dep:rustls-pemfile", "dep:tokio-rustls", "dep:hyper-rustls"]
+tls-native = ["dep:tokio-native-tls", "dep:hyper-tls"]
+# For rustls only: source of root certificates
+webpki-roots = ["dep:webpki-roots"]
+system-roots = ["dep:rustls-native-certs"]
 # Use ring or aws-lc-rs
 ring = ["instant-acme?/ring", "rcgen?/ring", "rustls/ring"]
 aws-lc-rs = ["instant-acme?/aws-lc-rs", "rcgen?/aws_lc_rs", "rustls/aws-lc-rs", "rustls/prefer-post-quantum", "rustls-webpki/aws-lc-rs"]

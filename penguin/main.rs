@@ -104,12 +104,8 @@ async fn main() -> Result<(), Box<Error>> {
     Ok(())
 }
 
-#[cfg(all(feature = "rustls-native-roots", feature = "rustls-webpki-roots"))]
-compile_error!("Only one of rustls-native-roots and rustls-webpki-roots can be enabled at a time");
-#[cfg(all(feature = "__rustls", feature = "nativetls"))]
-compile_error!(
-    "Only one of rustls-native-roots, rustls-webpki-roots, and nativetls can be enabled at a time"
-);
+#[cfg(all(feature = "tls-rustls", feature = "tls-native"))]
+compile_error!("tls-rustls and tls-native cannot both be enabled");
 #[cfg(all(feature = "tokio-console", feature = "remove-logging"))]
 compile_error!("tokio-console without trace-level logging is likely not desired");
 #[cfg(not(any(feature = "client", feature = "server")))]

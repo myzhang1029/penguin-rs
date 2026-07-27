@@ -30,9 +30,8 @@ jobs:
           os: windows-11-arm
           codecov_os_name: windows
         tls:
-        - nativetls
-        - rustls-native-roots
-        - rustls-webpki-roots
+        - tls-native
+        - tls-rustls
 
     steps:
     - uses: actions/checkout@v7
@@ -61,7 +60,9 @@ jobs:
       run: .github/workflows/pebble.sh
 
     - name: Run cargo tests
-      run: .github/workflows/test-coverage.sh ${{ matrix.tls }} ${{ matrix.config.name }}
+      run: .github/workflows/full-test.sh ${{ matrix.tls }} ${{ matrix.config.name }}
+      env:
+        RUSTFLAGS: -Cinstrument-coverage
 
     - name: Upload test results to Codecov
       if: ${{ !cancelled() }}

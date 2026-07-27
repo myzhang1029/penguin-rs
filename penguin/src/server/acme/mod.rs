@@ -222,7 +222,7 @@ mod tests_need_pebble {
     #[derive(Clone, Debug)]
     pub struct IgnoreTlsHttpClient(HyperClient<HyperConnector, instant_acme::BodyWrapper<Bytes>>);
     impl IgnoreTlsHttpClient {
-        #[cfg(feature = "__rustls")]
+        #[cfg(feature = "tls-rustls")]
         pub async fn new() -> Self {
             // Not supposed to predefine ALPN protocols for ACME
             let client_config = make_client_config(None, None, None, true, None)
@@ -235,7 +235,7 @@ mod tests_need_pebble {
                 .build();
             Self(HyperClient::builder(TokioExecutor::new()).build(connector))
         }
-        #[cfg(feature = "nativetls")]
+        #[cfg(feature = "tls-native")]
         pub async fn new() -> Self {
             let client_config = make_client_config(None, None, None, true, None)
                 .await

@@ -100,35 +100,41 @@ If both peers use this penguin implementation or any other implementation
 that generates `flow_id`s with a random number generator, this is safe.
 
 Library features:
-- `tungstenite`: implement our traits on `tokio_tungstenite::WebSocketStream` (default)
+- `tungstenite` (default): implement our traits on `tokio_tungstenite::WebSocketStream`
 
 Executable features:
-- `client`: build the client (default)
-- `server`: build the server (default)
-- `penguin-binary`: shorthand for both `server` and `client` (default)
+- `client` (default): build the client
+- `server` (default): build the server
+- `penguin-binary` (default): shorthand for both `server` and `client`
 
-- `rustls-native-roots`: use `rustls` with system CA (default)
-- `rustls-webpki-roots`: use `rustls` with bundled webpki CA
-- `nativetls`: use `native-tls`
-- `ring`: use `ring` as the crypto provider for `rustls`
-- `aws-lc-rs`: use `aws-lc-rs` as the crypto provider for `rustls`
+- `tls-native`: use `native-tls`
+- `tls-rustls` (default): use `rustls`
+- `system-roots` (default): use `rustls` with system CA. Has no effect if `tls-native` is enabled.
+- `webpki-roots`: use `rustls` with bundled webpki CA. Has no effect if `tls-native` is enabled.
+- `ring`: use `ring` as the crypto provider for `rustls`. Has no effect if `tls-native` is enabled.
+- `aws-lc-rs` (default): use `aws-lc-rs` as the crypto provider for `rustls`. Has no effect if `tls-native` is enabled.
+
+It is fine to enable both `system-roots` and `webpki-roots`, in which case the certificates
+from both sources will be merged (whatever doing so might be useful for).
+If neither `system-roots` nor `webpki-roots` is enabled, no root certificates will be available
+and the user would have to provide their own CA roots via the `--tls-ca` command line option.
 
 - `default-is-ipv6`: use `::`/`::1` instead of `0.0.0.0`/`127.0.0.1` when an IP address is omitted in the client command line
 
 - `tokio-console`: enable `console-subscriber` support
 - `remove-logging`: statically remove `trace` level logging and tracing code
 - `deadlock-detection`: spawn a background thread running `parking_lot`'s deadlock detection
-- `acme`: (requires `server`) enable the built-in ACME client (default)
-Will also make the binary use `rustls` even if `nativetls` is enabled due to internal dependencies.
-- `tproxy`: enable `:tproxy` (transparent proxy) remote types in the client (default)
-- `http-proxy`: enable `:http` (http proxy) remote types in the client (default)
+- `acme` (default): (requires `server`) enable the built-in ACME client
+Will also make the binary use `rustls` even if `tls-native` is enabled due to internal dependencies.
+- `tproxy` (default): enable `:tproxy` (transparent proxy) remote types in the client
+- `http-proxy` (default): enable `:http` (http proxy) remote types in the client
 
 Testing features:
 - `tests-real-internet4`: run tests that require IPv4 access to the internet
 - `tests-real-internet6`: run tests that require IPv4 access to the internet
 - `tests-udp`: run tests that expect UDP traffic to work reliably. They may be flaky depending on the network environment.
 - `tests-acme-has-pebble`: test the ACME client with a local ACME server at `https://localhost:14000/dir`
-- Note that when testing with `nativetls`, it is still necessary to enable one of `rcgen/ring` or `rcgen/aws_lc_rs`.
+- Note that when testing with `tls-native`, it is still necessary to enable one of `rcgen/ring` or `rcgen/aws_lc_rs`.
 
 ## Contribution
 All contributions are welcome. Please make sure you

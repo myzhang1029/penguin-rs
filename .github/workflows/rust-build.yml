@@ -21,9 +21,8 @@ jobs:
         - name: Windows
           os: windows-latest
         tls:
-        - nativetls
-        - rustls-native-roots
-        - rustls-webpki-roots
+        - tls-native
+        - tls-rustls
 
     steps:
     - uses: actions/checkout@v7
@@ -58,36 +57,36 @@ jobs:
 
     - name: Check default features
       run: |
-        cargo check --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-udp,penguin-binary,acme,tungstenite,tproxy --no-default-features
-        cargo run --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-udp,penguin-binary,acme,tungstenite,tproxy --no-default-features -- --help
+        cargo check --verbose --features ${{ matrix.tls }},system-roots,aws-lc-rs,tests-real-internet4,tests-udp,penguin-binary,acme,tungstenite,tproxy --no-default-features
+        cargo run --verbose --features ${{ matrix.tls }},system-roots,aws-lc-rs,tests-real-internet4,tests-udp,penguin-binary,acme,tungstenite,tproxy --no-default-features -- --help
 
     - name: Check server only
       run: |
-        cargo check --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-udp,server --no-default-features
-        cargo run --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-udp,server --no-default-features -- --help
+        cargo check --verbose --features ${{ matrix.tls }},system-roots,aws-lc-rs,tests-real-internet4,tests-udp,server --no-default-features
+        cargo run --verbose --features ${{ matrix.tls }},system-roots,aws-lc-rs,tests-real-internet4,tests-udp,server --no-default-features -- --help
 
     - name: Check client only
       run: |
-        cargo check --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-udp,client --no-default-features
-        cargo run --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-udp,client --no-default-features -- --help
+        cargo check --verbose --features ${{ matrix.tls }},system-roots,aws-lc-rs,tests-real-internet4,tests-udp,client --no-default-features
+        cargo run --verbose --features ${{ matrix.tls }},system-roots,aws-lc-rs,tests-real-internet4,tests-udp,client --no-default-features -- --help
 
     - name: Check client with tproxy and http-proxy
       run: |
-        cargo check --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-udp,client,tproxy,http-proxy --no-default-features
-        cargo run --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-udp,client,tproxy,http-proxy --no-default-features -- --help
+        cargo check --verbose --features ${{ matrix.tls }},system-roots,aws-lc-rs,tests-real-internet4,tests-udp,client,tproxy,http-proxy --no-default-features
+        cargo run --verbose --features ${{ matrix.tls }},system-roots,aws-lc-rs,tests-real-internet4,tests-udp,client,tproxy,http-proxy --no-default-features -- --help
 
     - name: Check with most features on, using ring
       run: |
-        cargo check --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-real-internet6,default-is-ipv6,tests-acme-has-pebble,penguin-binary,acme,remove-logging,deadlock-detection,nohash,tproxy,http-proxy --no-default-features
-        cargo run --verbose --features ${{ matrix.tls }},ring,tests-real-internet4,tests-real-internet6,default-is-ipv6,tests-acme-has-pebble,penguin-binary,acme,remove-logging,deadlock-detection,nohash,tproxy,http-proxy --no-default-features -- --help
+        cargo check --verbose --features ${{ matrix.tls }},system-roots,webpki-roots,ring,tests-real-internet4,tests-real-internet6,default-is-ipv6,tests-acme-has-pebble,penguin-binary,acme,remove-logging,deadlock-detection,nohash,tproxy,http-proxy --no-default-features
+        cargo run --verbose --features ${{ matrix.tls }},system-roots,webpki-roots,ring,tests-real-internet4,tests-real-internet6,default-is-ipv6,tests-acme-has-pebble,penguin-binary,acme,remove-logging,deadlock-detection,nohash,tproxy,http-proxy --no-default-features -- --help
 
     - name: Check with most features on, using aws-lc-rs
       run: |
-        cargo check --verbose --features ${{ matrix.tls }},aws-lc-rs,tests-real-internet4,tests-real-internet6,default-is-ipv6,tests-acme-has-pebble,penguin-binary,acme,remove-logging,deadlock-detection,nohash,tproxy,http-proxy --no-default-features
-        cargo run --verbose --features ${{ matrix.tls }},aws-lc-rs,tests-real-internet4,tests-real-internet6,default-is-ipv6,tests-acme-has-pebble,penguin-binary,acme,remove-logging,deadlock-detection,nohash,tproxy,http-proxy --no-default-features -- --help
+        cargo check --verbose --features ${{ matrix.tls }},system-roots,webpki-roots,aws-lc-rs,tests-real-internet4,tests-real-internet6,default-is-ipv6,tests-acme-has-pebble,penguin-binary,acme,remove-logging,deadlock-detection,nohash,tproxy,http-proxy --no-default-features
+        cargo run --verbose --features ${{ matrix.tls }},system-roots,webpki-roots,aws-lc-rs,tests-real-internet4,tests-real-internet6,default-is-ipv6,tests-acme-has-pebble,penguin-binary,acme,remove-logging,deadlock-detection,nohash,tproxy,http-proxy --no-default-features -- --help
 
-    - name: Check with most features on (nativetls without any rustls)
-      if: matrix.tls == 'nativetls'
+    - name: Check with most features on (tls-native without any rustls)
+      if: matrix.tls == 'tls-native'
       run: |
         cargo check --verbose --features ${{ matrix.tls }},tests-real-internet4,tests-real-internet6,default-is-ipv6,penguin-binary,remove-logging,deadlock-detection,nohash,tproxy --no-default-features
         cargo run --verbose --features ${{ matrix.tls }},tests-real-internet4,tests-real-internet6,penguin-binary,remove-logging,deadlock-detection,nohash,tproxy --no-default-features -- --help

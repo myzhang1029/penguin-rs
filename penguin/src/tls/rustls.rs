@@ -142,7 +142,7 @@ async fn generate_rustls_rootcertstore(
         let (_, ignored) = roots.add_parsable_certificates(client_ca.map_err(Error::ReadCert)?);
         debug!("ignored {ignored} certificates from {ca_path}");
     } else {
-        #[cfg(feature = "rustls-native-roots")]
+        #[cfg(feature = "system-roots")]
         {
             let certerr = rustls_native_certs::load_native_certs();
             if !certerr.errors.is_empty() {
@@ -154,7 +154,7 @@ async fn generate_rustls_rootcertstore(
             let (_, ignored) = roots.add_parsable_certificates(certerr.certs);
             debug!("ignored {ignored} certificates from the system root");
         }
-        #[cfg(feature = "rustls-webpki-roots")]
+        #[cfg(feature = "webpki-roots")]
         roots.extend(webpki_roots::TLS_SERVER_ROOTS.to_vec());
     }
     Ok(roots)
@@ -264,6 +264,7 @@ mod tests {
         crate::tests::setup_logging();
         // No custom CA store
         let sys_root = generate_rustls_rootcertstore(None).await.unwrap();
+        #[cfg(any(feature = "system-roots", feature = "webpki-roots"))]
         assert!(!sys_root.is_empty());
         // Custom CA store
         let tmpdir = tempdir().unwrap();

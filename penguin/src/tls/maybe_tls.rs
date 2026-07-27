@@ -8,7 +8,7 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 /// A stream that may be encrypted with TLS
 // This lint is a false positive because `T` is typically `TcpStream` which is not a zero-sized type.
-#[cfg_attr(feature = "__rustls", expect(clippy::large_enum_variant))]
+#[cfg_attr(feature = "tls-rustls", expect(clippy::large_enum_variant))]
 #[derive(Debug)]
 pub enum MaybeTlsStream<T> {
     /// A TLS-encrypted stream
@@ -61,21 +61,21 @@ impl<T: AsyncRead + AsyncWrite + Unpin> AsyncWrite for MaybeTlsStream<T> {
     }
 }
 
-#[cfg(feature = "__rustls")]
+#[cfg(feature = "tls-rustls")]
 impl<S> From<tokio_rustls::server::TlsStream<S>> for MaybeTlsStream<S> {
     fn from(stream: tokio_rustls::server::TlsStream<S>) -> Self {
         Self::Tls(tokio_rustls::TlsStream::Server(stream))
     }
 }
 
-#[cfg(feature = "__rustls")]
+#[cfg(feature = "tls-rustls")]
 impl<S> From<tokio_rustls::client::TlsStream<S>> for MaybeTlsStream<S> {
     fn from(stream: tokio_rustls::client::TlsStream<S>) -> Self {
         Self::Tls(tokio_rustls::TlsStream::Client(stream))
     }
 }
 
-#[cfg(feature = "nativetls")]
+#[cfg(feature = "tls-native")]
 impl<S> From<tokio_native_tls::TlsStream<S>> for MaybeTlsStream<S> {
     fn from(stream: tokio_native_tls::TlsStream<S>) -> Self {
         Self::Tls(stream)
