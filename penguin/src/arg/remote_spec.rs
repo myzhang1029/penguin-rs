@@ -41,12 +41,12 @@ macro_rules! default_host {
 #[cfg(feature = "client")]
 pub(crate) use default_host;
 
-/// Default SOCKS port
+/// Default SOCKS port (IANA assigned)
 pub const SOCKS_DEFAULT_PORT: u16 = 1080;
 /// Default HTTP proxy port
 pub const HTTP_DEFAULT_PORT: u16 = 8080;
-/// Default TPROXY port
-pub const TPROXY_DEFAULT_PORT: u16 = 1234;
+/// Default TPROXY port (from debian netbase)
+pub const TPROXY_DEFAULT_PORT: u16 = 8081;
 
 macro_rules! add_brackets {
     ($host:expr) => {
