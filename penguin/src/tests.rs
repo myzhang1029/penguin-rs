@@ -162,7 +162,6 @@ async fn test_client_handshake_timeout_will_retry() {
 #[cfg(all(feature = "client", feature = "server"))]
 #[tokio::test]
 async fn test_it_works() {
-    static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
     static SERVER_ARGS: LazyLock<arg::ServerArgs> =
         LazyLock::new(|| make_server_args("127.0.0.1", 30554));
     static CLIENT_ARGS: LazyLock<arg::ClientArgs> = LazyLock::new(|| {
@@ -192,10 +191,7 @@ async fn test_it_works() {
         stream_command_rx,
         datagram_rx,
     ));
-    let server_task = tokio::spawn(crate::server::server_main(
-        &SERVER_ARGS,
-        &BACKEND_SUPPORTS_HTTP2,
-    ));
+    let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
     tokio::time::sleep(Duration::from_secs(2)).await;
     let mut sock = TcpStream::connect("127.0.0.1:21628").await.unwrap();
     sock.write_all(&input_bytes).await.unwrap();
@@ -210,7 +206,6 @@ async fn test_it_works() {
 #[cfg(unix)]
 #[tokio::test]
 async fn test_it_works_uds() {
-    static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
     static SERVER_ARGS: LazyLock<arg::ServerArgs> =
         LazyLock::new(|| make_server_args("127.0.0.1", 30865));
     static CLIENT_ARGS: OnceLock<arg::ClientArgs> = OnceLock::new();
@@ -249,10 +244,7 @@ async fn test_it_works_uds() {
         stream_command_rx,
         datagram_rx,
     ));
-    let server_task = tokio::spawn(crate::server::server_main(
-        &SERVER_ARGS,
-        &BACKEND_SUPPORTS_HTTP2,
-    ));
+    let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
     tokio::time::sleep(Duration::from_secs(2)).await;
     let mut sock = tokio::net::UnixStream::connect(&uds_path).await.unwrap();
     sock.write_all(&input_bytes).await.unwrap();
@@ -266,14 +258,10 @@ async fn test_it_works_uds() {
 #[cfg(feature = "server")]
 #[tokio::test]
 async fn test_server_timeout() {
-    static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
     static SERVER_ARGS: LazyLock<arg::ServerArgs> =
         LazyLock::new(|| make_server_args("::1", 22183));
     setup_logging();
-    let server_task = tokio::spawn(crate::server::server_main(
-        &SERVER_ARGS,
-        &BACKEND_SUPPORTS_HTTP2,
-    ));
+    let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
     tokio::time::sleep(Duration::from_secs(2)).await;
     // Connect to the socket and do nothing. Make sure the socket is closed
     let mut sock = TcpStream::connect("[::1]:22183").await.unwrap();
@@ -292,7 +280,6 @@ async fn test_server_timeout() {
 #[cfg(all(feature = "client", feature = "server"))]
 #[tokio::test]
 async fn test_server_timeout_does_not_interrupt_ws() {
-    static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
     static SERVER_ARGS: LazyLock<arg::ServerArgs> =
         LazyLock::new(|| make_server_args("::1", 23224));
 
@@ -324,10 +311,7 @@ async fn test_server_timeout_does_not_interrupt_ws() {
         stream_command_rx,
         datagram_rx,
     ));
-    let server_task = tokio::spawn(crate::server::server_main(
-        &SERVER_ARGS,
-        &BACKEND_SUPPORTS_HTTP2,
-    ));
+    let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
     // Wait much more than the timeout to ensure that any timeout would pop up.
     tokio::time::sleep(Duration::from_secs(8)).await;
     let mut sock = TcpStream::connect("[::1]:27848").await.unwrap();
@@ -342,7 +326,6 @@ async fn test_server_timeout_does_not_interrupt_ws() {
 #[cfg(all(feature = "client", feature = "server"))]
 #[tokio::test]
 async fn test_it_works_v6() {
-    static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
     static SERVER_ARGS: LazyLock<arg::ServerArgs> =
         LazyLock::new(|| make_server_args("::1", 27254));
     static CLIENT_ARGS: LazyLock<arg::ClientArgs> = LazyLock::new(|| {
@@ -373,10 +356,7 @@ async fn test_it_works_v6() {
         stream_command_rx,
         datagram_rx,
     ));
-    let server_task = tokio::spawn(crate::server::server_main(
-        &SERVER_ARGS,
-        &BACKEND_SUPPORTS_HTTP2,
-    ));
+    let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
     tokio::time::sleep(Duration::from_secs(2)).await;
     let mut sock = TcpStream::connect("[::1]:20246").await.unwrap();
     sock.write_all(&input_bytes).await.unwrap();
@@ -393,7 +373,6 @@ async fn test_it_works_v6() {
 #[tokio::test]
 async fn test_setting_outgoing_ip_works() {
     const OUTGOING_IP: Ipv4Addr = Ipv4Addr::new(127, 0, 0, 19);
-    static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
     static SERVER_ARGS: LazyLock<arg::ServerArgs> = LazyLock::new(|| {
         let mut args = make_server_args("127.0.0.1", 31403);
         args.outgoing_from_v4 = crate::arg::BindIpv4(OUTGOING_IP);
@@ -427,10 +406,7 @@ async fn test_setting_outgoing_ip_works() {
         stream_command_rx,
         datagram_rx,
     ));
-    let server_task = tokio::spawn(crate::server::server_main(
-        &SERVER_ARGS,
-        &BACKEND_SUPPORTS_HTTP2,
-    ));
+    let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
     tokio::time::sleep(Duration::from_secs(2)).await;
     let mut sock = TcpStream::connect("127.0.0.1:23299").await.unwrap();
     sock.shutdown().await.unwrap();
@@ -447,7 +423,6 @@ async fn test_setting_outgoing_ip_works() {
     any(target_os = "macos", target_os = "windows")
 )))]
 async fn test_it_works_tls_simple() {
-    static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
     static SERVER_ARGS: OnceLock<arg::ServerArgs> = OnceLock::new();
     static CLIENT_ARGS: LazyLock<arg::ClientArgs> = LazyLock::new(|| arg::ClientArgs {
         server: ServerUrl::from_str("wss://127.0.0.1:20353/ws").unwrap(),
@@ -499,10 +474,7 @@ async fn test_it_works_tls_simple() {
         stream_command_rx,
         datagram_rx,
     ));
-    let server_task = tokio::spawn(crate::server::server_main(
-        SERVER_ARGS.get().unwrap(),
-        &BACKEND_SUPPORTS_HTTP2,
-    ));
+    let server_task = tokio::spawn(crate::server::server_main(SERVER_ARGS.get().unwrap()));
     tokio::time::sleep(Duration::from_secs(2)).await;
     let mut sock = TcpStream::connect("127.0.0.1:24368").await.unwrap();
     sock.write_all(&input_bytes).await.unwrap();
@@ -522,10 +494,7 @@ async fn test_it_works_tls_simple() {
     any(target_os = "macos", target_os = "windows")
 )))]
 async fn test_tls_reload() {
-    static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
-
     use crate::tls::tls_connect;
-
     static SERVER_ARGS: OnceLock<arg::ServerArgs> = OnceLock::new();
     setup_logging();
 
@@ -537,10 +506,7 @@ async fn test_tls_reload() {
     serv_cfg.tls_key = Some(format!("{cert_dir_path}/privkey.pem"));
     SERVER_ARGS.set(serv_cfg).unwrap();
 
-    let server_task = tokio::spawn(crate::server::server_main(
-        SERVER_ARGS.get().unwrap(),
-        &BACKEND_SUPPORTS_HTTP2,
-    ));
+    let server_task = tokio::spawn(crate::server::server_main(SERVER_ARGS.get().unwrap()));
     tokio::time::sleep(Duration::from_secs(2)).await;
     // Connect to the server and read the certificate
     let tcp_stream = tokio::net::TcpStream::connect(("127.0.0.1", 20353))
@@ -763,7 +729,6 @@ async fn test_http_host_and_sni() {
 #[cfg(all(feature = "client", feature = "server", feature = "http-proxy"))]
 #[tokio::test]
 async fn test_http_proxy() {
-    static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
     static SERVER_ARGS: LazyLock<arg::ServerArgs> =
         LazyLock::new(|| make_server_args("127.0.0.1", 22441));
     static CLIENT_ARGS: LazyLock<arg::ClientArgs> = LazyLock::new(|| {
@@ -784,10 +749,7 @@ async fn test_http_proxy() {
         stream_command_rx,
         datagram_rx,
     ));
-    let server_task = tokio::spawn(crate::server::server_main(
-        &SERVER_ARGS,
-        &BACKEND_SUPPORTS_HTTP2,
-    ));
+    let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
     let target_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let target_addr = target_listener.local_addr().unwrap();
     let target_server_task = tokio::spawn(async move {
@@ -860,7 +822,6 @@ async fn test_http_proxy() {
 #[cfg(all(feature = "client", feature = "server"))]
 #[tokio::test]
 async fn test_socks5_connect_reliability_v4() {
-    static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
     static SERVER_ARGS: LazyLock<arg::ServerArgs> =
         LazyLock::new(|| make_server_args("127.0.0.1", 24895));
     static CLIENT_ARGS: LazyLock<arg::ClientArgs> = LazyLock::new(|| {
@@ -881,10 +842,7 @@ async fn test_socks5_connect_reliability_v4() {
         stream_command_rx,
         datagram_rx,
     ));
-    let server_task = tokio::spawn(crate::server::server_main(
-        &SERVER_ARGS,
-        &BACKEND_SUPPORTS_HTTP2,
-    ));
+    let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
 
     // Use a small buffer to simulate a HTTP request: if `flush` or `shutdown` is not called, the
     // server will not receive the data.
@@ -933,7 +891,6 @@ async fn test_socks5_connect_reliability_v4() {
 #[tokio::test]
 async fn test_socks5_connect_reliability_v6() {
     // "v6" means that the target server is IPv6, but the client here is IPv4 here to test their interaction.
-    static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
     static SERVER_ARGS: LazyLock<arg::ServerArgs> =
         LazyLock::new(|| make_server_args("127.0.0.1", 32233));
     static CLIENT_ARGS: LazyLock<arg::ClientArgs> = LazyLock::new(|| {
@@ -954,10 +911,7 @@ async fn test_socks5_connect_reliability_v6() {
         stream_command_rx,
         datagram_rx,
     ));
-    let server_task = tokio::spawn(crate::server::server_main(
-        &SERVER_ARGS,
-        &BACKEND_SUPPORTS_HTTP2,
-    ));
+    let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
 
     // Use a small buffer to simulate a HTTP request: if `flush` or `shutdown` is not called, the
     // server will not receive the data.
@@ -1007,7 +961,6 @@ async fn test_socks5_connect_reliability_v6() {
 #[cfg(all(feature = "client", feature = "server"))]
 #[cfg(feature = "tests-udp")]
 async fn test_socks5_udp_v4v4() {
-    static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
     static SERVER_ARGS: LazyLock<arg::ServerArgs> =
         LazyLock::new(|| make_server_args("127.0.0.1", 14119));
     static CLIENT_ARGS: LazyLock<arg::ClientArgs> = LazyLock::new(|| {
@@ -1028,10 +981,7 @@ async fn test_socks5_udp_v4v4() {
         stream_command_rx,
         datagram_rx,
     ));
-    let server_task = tokio::spawn(crate::server::server_main(
-        &SERVER_ARGS,
-        &BACKEND_SUPPORTS_HTTP2,
-    ));
+    let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
 
     let input_bytes: Vec<u8> = (0..1024).map(|_| rand::random::<u8>()).collect();
     let input_len = input_bytes.len();
@@ -1107,7 +1057,6 @@ async fn test_socks5_udp_v4v4() {
 #[cfg(all(feature = "client", feature = "server"))]
 #[cfg(feature = "tests-udp")]
 async fn test_socks5_udp_v4v6() {
-    static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
     // The target server is IPv6, but the client here is IPv4 here to test their interaction.
     static SERVER_ARGS: LazyLock<arg::ServerArgs> =
         LazyLock::new(|| make_server_args("127.0.0.1", 25347));
@@ -1129,10 +1078,7 @@ async fn test_socks5_udp_v4v6() {
         stream_command_rx,
         datagram_rx,
     ));
-    let server_task = tokio::spawn(crate::server::server_main(
-        &SERVER_ARGS,
-        &BACKEND_SUPPORTS_HTTP2,
-    ));
+    let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
 
     let input_bytes: Vec<u8> = (0..1024).map(|_| rand::random::<u8>()).collect();
     let input_len = input_bytes.len();
@@ -1213,7 +1159,6 @@ async fn test_socks5_udp_v4v6() {
 #[cfg(all(feature = "client", feature = "server"))]
 #[cfg(feature = "tests-udp")]
 async fn test_socks5_udp_v6v6() {
-    static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
     static SERVER_ARGS: LazyLock<arg::ServerArgs> =
         LazyLock::new(|| make_server_args("::1", 31370));
     static CLIENT_ARGS: LazyLock<arg::ClientArgs> = LazyLock::new(|| {
@@ -1234,10 +1179,7 @@ async fn test_socks5_udp_v6v6() {
         stream_command_rx,
         datagram_rx,
     ));
-    let server_task = tokio::spawn(crate::server::server_main(
-        &SERVER_ARGS,
-        &BACKEND_SUPPORTS_HTTP2,
-    ));
+    let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
 
     let input_bytes: Vec<u8> = (0..1024).map(|_| rand::random::<u8>()).collect();
     let input_len = input_bytes.len();
@@ -1316,7 +1258,6 @@ async fn test_socks5_udp_v6v6() {
 #[cfg(all(feature = "client", feature = "server"))]
 #[cfg(feature = "tests-udp")]
 async fn test_socks5_udp_client_prune() {
-    static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
     static SERVER_ARGS: LazyLock<arg::ServerArgs> =
         LazyLock::new(|| make_server_args("127.0.0.1", 16720));
     static CLIENT_ARGS: LazyLock<arg::ClientArgs> = LazyLock::new(|| {
@@ -1336,10 +1277,7 @@ async fn test_socks5_udp_client_prune() {
         stream_command_rx,
         datagram_rx,
     ));
-    let server_task = tokio::spawn(crate::server::server_main(
-        &SERVER_ARGS,
-        &BACKEND_SUPPORTS_HTTP2,
-    ));
+    let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
     tokio::time::sleep(Duration::from_secs(2)).await;
     let target_udp_listener = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let listener_port = target_udp_listener.local_addr().unwrap().port();
@@ -1469,7 +1407,6 @@ async fn test_socks5_udp_client_prune() {
 #[cfg(all(feature = "client", feature = "server"))]
 #[tokio::test]
 async fn test_socks4_works() {
-    static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
     static SERVER_ARGS: LazyLock<arg::ServerArgs> =
         LazyLock::new(|| make_server_args("127.0.0.1", 10796));
     static CLIENT_ARGS: LazyLock<arg::ClientArgs> = LazyLock::new(|| {
@@ -1490,10 +1427,7 @@ async fn test_socks4_works() {
         stream_command_rx,
         datagram_rx,
     ));
-    let server_task = tokio::spawn(crate::server::server_main(
-        &SERVER_ARGS,
-        &BACKEND_SUPPORTS_HTTP2,
-    ));
+    let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
 
     let input_bytes: Vec<u8> = (0..1024).map(|_| rand::random::<u8>()).collect();
     let input_len = input_bytes.len();
@@ -1536,7 +1470,6 @@ async fn test_socks4_works() {
 #[cfg(all(feature = "tests-real-internet4", feature = "tests-udp"))]
 #[tokio::test]
 async fn test_it_works_dns_v4() {
-    static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
     static SERVER_ARGS: LazyLock<arg::ServerArgs> =
         LazyLock::new(|| make_server_args("127.0.0.1", 17706));
     static CLIENT_ARGS: LazyLock<arg::ClientArgs> = LazyLock::new(|| {
@@ -1557,10 +1490,7 @@ async fn test_it_works_dns_v4() {
         stream_command_rx,
         datagram_rx,
     ));
-    let server_task = tokio::spawn(crate::server::server_main(
-        &SERVER_ARGS,
-        &BACKEND_SUPPORTS_HTTP2,
-    ));
+    let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
     tokio::time::sleep(Duration::from_secs(2)).await;
     let sock = UdpSocket::bind("0.0.0.0:0").await.unwrap();
     // Just for fun, let's query AAAA here
@@ -1581,7 +1511,6 @@ async fn test_it_works_dns_v4() {
 #[cfg(all(feature = "tests-real-internet6", feature = "tests-udp"))]
 #[tokio::test]
 async fn test_it_works_dns_v6() {
-    static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
     static SERVER_ARGS: LazyLock<arg::ServerArgs> =
         LazyLock::new(|| make_server_args("[::1]", 16037));
     static CLIENT_ARGS: LazyLock<arg::ClientArgs> = LazyLock::new(|| {
@@ -1602,10 +1531,7 @@ async fn test_it_works_dns_v6() {
         stream_command_rx,
         datagram_rx,
     ));
-    let server_task = tokio::spawn(crate::server::server_main(
-        &SERVER_ARGS,
-        &BACKEND_SUPPORTS_HTTP2,
-    ));
+    let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
     tokio::time::sleep(Duration::from_secs(2)).await;
     let sock = UdpSocket::bind("[::]:0").await.unwrap();
     let request = b"\x39\x36\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03www\x06google\x03com\x00\x00\x01\x00\x01";
@@ -1624,8 +1550,6 @@ async fn test_it_works_dns_v6() {
 #[cfg(all(feature = "client", feature = "server"))]
 #[tokio::test]
 async fn test_tproxy_something_happens() {
-    #[cfg(feature = "tproxy")]
-    static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
     #[cfg(feature = "tproxy")]
     static SERVER_ARGS: LazyLock<arg::ServerArgs> =
         LazyLock::new(|| make_server_args("[::1]", 28362));
@@ -1654,10 +1578,7 @@ async fn test_tproxy_something_happens() {
     }
     #[cfg(feature = "tproxy")]
     {
-        let server_task = tokio::spawn(crate::server::server_main(
-            &SERVER_ARGS,
-            &BACKEND_SUPPORTS_HTTP2,
-        ));
+        let server_task = tokio::spawn(crate::server::server_main(&SERVER_ARGS));
         tokio::time::sleep(Duration::from_secs(2)).await;
         let mut stream = TcpStream::connect((crate::arg::default_host!(local), 20445))
             .await

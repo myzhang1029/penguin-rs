@@ -22,7 +22,7 @@ use penguin_mux::{PROTOCOL_VERSION, timing::OptionalDuration};
 use sha1::{Digest, Sha1};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::pin::Pin;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use thiserror::Error;
 use tokio::net::TcpStream;
 use tokio_tungstenite::WebSocketStream;
@@ -50,7 +50,7 @@ fn make_sec_websocket_accept(key: &HeaderValue) -> HeaderValue {
     hasher.update(key.as_bytes());
     hasher.update(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
     let accept = B64_STANDARD_ENGINE.encode(hasher.finalize());
-    // `expect`: Base64-encoded string should be valid UTF-8
+    // `expect`: Base64-encoded string should be printable ASCII
     accept.parse().expect("Broken header value (this is a bug)")
 }
 
@@ -90,8 +90,8 @@ pub struct State {
     /// Backend client
     client: HyperClient<HyperConnector, IncomingOrFullBody>,
     /// Whether the backend supports HTTP/2
-    /// This setting will be probed on the first HTTP/2 request.
-    http2_support: &'static OnceLock<bool>,
+    /// This setting starts unset and will be probed on the first HTTP/2 request.
+    backend_http2_support: Arc<OnceLock<bool>>,
     /// TLS handshake timeout
     pub tls_timeout: OptionalDuration,
     /// HTTP timeout
@@ -100,7 +100,7 @@ pub struct State {
 
 impl State {
     /// Create a new `State`
-    pub async fn new(http2_support: &'static OnceLock<bool>) -> Result<Self, tls::Error> {
+    pub async fn new() -> Result<Self, tls::Error> {
         let client = HyperClient::builder(TokioExecutor::new())
             .build(crate::tls::make_hyper_connector().await?);
         Ok(Self {
@@ -114,7 +114,7 @@ impl State {
             outgoing_from_v4: Ipv4Addr::UNSPECIFIED,
             outgoing_from_v6: Ipv6Addr::UNSPECIFIED,
             client,
-            http2_support,
+            backend_http2_support: Arc::new(OnceLock::new()),
             tls_timeout: OptionalDuration::NONE,
             http_timeout: OptionalDuration::NONE,
         })
@@ -168,6 +168,11 @@ impl State {
         self
     }
     #[must_use]
+    pub fn with_backend_http2_support(self, http2_support: bool) -> Self {
+        self.backend_http2_support.set(http2_support).ok();
+        self
+    }
+    #[must_use]
     pub const fn with_tls_timeout(mut self, tls_timeout: OptionalDuration) -> Self {
         self.tls_timeout = tls_timeout;
         self
@@ -200,7 +205,7 @@ impl State {
         req: Request<IncomingOrFullBody>,
     ) -> Result<Response<IncomingOrFullBody>, Error> {
         let is_http2 = req.version() == http::Version::HTTP_2;
-        match (self.http2_support.get(), is_http2) {
+        match (self.backend_http2_support.get(), is_http2) {
             // HTTP/1.1 request or known HTTP/2 support: just send it
             (_, false) | (Some(true), true) => self.exec_request_inner(req, false).await,
             // Known no HTTP/2 support: downgrade to HTTP/1.1
@@ -219,7 +224,7 @@ impl State {
                     Ok(resp) => {
                         // Backend supports HTTP/2
                         // Ignore the error because we do allow concurrent sets
-                        self.http2_support.set(true).ok();
+                        self.backend_http2_support.set(true).ok();
                         Ok(resp)
                     }
                     Err(err) => {
@@ -239,7 +244,7 @@ impl State {
                             "backend does not support HTTP/2, permanently downgrading to HTTP/1.1: {err}"
                         );
                         // Ignore the error because we do allow concurrent sets
-                        self.http2_support.set(false).ok();
+                        self.backend_http2_support.set(false).ok();
                         let saved_req = Request::from_parts(
                             saved_parts,
                             IncomingOrFullBody::new_full(saved_body),
@@ -510,13 +515,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_obfs_or_not() {
-        static TEST_OBFS_OR_NOT_BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
-        TEST_OBFS_OR_NOT_BACKEND_SUPPORTS_HTTP2.set(false).unwrap();
         crate::tests::setup_logging();
         // Test `/health` without obfuscation
-        let state = State::new(&TEST_OBFS_OR_NOT_BACKEND_SUPPORTS_HTTP2)
+        let state = State::new()
             .await
             .unwrap()
+            .with_backend_http2_support(false)
             .with_not_found_resp("not found in the test");
         let req = Request::builder()
             .method(Method::GET)
@@ -528,10 +532,11 @@ mod tests {
         let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(body_bytes, "OK");
         // Test `/health` with obfuscation
-        let state = State::new(&TEST_OBFS_OR_NOT_BACKEND_SUPPORTS_HTTP2)
+        let state = State::new()
             .await
             .unwrap()
             .obfs(true)
+            .with_backend_http2_support(false)
             .with_not_found_resp("not found in the test");
         let req = Request::builder()
             .method(Method::GET)
@@ -543,9 +548,10 @@ mod tests {
         let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(body_bytes, "not found in the test");
         // Test `/version` without obfuscation
-        let state = State::new(&TEST_OBFS_OR_NOT_BACKEND_SUPPORTS_HTTP2)
+        let state = State::new()
             .await
-            .unwrap();
+            .unwrap()
+            .with_backend_http2_support(false);
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/version")
@@ -556,10 +562,11 @@ mod tests {
         let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(body_bytes, env!("CARGO_PKG_VERSION"));
         // Test `/version` with obfuscation
-        let state = State::new(&TEST_OBFS_OR_NOT_BACKEND_SUPPORTS_HTTP2)
+        let state = State::new()
             .await
             .unwrap()
             .obfs(true)
+            .with_backend_http2_support(false)
             .with_not_found_resp("not found in the test");
         let req = Request::builder()
             .method(Method::GET)
@@ -574,7 +581,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_backend_add_proxy_headers_or_not() {
-        static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
         static BACKEND: OnceLock<BackendUrl> = OnceLock::new();
         crate::tests::setup_logging();
         let listener = TcpListener::bind(("::1", 0)).await.unwrap();
@@ -605,7 +611,7 @@ mod tests {
         BACKEND
             .set(BackendUrl::from_str(&format!("http://{server_addr}")).unwrap())
             .unwrap();
-        let state = State::new(&BACKEND_SUPPORTS_HTTP2)
+        let state = State::new()
             .await
             .unwrap()
             .with_backend(Some(BACKEND.get().unwrap()));
@@ -642,7 +648,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_backend_status() {
-        static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
         static BACKEND: OnceLock<BackendUrl> = OnceLock::new();
         crate::tests::setup_logging();
         let (server_task, server_addr) = start_test_server().await;
@@ -650,7 +655,7 @@ mod tests {
             .set(BackendUrl::from_str(&format!("http://{server_addr}")).unwrap())
             .unwrap();
         // Test that the backend is actually working
-        let state = State::new(&BACKEND_SUPPORTS_HTTP2)
+        let state = State::new()
             .await
             .unwrap()
             .with_backend(Some(BACKEND.get().unwrap()));
@@ -661,7 +666,7 @@ mod tests {
             .unwrap();
         let resp = state.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let state = State::new(&BACKEND_SUPPORTS_HTTP2)
+        let state = State::new()
             .await
             .unwrap()
             .with_backend(Some(BACKEND.get().unwrap()));
@@ -677,14 +682,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_backend_http1_from_http2_client() {
-        static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
         static BACKEND: OnceLock<BackendUrl> = OnceLock::new();
         crate::tests::setup_logging();
         let (server_task, server_addr) = start_test_server().await;
         BACKEND
             .set(BackendUrl::from_str(&format!("http://{server_addr}")).unwrap())
             .unwrap();
-        let state = State::new(&BACKEND_SUPPORTS_HTTP2)
+        let state = State::new()
             .await
             .unwrap()
             .with_backend(Some(BACKEND.get().unwrap()));
@@ -697,7 +701,7 @@ mod tests {
         let resp = state.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         // No probing should happen here
-        assert!(BACKEND_SUPPORTS_HTTP2.get().is_none());
+        assert!(state.backend_http2_support.get().is_none());
         let req = Request::builder()
             .version(http::Version::HTTP_2)
             .method(Method::GET)
@@ -707,9 +711,9 @@ mod tests {
         let resp = state.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         // Probing should have happened here
-        assert_eq!(BACKEND_SUPPORTS_HTTP2.get(), Some(&false));
+        assert_eq!(state.backend_http2_support.get(), Some(&false));
         // Now create a new state. Both version requests should still work
-        let state = State::new(&BACKEND_SUPPORTS_HTTP2)
+        let state = State::new()
             .await
             .unwrap()
             .with_backend(Some(BACKEND.get().unwrap()));
@@ -742,15 +746,11 @@ mod tests {
     #[tokio::test]
     async fn test_backend_tls() {
         use std::sync::LazyLock;
-        static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
         static BACKEND: LazyLock<BackendUrl> =
             LazyLock::new(|| BackendUrl::from_str("https://www.google.com").unwrap());
         crate::tests::setup_logging();
         // Test that the backend is actually working
-        let state = State::new(&BACKEND_SUPPORTS_HTTP2)
-            .await
-            .unwrap()
-            .with_backend(Some(&BACKEND));
+        let state = State::new().await.unwrap().with_backend(Some(&BACKEND));
         // Google does support HTTP/2. We try that here, but let's not expect it to always work
         let req = Request::builder()
             .version(http::Version::HTTP_2)
@@ -760,11 +760,7 @@ mod tests {
             .unwrap();
         let resp = state.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let state = State::new(&BACKEND_SUPPORTS_HTTP2)
-            .await
-            .unwrap()
-            .with_backend(Some(&BACKEND));
-        assert!(BACKEND_SUPPORTS_HTTP2.get().is_some());
+        assert!(state.backend_http2_support.get().is_some());
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com/teapot")
@@ -776,13 +772,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_stealth_websocket_upgrade_method() {
-        static TEST_STEALTH_WEBSOCKET_UPGRADE_METHOD: OnceLock<bool> = OnceLock::new();
-        TEST_STEALTH_WEBSOCKET_UPGRADE_METHOD.set(false).unwrap();
         crate::tests::setup_logging();
         // Test non-GET request
-        let state = State::new(&TEST_STEALTH_WEBSOCKET_UPGRADE_METHOD)
+        let state = State::new()
             .await
             .unwrap()
+            .with_backend_http2_support(false)
             .with_not_found_resp("not found in the test");
         let req = Request::builder()
             .method(Method::POST)
@@ -801,15 +796,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_stealth_websocket_upgrade_missing_key_header() {
-        static TEST_STEALTH_WEBSOCKET_UPGRADE_MISSING_KEY_HEADER: OnceLock<bool> = OnceLock::new();
-        TEST_STEALTH_WEBSOCKET_UPGRADE_MISSING_KEY_HEADER
-            .set(false)
-            .unwrap();
         crate::tests::setup_logging();
         // Test missing upgrade header
-        let state = State::new(&TEST_STEALTH_WEBSOCKET_UPGRADE_MISSING_KEY_HEADER)
+        let state = State::new()
             .await
             .unwrap()
+            .with_backend_http2_support(false)
             .with_not_found_resp("not found in the test");
         let req = Request::builder()
             .method(Method::GET)
@@ -827,15 +819,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_stealth_websocket_upgrade_wrong_psk() {
-        static TEST_STEALTH_WEBSOCKET_UPGRADE_WRONG_PSK: OnceLock<bool> = OnceLock::new();
-        TEST_STEALTH_WEBSOCKET_UPGRADE_WRONG_PSK.set(false).unwrap();
         // Test wrong PSK
         static PSK: HeaderValue = HeaderValue::from_static("correct PSK");
         crate::tests::setup_logging();
-        let state = State::new(&TEST_STEALTH_WEBSOCKET_UPGRADE_WRONG_PSK)
+        let state = State::new()
             .await
             .unwrap()
             .with_ws_psk(Some(&PSK))
+            .with_backend_http2_support(false)
             .with_not_found_resp("not found in the test");
         let req = Request::builder()
             .method(Method::GET)
@@ -855,16 +846,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_stealth_websocket_upgrade_correct_psk() {
-        static TEST_STEALTH_WEBSOCKET_UPGRADE_CORRECT_PSK: OnceLock<bool> = OnceLock::new();
-        TEST_STEALTH_WEBSOCKET_UPGRADE_CORRECT_PSK
-            .set(false)
-            .unwrap();
         // Test correct PSK
         static PSK: HeaderValue = HeaderValue::from_static("correct PSK");
         crate::tests::setup_logging();
-        let state = State::new(&TEST_STEALTH_WEBSOCKET_UPGRADE_CORRECT_PSK)
+        let state = State::new()
             .await
             .unwrap()
+            .with_backend_http2_support(false)
             .with_ws_psk(Some(&PSK));
         let on_upgrade = hyper::upgrade::on(http::Request::new(EmptyBody::new()));
         let req = Request::builder()

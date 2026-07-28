@@ -17,7 +17,7 @@ use crate::tls::{MaybeTlsStream, TlsIdentity, TlsIdentityInner, make_tls_identit
 use hyper_util::rt::{TokioIo, tokio::TokioExecutor};
 use hyper_util::server::conn::auto;
 use std::net::SocketAddr;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use thiserror::Error;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinSet;
@@ -90,18 +90,8 @@ async fn check_start_tls(args: &'static ServerArgs) -> Result<Option<TlsIdentity
 
 /// Server entry point
 #[tracing::instrument(level = "trace")]
-pub async fn server_main(
-    args: &'static ServerArgs,
-    http2_support: &'static OnceLock<bool>,
-) -> Result<(), Error> {
-    if args.backend.is_none() {
-        // No backend at all, set to `false` here to catch bugs
-        assert!(
-            !http2_support.get_or_init(|| false),
-            "bad pre-set `http2_support`"
-        );
-    }
-    let state = State::new(http2_support)
+pub async fn server_main(args: &'static ServerArgs) -> Result<(), Error> {
+    let mut state = State::new()
         .await?
         .with_backend(args.backend.as_ref())
         .backend_add_forwarding_headers(args.backend_add_forwarding_headers)
@@ -112,6 +102,10 @@ pub async fn server_main(
         .with_outgoing_from(args.outgoing_from_v4.0, args.outgoing_from_v6.0)
         .with_tls_timeout(args.timeout)
         .with_http_timeout(args.timeout);
+    if args.backend.is_none() {
+        // No backend at all, set to `false` here to catch bugs
+        state = state.with_backend_http2_support(false);
+    }
     let sockaddrs = arg_to_sockaddrs(args)?;
     let mut listening_tasks = JoinSet::new();
     if let Some(tls_config) = check_start_tls(args).await? {

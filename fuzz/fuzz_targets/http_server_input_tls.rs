@@ -9,7 +9,6 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::runtime;
 
-static HTTP2_SUPPORT: OnceLock<bool> = OnceLock::new();
 static SERVER_STATE: OnceLock<server::State> = OnceLock::new();
 static TLS_TEMP_DIR: OnceLock<TempDir> = OnceLock::new();
 
@@ -35,7 +34,7 @@ fn init() {
                 .enable_all()
                 .build()
                 .unwrap()
-                .block_on(server::State::new(&HTTP2_SUPPORT))
+                .block_on(server::State::new())
                 .unwrap(),
         )
         .unwrap();
