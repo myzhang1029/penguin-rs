@@ -8,14 +8,15 @@ edition = "2024"
 cargo-fuzz = true
 
 [dependencies]
-bytes = "^1, >=1.11.1"
 libfuzzer-sys = "0.4"
-rusty-penguin = { version = "0.8", path = "../penguin" }
-penguin-mux = { version = "0.8", path = "../penguin-mux", features = ["tungstenite"] }
-rcgen = { version = "0.14", features = ["crypto", "pem"], default-features = false }
-tempfile = "3"
-tokio = { version = "^1, >=1.23.1", features = ["io-util"] }
-tokio-tungstenite = { version = "0.29", default-features = false }
+
+bytes = { workspace = true }
+rusty-penguin = { path = "../penguin" }
+penguin-mux = { path = "../penguin-mux", features = ["tungstenite"] }
+rcgen = { workspace = true, features = ["crypto", "pem"] }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["io-util"] }
+tokio-tungstenite = { workspace = true, default-features = false }
 
 [[bin]]
 name = "frame_parser"

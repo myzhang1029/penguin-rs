@@ -22,10 +22,10 @@ path = "src/lib.rs"
 arc-swap = "1"
 async-acceptor = { version = "0.1", path = "../async-acceptor", optional = true }
 base64 = { version = "0.23", optional = true }
-bytes = "^1, >=1.11.1"
+bytes = { workspace = true }
 clap = { version = "4", features = ["cargo", "derive", "string"] }
 console-subscriber = { version = "0.5", features = ["parking_lot"], optional = true }
-derive_more = { version = "2", features = ["as_ref", "deref", "debug", "display", "from", "from_str"] }
+derive_more = { workspace = true, features = ["as_ref", "deref", "debug", "display", "from", "from_str"] }
 dn42-root-ca = { version = "1", optional = true }
 futures-util = { workspace = true }
 http = "1"
@@ -42,7 +42,7 @@ parking_lot = { workspace = true }
 penguin-mux = { version = "0.8", path = "../penguin-mux", features = ["tungstenite"] }
 penguin-socks = { version = "0.1", path = "../penguin-socks", optional = true }
 rand = { workspace = true }
-rcgen = { version = "0.14", features = ["pem"], default-features = false, optional = true }
+rcgen = { workspace = true, features = ["pem"], optional = true }
 rustls = { version = "^0.23, >=0.23.18", features = ["brotli", "logging", "std", "tls12"], default-features = false, optional = true }
 rustls-native-certs = { version = "0.8", optional = true }
 rustls-pemfile = { version = "2", optional = true }
@@ -59,7 +59,7 @@ tracing-subscriber = { workspace = true }
 webpki-roots = { version = "1", optional = true }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = { workspace = true }
 # Hack; https://stackoverflow.com/q/73015087
 rusty-penguin = { path = ".", default-features = false, features = ["__dev-dependencies"] }
 
