@@ -345,8 +345,8 @@ mod tokio_io_impls {
 
 #[cfg(feature = "std")]
 mod copy_bidirectional_construction {
-    use crate::stream_tools::copy_bidirectional::CopyBidirectional;
-    use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite};
+    use crate::stream_tools::{CopyBidirectional, GreedyBufReader};
+    use tokio::io::{AsyncRead, AsyncWrite};
 
     impl super::MuxStream {
         /// A specialized version of [`tokio::io::copy_bidirectional`] that
@@ -364,29 +364,25 @@ mod copy_bidirectional_construction {
         /// This function is not cancel safe. Cancelling the future might cause
         /// data loss.
         #[inline]
-        #[cfg(feature = "tokio-io-util")]
-        pub fn into_copy_bidirectional<RW>(
-            self,
-            other: RW,
-        ) -> CopyBidirectional<tokio::io::BufReader<RW>>
+        pub fn into_copy_bidirectional<RW>(self, other: RW) -> CopyBidirectional<RW>
         where
             RW: AsyncRead + AsyncWrite,
         {
-            let other_bufreader = tokio::io::BufReader::new(other);
-            self.into_copy_bidirectional_with_buf(other_bufreader)
+            CopyBidirectional::new(self, GreedyBufReader::new(other))
         }
 
-        /// See [`into_copy_bidirectional`](Self::into_copy_bidirectional). This version allows you to
-        /// provide your own read buffer for the other side.
+        /// See [`into_copy_bidirectional`](Self::into_copy_bidirectional). This version
+        /// will consume the leftover data in the given `BufReader`
         #[inline]
-        pub const fn into_copy_bidirectional_with_buf<BRW>(
+        #[cfg(feature = "tokio-io-util")]
+        pub fn into_copy_bidirectional_with_buf<RW>(
             self,
-            other: BRW,
-        ) -> CopyBidirectional<BRW>
+            other: tokio::io::BufReader<RW>,
+        ) -> CopyBidirectional<RW>
         where
-            BRW: AsyncBufRead + AsyncWrite,
+            RW: AsyncRead + AsyncWrite,
         {
-            CopyBidirectional::new(self, other)
+            CopyBidirectional::new(self, GreedyBufReader::from_tokio_bufreader(other))
         }
     }
 }
