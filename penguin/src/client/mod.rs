@@ -111,7 +111,7 @@ impl HandlerResources {
             Self {
                 stream_command_tx,
                 datagram_tx,
-                udp_client_map: udp_client_map.clone(), // cheap
+                udp_client_map,
             },
             stream_command_rx,
             datagram_rx,

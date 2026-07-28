@@ -9,7 +9,10 @@ use penguin_mux::timing::OptionalDuration;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::{LazyLock, OnceLock};
 use std::{str::FromStr, time::Duration};
-#[cfg(not(all(feature = "tls-native", any(target_os = "macos", target_os = "windows"))))]
+#[cfg(not(all(
+    feature = "tls-native",
+    any(target_os = "macos", target_os = "windows")
+)))]
 use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
@@ -56,7 +59,10 @@ fn make_client_args(servhost: &str, servport: u16, remotes: Vec<Remote>) -> arg:
 
 /// Generate a self-signed server cert into a temporary directory.
 /// Returns the path to the directory. The cert is named `cert.pem` and the key is named `privkey.pem`.
-#[cfg(not(all(feature = "tls-native", any(target_os = "macos", target_os = "windows"))))]
+#[cfg(not(all(
+    feature = "tls-native",
+    any(target_os = "macos", target_os = "windows")
+)))]
 async fn make_server_cert_ecdsa(dest: Option<&str>) -> (Option<TempDir>, rcgen::Certificate) {
     let cert_params = rcgen::CertificateParams::new(vec!["localhost".to_string()]).unwrap();
     let keypair = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P384_SHA384).unwrap();
@@ -436,7 +442,10 @@ async fn test_setting_outgoing_ip_works() {
 // `native_tls` on macOS and Windows doesn't support reading Ed25519 nor ECDSA-based certificates.
 #[tokio::test]
 #[cfg(all(feature = "client", feature = "server"))]
-#[cfg(not(all(feature = "tls-native", any(target_os = "macos", target_os = "windows"))))]
+#[cfg(not(all(
+    feature = "tls-native",
+    any(target_os = "macos", target_os = "windows")
+)))]
 async fn test_it_works_tls_simple() {
     static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
     static SERVER_ARGS: OnceLock<arg::ServerArgs> = OnceLock::new();
@@ -508,7 +517,10 @@ async fn test_it_works_tls_simple() {
 #[tokio::test]
 #[cfg(unix)]
 #[cfg(feature = "server")]
-#[cfg(not(all(feature = "tls-native", any(target_os = "macos", target_os = "windows"))))]
+#[cfg(not(all(
+    feature = "tls-native",
+    any(target_os = "macos", target_os = "windows")
+)))]
 async fn test_tls_reload() {
     static BACKEND_SUPPORTS_HTTP2: OnceLock<bool> = OnceLock::new();
 
@@ -621,7 +633,10 @@ async fn check_http_host<T: AsyncRead + Unpin>(stream: &mut T, expected_host: &s
 // `native_tls` on macOS and Windows doesn't support reading Ed25519 nor ECDSA-based certificates.
 #[tokio::test]
 #[cfg(feature = "client")]
-#[cfg(not(all(feature = "tls-native", any(target_os = "macos", target_os = "windows"))))]
+#[cfg(not(all(
+    feature = "tls-native",
+    any(target_os = "macos", target_os = "windows")
+)))]
 async fn test_http_host_and_sni() {
     static CLIENT_ARGS_PLAIN: OnceLock<arg::ClientArgs> = OnceLock::new();
     static CLIENT_ARGS_HAS_HOSTNAME: OnceLock<arg::ClientArgs> = OnceLock::new();
