@@ -65,6 +65,7 @@ impl LongChain<'_> {
     }
 
     /// Internal method to verify data structure invariants
+    #[cfg(debug_assertions)]
     const fn verify_invariants(&self) {
         let mut got_len = 0;
         let num_elems = self.data.len();
