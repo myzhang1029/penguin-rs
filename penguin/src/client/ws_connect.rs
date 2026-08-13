@@ -105,6 +105,6 @@ pub async fn handshake(
     tokio::select! {
         result = handshake_inner(args) => result,
         () = args.handshake_timeout.sleep() => Err(super::Error::HandshakeTimeout),
-        Ok(()) = tokio::signal::ctrl_c() => Err(super::Error::HandshakeCancelled),
+        Ok(()) = tokio::signal::ctrl_c() => Err(super::Error::Cancelled),
     }
 }

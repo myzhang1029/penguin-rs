@@ -60,9 +60,9 @@ pub enum Error {
     /// Initial WebSocket handshake timed out
     #[error("initial WebSocket handshake timed out")]
     HandshakeTimeout,
-    /// User cancelled the initial WebSocket handshake
-    #[error("user cancelled initial WebSocket handshake")]
-    HandshakeCancelled,
+    /// User cancelled whatever operation was in progress manually
+    #[error("user requested cancellation")]
+    Cancelled,
     /// A stream request timed out
     #[error("stream request timed out")]
     StreamRequestTimeout,
@@ -342,8 +342,11 @@ pub async fn client_main_inner(
                 })
                 .await;
             match r {
-                // Will get `Ok` only if the user wants to quit
+                // If the user wants to quit
                 Ok(()) => return Ok(()),
+                Err(Error::Cancelled) => {
+                    panic!("`Cancelled` should be handled elsewhere (this is a bug)")
+                }
                 Err(ref e) if !e.retryable() => return r,
                 // else, retry
                 Err(e) => {
@@ -358,7 +361,7 @@ pub async fn client_main_inner(
                         .is_ok()
                     {
                         // Not timed out, which means the user pressed Ctrl-C
-                        return Err(Error::HandshakeCancelled);
+                        return Err(Error::Cancelled);
                     }
                 }
             }
@@ -396,8 +399,16 @@ async fn on_connected(
     let mux = Multiplexor::new_with_opt(ws_stream, options, Some(&mut mux_task_joinset));
     info!("Connected to server");
     // If we have a failed stream request, try it first
-    if let Some(sender) = failed_stream_request.take() {
-        get_send_stream_chan(&mux, sender, failed_stream_request, args.channel_timeout).await?;
+    if let Some(sender) = failed_stream_request.take()
+        && let Err(e) =
+            get_send_stream_chan(&mux, sender, failed_stream_request, args.channel_timeout).await
+    {
+        if matches!(e, Error::Cancelled) {
+            // No need to wait for stuff to finish because not even the first stream request went through
+            return Ok(());
+        } else {
+            return Err(e);
+        }
     }
     // Main loop
     loop {
@@ -406,7 +417,13 @@ async fn on_connected(
                 mux_task_joinset_result.expect("Task panicked (this is a bug)")?;
             }
             Some(sender) = stream_command_rx.recv() => {
-                get_send_stream_chan(&mux, sender, failed_stream_request, args.channel_timeout).await?;
+                if let Err(e) = get_send_stream_chan(&mux, sender, failed_stream_request, args.channel_timeout).await {
+                    if matches!(e, Error::Cancelled) {
+                        break;
+                    } else {
+                        return Err(e);
+                    }
+                }
             }
             Some(datagram) = datagram_rx.recv() => {
                 if let Err(e) = mux.send_datagram(datagram).await {
@@ -423,19 +440,18 @@ async fn on_connected(
                     None => info!("Received datagram for unknown client ID: {client_id:08x}"),
                 }
             }
-            Ok(()) = tokio::signal::ctrl_c() => {
-                // `Err` means unable to listen for Ctrl-C, which we will ignore
-                info!("Received Ctrl-C, exiting once all streams are closed");
-                drop(mux);
-                while let Some(result) = mux_task_joinset.join_next().await {
-                    result.expect("Task panicked (this is a bug)")?;
-                }
-                return Ok(());
-            }
+            // `Err` means unable to listen for Ctrl-C, which we will ignore
+            Ok(()) = tokio::signal::ctrl_c() => break,
             // The multiplexor has closed for some reason
             else => return Err(Error::ServerDisconnected),
         }
     }
+    info!("Received Ctrl-C, exiting once all streams are closed");
+    drop(mux);
+    while let Some(result) = mux_task_joinset.join_next().await {
+        result.expect("Task panicked (this is a bug)")?;
+    }
+    Ok(())
 }
 
 /// Get a new channel from the multiplexor and send it to the handler.
@@ -448,25 +464,30 @@ async fn get_send_stream_chan(
     channel_timeout: OptionalDuration,
 ) -> Result<(), Error> {
     trace!("requesting a new TCP channel");
-    match channel_timeout
-        .timeout(mux.new_stream_channel(&stream_command.host, stream_command.port))
-        .await
-    {
-        Ok(Ok(stream)) => {
-            trace!("got a new channel");
-            // `Err(_)` means "the corresponding receiver has already been deallocated"
-            // which means we don't care about the channel anymore.
-            stream_command.tx.send(stream).ok();
-            trace!("sent stream to handler (or handler died)");
-            Ok(())
+    tokio::select! {
+        Ok(()) = tokio::signal::ctrl_c() => {
+            info!("Received Ctrl-C, cancelling stream request");
+            Err(Error::Cancelled)
         }
-        Ok(Err(e)) => {
-            failed_stream_request.replace(stream_command);
-            Err(e.into())
-        }
-        Err(_) => {
+        _ = channel_timeout.sleep() => {
             failed_stream_request.replace(stream_command);
             Err(Error::StreamRequestTimeout)
+        }
+        r = mux.new_stream_channel(&stream_command.host, stream_command.port) => {
+            match r {
+                Ok(stream) => {
+                    trace!("got a new channel");
+                    // `Err(_)` means "the corresponding receiver has already been deallocated"
+                    // which means we don't care about the channel anymore.
+                    stream_command.tx.send(stream).ok();
+                    trace!("sent stream to handler (or handler died)");
+                    Ok(())
+                }
+                Err(e) => {
+                    failed_stream_request.replace(stream_command);
+                    Err(e.into())
+                }
+            }
         }
     }
 }
