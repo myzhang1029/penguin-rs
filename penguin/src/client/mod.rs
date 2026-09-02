@@ -406,9 +406,8 @@ async fn on_connected(
         if matches!(e, Error::Cancelled) {
             // No need to wait for stuff to finish because not even the first stream request went through
             return Ok(());
-        } else {
-            return Err(e);
         }
+        return Err(e);
     }
     // Main loop
     loop {
@@ -420,9 +419,8 @@ async fn on_connected(
                 if let Err(e) = get_send_stream_chan(&mux, sender, failed_stream_request, args.channel_timeout).await {
                     if matches!(e, Error::Cancelled) {
                         break;
-                    } else {
-                        return Err(e);
                     }
+                    return Err(e);
                 }
             }
             Some(datagram) = datagram_rx.recv() => {
@@ -469,7 +467,7 @@ async fn get_send_stream_chan(
             info!("Received Ctrl-C, cancelling stream request");
             Err(Error::Cancelled)
         }
-        _ = channel_timeout.sleep() => {
+        () = channel_timeout.sleep() => {
             failed_stream_request.replace(stream_command);
             Err(Error::StreamRequestTimeout)
         }
