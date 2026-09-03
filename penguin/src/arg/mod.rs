@@ -122,6 +122,11 @@ When PROTOCOL is omitted, it defaults to `tcp`.
 
 LOCAL_HOST and REMOTE_HOST must be enclosed in brackets if they are IPv6 addresses, e.g. `[::1]`.
 
+The prefix `R:` indicates that the roles of the server and client are reversed (for only this remote).
+That is, the server will listen on LOCAL_HOST:LOCAL_PORT and forward connections to
+REMOTE_HOST:REMOTE_PORT on the client. Reverse remotes does not support `stdio` or unix domain sockets
+as LOCAL_SPEC, nor `socks`, `http`, or `tproxy` as REMOTE_SPEC.
+
 Examples:
 - 3000
 - R:3000/udp
@@ -419,6 +424,7 @@ mod tests {
                     local_addr: LocalSpec::Inet((crate::arg::default_host!(unspec), 1234)),
                     remote_addr: RemoteSpec::Inet((crate::arg::default_host!(local), 1234)),
                     protocol: Protocol::Tcp,
+                    reversed: false,
                 }]
             );
         }
@@ -466,11 +472,13 @@ mod tests {
                         local_addr: LocalSpec::Stdio,
                         remote_addr: RemoteSpec::Inet(("localhost".to_string(), 53)),
                         protocol: Protocol::Udp,
+                        reversed: false,
                     },
                     Remote {
                         local_addr: LocalSpec::Inet(("192.168.1.1".to_string(), 8080)),
                         remote_addr: RemoteSpec::Inet(("localhost".to_string(), 80)),
                         protocol: Protocol::Tcp,
+                        reversed: false,
                     },
                 ]
             );
