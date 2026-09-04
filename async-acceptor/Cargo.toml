@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["Zhang Maiyun <me@maiyun.me>"]
 edition = "2024"
 description = "Abstraction over tokio async listeners with an accept() method"
-readme = "README.md"
+readme = true
 repository = "https://github.com/myzhang1029/penguin-rs"
 license = "Apache-2.0 OR GPL-3.0-or-later"
 keywords = ["async", "listener", "tokio"]
@@ -23,3 +23,6 @@ tokio-net = ["tokio/net"]
 stdio = ["tokio/io-std"]
 
 __dev-dependencies = ["tokio/io-util", "tokio/macros", "tokio/process", "tokio/rt-multi-thread"]
+
+[lints]
+workspace = true

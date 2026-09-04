@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["Zhang Maiyun <me@maiyun.me>"]
 edition = "2024"
 description = "A `Cow`-like wrapper for `Bytes` that can be either borrowed or owned."
-readme = "README.md"
+readme = true
 repository = "https://github.com/myzhang1029/penguin-rs"
 license = "Apache-2.0 OR GPL-3.0-or-later"
 keywords = ["buffers", "zero-copy", "io"]
@@ -17,3 +17,6 @@ derive_more = { workspace = true, features = ["from", "is_variant"] }
 [features]
 default = ["std"]
 std = ["bytes/std", "derive_more/std"]
+
+[lints]
+workspace = true

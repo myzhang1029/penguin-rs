@@ -19,36 +19,39 @@ tokio = { workspace = true, features = ["io-util"] }
 tokio-tungstenite = { workspace = true, default-features = false }
 
 [[bin]]
-name = "frame_parser"
+name = "frame-parser"
 path = "fuzz_targets/frame_parser.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "socket_input"
+name = "socket-input"
 path = "fuzz_targets/socket_input.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "remote_parser"
+name = "remote-parser"
 path = "fuzz_targets/remote_parser.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "http_server_input"
+name = "http-server-input"
 path = "fuzz_targets/http_server_input.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "http_server_input_tls"
+name = "http-server-input-tls"
 path = "fuzz_targets/http_server_input_tls.rs"
 test = false
 doc = false
 bench = false
+
+[lints]
+workspace = true

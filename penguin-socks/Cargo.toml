@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["Zhang Maiyun <me@maiyun.me>"]
 edition = "2024"
 description = "SOCKS4/5 protocol implementation."
-readme = "README.md"
+readme = true
 repository = "https://github.com/myzhang1029/penguin-rs"
 license = "Apache-2.0 OR GPL-3.0-or-later"
 keywords = ["async", "socks", "socks4", "socks5"]
@@ -20,3 +20,6 @@ penguin-socks = { path = ".", features = ["__dev-dependencies"] }
 
 [features]
 __dev-dependencies = ["tokio/macros", "tokio/rt-multi-thread"]
+
+[lints]
+workspace = true
