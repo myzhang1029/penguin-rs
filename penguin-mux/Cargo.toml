@@ -34,7 +34,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = [ "sync"] }
 tokio-tungstenite = { workspace = true, optional = true }
 tracing = { workspace = true }
-yawc = { version = "0.3", default-features = false, optional = true }
+yawc = { version = "0.4", default-features = false, optional = true }
 
 [dev-dependencies]
 divan = "0.1"
