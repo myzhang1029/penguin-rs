@@ -1,0 +1,61 @@
+policy_module(rusty-penguin, 1.0.5)
+
+########################################
+#
+# Declarations
+#
+
+type rusty_penguin_t;
+type rusty_penguin_exec_t;
+init_daemon_domain(rusty_penguin_t, rusty_penguin_exec_t)
+type rusty_penguin_unit_file_t;
+systemd_unit_file(rusty_penguin_unit_file_t)
+
+########################################
+#
+# Rusty Penguin local policy
+#
+#allow rusty_penguin_t self:fifo_file rw_fifo_file_perms;
+#allow rusty_penguin_t self:unix_stream_socket create_stream_socket_perms;
+
+require {
+    type init_var_run_t;
+    type cgroup_t;
+    type net_conf_t;
+    type sysfs_t;
+    class file { getattr open read };
+    class tcp_socket { accept bind connect create getattr getopt listen read setopt shutdown write };
+    class udp_socket { bind connect create getattr read write };
+}
+init_nnp_daemon_domain(rusty_penguin_t)
+
+# Tokio uses sysfs and cgroupfs to configure the threadpool
+fs_search_cgroup_dirs(rusty_penguin_t)
+allow rusty_penguin_t cgroup_t:file read;
+allow rusty_penguin_t sysfs_t:file { open read };
+
+# Access system CA store
+miscfiles_read_generic_certs(rusty_penguin_t)
+
+# When using systemd LoadCredential, certificates are loaded as init_var_run_t
+allow rusty_penguin_t init_var_run_t:file { getattr open read };
+# Cap net_bind_service and bind to http_port_t
+corenet_tcp_bind_http_port(rusty_penguin_t)
+# Bind TCP and UDP
+corenet_tcp_bind_generic_node(rusty_penguin_t)
+corenet_udp_bind_generic_node(rusty_penguin_t)
+# getaddrinfo reads /etc/hosts
+allow rusty_penguin_t net_conf_t:file { open read };
+
+# Allow outgoing connections
+corenet_tcp_connect_http_port(rusty_penguin_t)
+corenet_tcp_connect_ssh_port(rusty_penguin_t)
+corenet_tcp_connect_generic_port(rusty_penguin_t)
+corenet_tcp_connect_all_unreserved_ports(rusty_penguin_t)
+corenet_udp_sendrecv_all_ports(rusty_penguin_t)
+allow rusty_penguin_t self:tcp_socket { accept bind connect create getattr getopt listen read setopt shutdown write };
+allow rusty_penguin_t self:udp_socket { bind connect create getattr read write };
+
+domain_use_interactive_fds(rusty_penguin_t)
+files_read_etc_files(rusty_penguin_t)
+miscfiles_read_localization(rusty_penguin_t)

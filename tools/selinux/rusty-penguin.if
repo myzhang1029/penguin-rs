@@ -1,0 +1,103 @@
+
+## <summary>policy for rusty-penguin</summary>
+
+########################################
+## <summary>
+##	Execute rusty_penguin_exec_t in the rusty_penguin domain.
+## </summary>
+## <param name="domain">
+## <summary>
+##	Domain allowed to transition.
+## </summary>
+## </param>
+#
+interface(`rusty_penguin_domtrans',`
+	gen_require(`
+		type rusty_penguin_t, rusty_penguin_exec_t;
+	')
+
+	corecmd_search_bin($1)
+	domtrans_pattern($1, rusty_penguin_exec_t, rusty_penguin_t)
+')
+
+######################################
+## <summary>
+##	Execute rusty-penguin in the caller domain.
+## </summary>
+## <param name="domain">
+##	<summary>
+##	Domain allowed access.
+##	</summary>
+## </param>
+#
+interface(`rusty_penguin_exec',`
+	gen_require(`
+		type rusty_penguin_exec_t;
+	')
+
+	corecmd_search_bin($1)
+	can_exec($1, rusty_penguin_exec_t)
+')
+########################################
+## <summary>
+##	Execute rusty-penguin server in the rusty-penguin domain.
+## </summary>
+## <param name="domain">
+##	<summary>
+##	Domain allowed to transition.
+##	</summary>
+## </param>
+#
+interface(`rusty_penguin_systemctl',`
+	gen_require(`
+		type rusty_penguin_t;
+		type rusty_penguin_unit_file_t;
+	')
+
+	systemd_exec_systemctl($1)
+        systemd_read_fifo_file_passwd_run($1)
+	allow $1 rusty_penguin_unit_file_t:file read_file_perms;
+	allow $1 rusty_penguin_unit_file_t:service manage_service_perms;
+
+	ps_process_pattern($1, rusty_penguin_t)
+')
+
+
+########################################
+## <summary>
+##	All of the rules required to administrate
+##	an rusty-penguin environment
+## </summary>
+## <param name="domain">
+##	<summary>
+##	Domain allowed access.
+##	</summary>
+## </param>
+## <param name="role">
+##	<summary>
+##	Role allowed access.
+##	</summary>
+## </param>
+## <rolecap/>
+#
+interface(`rusty_penguin_admin',`
+	gen_require(`
+		type rusty_penguin_t;
+	type rusty_penguin_unit_file_t;
+	')
+
+	allow $1 rusty_penguin_t:process { signal_perms };
+	ps_process_pattern($1, rusty_penguin_t)
+
+    tunable_policy(`deny_ptrace',`',`
+        allow $1 rusty_penguin_t:process ptrace;
+    ')
+
+	rusty_penguin_systemctl($1)
+	admin_pattern($1, rusty_penguin_unit_file_t)
+	allow $1 rusty_penguin_unit_file_t:service all_service_perms;
+	optional_policy(`
+		systemd_passwd_agent_exec($1)
+		systemd_read_fifo_file_passwd_run($1)
+	')
+')
