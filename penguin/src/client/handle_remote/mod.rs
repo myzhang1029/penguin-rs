@@ -30,6 +30,16 @@ use thiserror::Error;
 use tproxy::{handle_tproxy_tcp, handle_tproxy_udp};
 use tracing::debug;
 
+macro_rules! check_remote_spec {
+    (false) => {
+        check_remote_spec!(false && false);
+        unreachable!()
+    };
+    ($exp:expr) => {
+        assert!($exp, "bad remote spec accepted by `clap` (this is a bug)");
+    };
+}
+
 /// Handler errors
 /// These are all fatal errors that will cause the client to exit.
 #[derive(Debug, Error)]
@@ -81,51 +91,55 @@ pub(super) async fn handle_remote(
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Inet((rhost, rport)), Protocol::Udp) => {
             handle_udp(lhost, *lport, rhost, *rport, hr).await
         }
-        (LocalSpec::DomainSocket(path), RemoteSpec::Inet((rhost, rport)), _) => {
-            // The parser guarantees that the protocol is TCP
+        (LocalSpec::DomainSocket(path), RemoteSpec::Inet((rhost, rport)), proto) => {
+            check_remote_spec!(proto == Protocol::Tcp && !remote.reversed);
             handle_tcp(bind_uds(path).await?, rhost, *rport, hr).await
         }
         (LocalSpec::Stdio, RemoteSpec::Inet((rhost, rport)), Protocol::Tcp) => {
+            check_remote_spec!(!remote.reversed);
             handle_tcp(ReusableListener::new_stdio(), rhost, *rport, hr).await
         }
         (LocalSpec::Stdio, RemoteSpec::Inet((rhost, rport)), Protocol::Udp) => {
+            check_remote_spec!(!remote.reversed);
             handle_udp_stdio(rhost, *rport, hr).await
         }
         // Remote `Socks`
-        (LocalSpec::Inet((lhost, lport)), RemoteSpec::Socks, _) => {
-            // The parser guarantees that the protocol is TCP
+        (LocalSpec::Inet((lhost, lport)), RemoteSpec::Socks, proto) => {
+            check_remote_spec!(proto == Protocol::Tcp && !remote.reversed);
             handle_socks(bind_tcp(lhost, *lport).await?, lhost, hr).await
         }
-        (LocalSpec::Stdio, RemoteSpec::Socks, _) => {
-            // The parser guarantees that the protocol is TCP
+        (LocalSpec::Stdio, RemoteSpec::Socks, proto) => {
+            check_remote_spec!(proto == Protocol::Tcp && !remote.reversed);
             handle_socks(ReusableListener::new_stdio(), "localhost", hr).await
         }
-        (LocalSpec::DomainSocket(path), RemoteSpec::Socks, _) => {
-            // The parser guarantees that the protocol is TCP
+        (LocalSpec::DomainSocket(path), RemoteSpec::Socks, proto) => {
+            check_remote_spec!(proto == Protocol::Tcp && !remote.reversed);
             handle_socks(bind_uds(path).await?, "localhost", hr).await
         }
         // Remote `Http`
-        (LocalSpec::Inet((lhost, lport)), RemoteSpec::Http, _) => {
-            // The parser guarantees that the protocol is TCP
+        (LocalSpec::Inet((lhost, lport)), RemoteSpec::Http, proto) => {
+            check_remote_spec!(proto == Protocol::Tcp && !remote.reversed);
             handle_http(bind_tcp(lhost, *lport).await?, hr).await
         }
-        (LocalSpec::Stdio, RemoteSpec::Http, _) => {
-            // The parser guarantees that the protocol is TCP
+        (LocalSpec::Stdio, RemoteSpec::Http, proto) => {
+            check_remote_spec!(proto == Protocol::Tcp && !remote.reversed);
             handle_http(ReusableListener::new_stdio(), hr).await
         }
-        (LocalSpec::DomainSocket(path), RemoteSpec::Http, _) => {
-            // The parser guarantees that the protocol is TCP
+        (LocalSpec::DomainSocket(path), RemoteSpec::Http, proto) => {
+            check_remote_spec!(proto == Protocol::Tcp && !remote.reversed);
             handle_http(bind_uds(path).await?, hr).await
         }
         // Remote `Tproxy`
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Tproxy, Protocol::Tcp) => {
+            check_remote_spec!(!remote.reversed);
             handle_tproxy_tcp(lhost, *lport, hr).await
         }
         (LocalSpec::Inet((lhost, lport)), RemoteSpec::Tproxy, Protocol::Udp) => {
+            check_remote_spec!(!remote.reversed);
             handle_tproxy_udp(lhost, *lport, hr).await
         }
         (LocalSpec::Stdio | LocalSpec::DomainSocket(_), RemoteSpec::Tproxy, _) => {
-            unreachable!("`clap` should have rejected this combination (this is a bug)")
+            check_remote_spec!(false);
         }
     }
 }
