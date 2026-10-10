@@ -1,2 +1,4 @@
 /usr/bin/penguin                                --      gen_context(system_u:object_r:rusty_penguin_exec_t,s0)
+ifdef(`distro_redhat',`
 /usr/lib/systemd/system/rusty-penguin.service   --      gen_context(system_u:object_r:rusty_penguin_unit_file_t,s0)
+')
