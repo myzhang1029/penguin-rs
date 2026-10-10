@@ -1,4 +1,4 @@
-policy_module(rusty-penguin, 1.0.6)
+policy_module(rusty-penguin, 1.1.0)
 
 ########################################
 #
@@ -14,12 +14,26 @@ ifdef(`distro_redhat',`
     systemd_unit_file(rusty_penguin_unit_file_t)
 ')
 
+## <desc>
+##	<p>
+##	Allow Rusty Penguin SSH ports access
+##	</p>
+## </desc>
+gen_tunable(rusty_penguin_can_connect_ssh, false)
+
+## <desc>
+##	<p>
+##	Allow Rusty Penguin unrestricted network access
+##	</p>
+## </desc>
+gen_tunable(rusty_penguin_unrestricted_network, false)
+
+
 ########################################
 #
 # Rusty Penguin local policy
 #
 #allow rusty_penguin_t self:fifo_file rw_fifo_file_perms;
-#allow rusty_penguin_t self:unix_stream_socket create_stream_socket_perms;
 
 require {
 ifdef(`distro_redhat',`
@@ -32,8 +46,6 @@ ifndef(`distro_redhat',`
     type net_conf_t;
     type sysfs_t;
     class file { getattr open read };
-    class tcp_socket { accept bind connect create getattr getopt listen read setopt shutdown write };
-    class udp_socket { bind connect create getattr read setopt write };
 }
 
 ifdef(`distro_redhat',`
@@ -61,19 +73,30 @@ corenet_tcp_bind_http_port(rusty_penguin_t)
 # Bind TCP and UDP
 corenet_tcp_bind_generic_node(rusty_penguin_t)
 corenet_udp_bind_generic_node(rusty_penguin_t)
+allow rusty_penguin_t self:tcp_socket create_stream_socket_perms;
+allow rusty_penguin_t self:udp_socket create_socket_perms;
+allow rusty_penguin_t self:unix_stream_socket create_stream_socket_perms;
+allow rusty_penguin_t self:unix_dgram_socket create_socket_perms;
 # getaddrinfo reads /etc/hosts
 allow rusty_penguin_t net_conf_t:file { open read };
 
 # Allow outgoing connections
 corenet_tcp_connect_http_port(rusty_penguin_t)
-corenet_tcp_connect_ssh_port(rusty_penguin_t)
-corenet_tcp_connect_generic_port(rusty_penguin_t)
-corenet_tcp_connect_all_unreserved_ports(rusty_penguin_t)
+tunable_policy(`rusty_penguin_can_connect_ssh',`
+    corenet_tcp_connect_ssh_port(rusty_penguin_t)
+')
+tunable_policy(`rusty_penguin_unrestricted_network',`
+    corenet_tcp_sendrecv_generic_if(rusty_penguin_t)
+    corenet_udp_sendrecv_generic_if(rusty_penguin_t)
+    corenet_tcp_sendrecv_generic_node(rusty_penguin_t)
+    corenet_udp_sendrecv_generic_node(rusty_penguin_t)
 ifdef(`distro_redhat',`
+    corenet_tcp_sendrecv_all_ports(rusty_penguin_t)
     corenet_udp_sendrecv_all_ports(rusty_penguin_t)
 ')
-allow rusty_penguin_t self:tcp_socket { accept bind connect create getattr getopt listen read setopt shutdown write };
-allow rusty_penguin_t self:udp_socket { bind connect create getattr read setopt write };
+    corenet_tcp_connect_all_ports(rusty_penguin_t)
+    corenet_sendrecv_all_client_packets(rusty_penguin_t)
+')
 
 domain_use_interactive_fds(rusty_penguin_t)
 files_read_etc_files(rusty_penguin_t)

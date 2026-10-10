@@ -8,7 +8,7 @@ restorecon -R /usr/lib/systemd/system/rusty-penguin.service; \
 %define selinux_policyver 42.1.18-4
 
 Name:   rusty-penguin_selinux
-Version:	1.0
+Version:	1.1
 Release:	1%{?dist}
 Summary:	SELinux policy module for rusty-penguin
 
@@ -71,4 +71,5 @@ exit 0
 %changelog
 * Sat Oct 10 2026 Zhang Maiyun <me@maiyun.me> 1.0-1
 - Initial version
-
+* Sat Oct 10 2026 Zhang Maiyun <me@maiyun.me> 1.1-1
+- Tunable network access level
