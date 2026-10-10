@@ -1,0 +1,6 @@
+.build
+noarch
+tmp
+rusty_penguin_selinux.8
+rusty-penguin.pp
+rusty-penguin_selinux*.rpm
