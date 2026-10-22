@@ -343,10 +343,7 @@ pub async fn client_main_inner(
                 .await;
             match r {
                 // If the user wants to quit
-                Ok(()) => return Ok(()),
-                Err(Error::Cancelled) => {
-                    panic!("`Cancelled` should be handled elsewhere (this is a bug)")
-                }
+                Ok(()) | Err(Error::Cancelled) => return Ok(()),
                 Err(ref e) if !e.retryable() => return r,
                 // else, retry
                 Err(e) => {
