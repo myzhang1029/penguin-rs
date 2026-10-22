@@ -10,6 +10,7 @@ use crate::{BindRequest, Datagram, Error, EstablishedStreamData, FlowSlot, MuxSt
 #[cfg(feature = "tokio-rt")]
 use alloc::{boxed::Box, string::ToString};
 use bytes::Bytes;
+use core::convert::Infallible;
 use core::future::poll_fn;
 use core::task::{Context, Poll, ready};
 use futures_util::FutureExt;
@@ -142,14 +143,18 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
                 (false, r)
             }
             r = self.process_message_to_send_task(&mut tx_msg_rx).fuse() => {
-                debug!("`process_message_to_send_task` task finished: {r:?}");
-                (false, r)
+                // This function returns if we cannot sink or cannot receive from `frame_rx` anymore,
+                // in either case, it does not make sense to check `frame_rx`.
+                debug!("`process_message_to_send_task` task errored: {r:?}");
+                (false, r.map(|_| unreachable!()))
             }
             r = self.schedule_ping_task().fuse() => {
                 debug!("`schedule_ping_task` task errored: {r:?}");
-                (false, r)
+                (false, r.map(|_| unreachable!()))
             }
             () = self.process_dropped_flows_task(&mut dropped_flows_rx).fuse() => {
+                // If this returns, our end is dropped, but we should still try to flush everything we
+                // already have in the `frame_rx` before closing.
                 debug!("`process_dropped_flows_task` task finished");
                 (true, Ok(()))
             }
@@ -175,8 +180,6 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
             if flow_id == 0 {
                 // `flow_id` is `0`, which means the multiplexor itself is being dropped.
                 debug!("mux dropped");
-                // If this returns, our end is dropped, but we should still try to flush everything we
-                // already have in the `frame_rx` before closing.
                 return;
             }
             self.close_flow(flow_id, false);
@@ -188,7 +191,7 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
     }
 
     #[cfg(feature = "tokio-time")]
-    async fn schedule_ping_task(&self) -> Result<()> {
+    async fn schedule_ping_task(&self) -> Result<Infallible> {
         let mut interval = crate::timing::OptionalInterval::from(self.keepalive_interval);
         // If we missed a tick, this task was probably preempted by networking, so we don't need to
         // make up for it.
@@ -220,7 +223,7 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
         }
     }
     #[cfg(not(feature = "tokio-time"))]
-    async fn schedule_ping_task(&self) -> Result<()> {
+    async fn schedule_ping_task(&self) -> Result<Infallible> {
         if self.keepalive_interval.is_some() || self.keepalive_timeout.is_some() {
             warn!(
                 "`keepalive_interval` and `keepalive_timeout` are ignored because the `tokio-time` feature is not enabled"
@@ -241,13 +244,11 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
     async fn process_message_to_send_task(
         &self,
         tx_msg_rx: &mut mpsc::UnboundedReceiver<Message>,
-    ) -> Result<()> {
+    ) -> Result<Infallible> {
         loop {
             poll_fn(|cx| self.poll_reserve_space_queue_message(cx, tx_msg_rx)).await?;
             poll_fn(|cx| self.ws.lock().poll_flush_unpin(cx)).await?;
         }
-        // This returns if we cannot sink or cannot receive from `frame_rx` anymore,
-        // in either case, it does not make sense to check `frame_rx`.
     }
 
     /// Poll `tx_msg_rx` and queue the message to be sent in a way that is cancel safe.
@@ -285,7 +286,7 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
             }
         }
         debug!("WebSocket closed by peer");
-        return Ok(());
+        Ok(())
     }
 
     /// Wind down the multiplexor task.
