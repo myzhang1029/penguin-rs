@@ -81,6 +81,7 @@ impl MuxStream {
     /// This function will panic if the internal buffer still has data.
     #[tracing::instrument(skip_all, level = "trace", fields(flow_id = %format_args!("{:08x}", self.flow_id)))]
     #[inline]
+    #[track_caller]
     pub fn poll_for_push(&mut self, cx: &mut Context<'_>) -> Poll<usize> {
         let Some(next) = ready!(self.rx_frame_rx.poll_recv(cx)) else {
             trace!("stream has been closed");
