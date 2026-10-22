@@ -12,15 +12,12 @@ extern crate alloc;
 extern crate std;
 
 mod macros;
-mod pbuf;
 
 use alloc::borrow::Borrow;
 use alloc::vec::Vec;
 use bytes::{Buf, Bytes};
 use core::{cmp::Ordering, fmt, ops::Deref};
 use macros::{impl_by_as_ref, impl_by_delegate};
-
-pub use pbuf::LongChain;
 
 /// A special version of `std::borrow::Cow` whose owned variant is [`Bytes`].
 ///
