@@ -20,13 +20,20 @@ pub enum MaybeTlsStream<T> {
 impl<T> MaybeTlsStream<T> {
     pub fn get_ref(&self) -> &T {
         match self {
+            #[cfg(feature = "tls-rustls")]
             Self::Tls(s) => s.get_ref().0,
+            // native: this is a crazy API :(
+            #[cfg(feature = "tls-native")]
+            Self::Tls(s) => s.get_ref().get_ref().get_ref(),
             Self::Plain(s) => s,
         }
     }
     pub fn get_mut(&mut self) -> &mut T {
         match self {
+            #[cfg(feature = "tls-rustls")]
             Self::Tls(s) => s.get_mut().0,
+            #[cfg(feature = "tls-native")]
+            Self::Tls(s) => s.get_mut().get_mut().get_mut(),
             Self::Plain(s) => s,
         }
     }
