@@ -138,6 +138,10 @@ impl State {
         self
     }
     #[must_use]
+    pub const fn client_addr(&self) -> Option<SocketAddr> {
+        self.client_addr
+    }
+    #[must_use]
     pub const fn with_ws_psk(mut self, ws_psk: Option<&'static HeaderValue>) -> Self {
         self.ws_psk = ws_psk;
         self

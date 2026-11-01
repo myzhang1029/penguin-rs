@@ -200,25 +200,30 @@ pub async fn run_listener(
     state: State,
 ) {
     loop {
-        let (stream, peer) = match listener.accept().await {
-            Ok((stream, peer)) => (stream, peer),
+        let (stream, peer_addr) = match listener.accept().await {
+            Ok(p) => p,
             Err(err) => {
                 error!("Accept error: {err}");
                 continue;
             }
         };
-        debug!("accepted connection from {peer}");
+        debug!("accepted connection from {peer_addr}");
         let new_state = state
             .clone() // cheap
-            .with_client_addr(Some(peer));
+            .with_client_addr(Some(peer_addr));
         if let Some(tls_config) = &tls_config {
             tokio::spawn(serve_connection_tls(
                 stream,
                 new_state,
+                peer_addr,
                 tls_config.load_full(),
             ));
         } else {
-            tokio::spawn(serve_connection(MaybeTlsStream::Plain(stream), new_state));
+            tokio::spawn(serve_connection(
+                MaybeTlsStream::Plain(stream),
+                new_state,
+                peer_addr,
+            ));
         }
     }
 }
@@ -227,14 +232,11 @@ pub async fn run_listener(
 pub async fn serve_connection_tls(
     stream: TcpStream,
     state: State,
+    peer_addr: SocketAddr,
     tls_config: Arc<TlsIdentityInner>,
 ) {
     let tls_timeout = state.tls_timeout;
 
-    // `expect`: here `stream` should be connected
-    let peer_addr = stream
-        .peer_addr()
-        .expect("Failed to get peer address of TCP socket (this is a bug)");
     #[cfg(feature = "tls-rustls")]
     let stream_future = tokio_rustls::TlsAcceptor::from(tls_config).accept(stream);
     #[cfg(feature = "tls-native")]
@@ -243,7 +245,7 @@ pub async fn serve_connection_tls(
     let stream = state.tls_timeout.timeout(stream_future).await;
 
     match stream {
-        Ok(Ok(stream)) => serve_connection(stream.into(), state).await,
+        Ok(Ok(stream)) => serve_connection(stream.into(), state, peer_addr).await,
         Ok(Err(err)) => info!("TLS handshake error with peer {peer_addr}: {err}"),
         Err(_) => info!("TLS handshake with peer {peer_addr} timed out after {tls_timeout}"),
     }
@@ -251,12 +253,11 @@ pub async fn serve_connection_tls(
 
 /// Serves a single connection from a client, ignoring errors.
 #[tracing::instrument(skip_all, level = "debug")]
-pub async fn serve_connection(stream: MaybeTlsStream<TcpStream>, state: State) {
-    // `expect`: here `stream` should be connected
-    let peer_addr = stream
-        .get_ref()
-        .peer_addr()
-        .expect("Failed to get peer address of TCP socket (this is a bug)");
+pub async fn serve_connection(
+    stream: MaybeTlsStream<TcpStream>,
+    state: State,
+    peer_addr: SocketAddr,
+) {
     let stream_with_timeout = io_with_timeout::IoWithTimeout::new(stream, state.http_timeout);
     let hyper_io = TokioIo::new(stream_with_timeout);
     let exec = auto::Builder::new(TokioExecutor::new());
