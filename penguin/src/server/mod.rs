@@ -257,17 +257,9 @@ pub async fn serve_connection(stream: MaybeTlsStream<TcpStream>, state: State) {
     let hyper_io = TokioIo::new(stream_with_timeout);
     let exec = auto::Builder::new(TokioExecutor::new());
     let conn = exec.serve_connection_with_upgrades(hyper_io, state);
-    let conn = assert_send(conn);
     if let Err(err) = conn.await {
         error!("HTTP connection error: {err}");
     }
-}
-
-/// Workaround at <https://github.com/rust-lang/rust/issues/102211#issuecomment-1367900125>
-fn assert_send<'u, R>(
-    fut: impl 'u + Send + Future<Output = R>,
-) -> impl 'u + Send + Future<Output = R> {
-    fut
 }
 
 #[cfg(test)]
