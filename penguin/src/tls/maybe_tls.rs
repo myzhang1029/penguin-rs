@@ -17,6 +17,21 @@ pub enum MaybeTlsStream<T> {
     Plain(T),
 }
 
+impl<T> MaybeTlsStream<T> {
+    pub fn get_ref(&self) -> &T {
+        match self {
+            Self::Tls(s) => s.get_ref().0,
+            Self::Plain(s) => s,
+        }
+    }
+    pub fn get_mut(&mut self) -> &mut T {
+        match self {
+            Self::Tls(s) => s.get_mut().0,
+            Self::Plain(s) => s,
+        }
+    }
+}
+
 impl<T: AsyncRead + AsyncWrite + Unpin> AsyncRead for MaybeTlsStream<T> {
     #[inline]
     fn poll_read(

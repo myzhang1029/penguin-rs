@@ -185,14 +185,17 @@ pub(super) async fn tcp_forwarder_on_channel(
     trace!("attempting TCP connect to {rhost} port={rport}");
     let (socket, target) =
         bind_tcp_for_target((rhost, rport), outgoing_from_v4, outgoing_from_v6).await?;
-    // `expect`: at this point `listener` should be bound. Otherwise, it's a bug.
+    // `expect`: at this point `listener` should be bound
     let local_addr = socket
         .local_addr()
         .expect("Failed to get local address of TCP socket (this is a bug)");
     debug!("bound to {local_addr}");
     let rstream = socket.connect(target).await?;
-    // Here `rstream` should be connected. Pass the error (unlikely) otherwise
-    debug!("TCP forwarding to {}", rstream.peer_addr()?);
+    // `expect`: here `rstream` should be connected
+    let peer_addr = rstream
+        .peer_addr()
+        .expect("Failed to get peer address of TCP socket (this is a bug)");
+    debug!("TCP forwarding to {peer_addr}",);
     channel.into_copy_bidirectional(rstream).await?;
     trace!("TCP forwarding finished");
     Ok(())
