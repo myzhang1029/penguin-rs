@@ -10,7 +10,6 @@ use crate::{BindRequest, Datagram, Error, EstablishedStreamData, FlowSlot, MuxSt
 #[cfg(feature = "tokio-rt")]
 use alloc::{boxed::Box, string::ToString};
 use bytes::Bytes;
-use core::convert::Infallible;
 use core::future::poll_fn;
 use core::task::{Context, Poll, ready};
 use futures_util::FutureExt;
@@ -191,7 +190,7 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
     }
 
     #[cfg(feature = "tokio-time")]
-    async fn schedule_ping_task(&self) -> Result<Infallible> {
+    async fn schedule_ping_task(&self) -> Result<!> {
         let mut interval = crate::timing::OptionalInterval::from(self.keepalive_interval);
         // If we missed a tick, this task was probably preempted by networking, so we don't need to
         // make up for it.
@@ -223,7 +222,7 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
         }
     }
     #[cfg(not(feature = "tokio-time"))]
-    async fn schedule_ping_task(&self) -> Result<Infallible> {
+    async fn schedule_ping_task(&self) -> Result<!> {
         if self.keepalive_interval.is_some() || self.keepalive_timeout.is_some() {
             warn!(
                 "`keepalive_interval` and `keepalive_timeout` are ignored because the `tokio-time` feature is not enabled"
@@ -244,7 +243,7 @@ impl<S: WebSocket, T: TimestampProvider> Task<S, T> {
     async fn process_message_to_send_task(
         &self,
         tx_msg_rx: &mut mpsc::UnboundedReceiver<Message>,
-    ) -> Result<Infallible> {
+    ) -> Result<!> {
         loop {
             poll_fn(|cx| self.poll_reserve_space_queue_message(cx, tx_msg_rx)).await?;
             poll_fn(|cx| self.ws.lock().poll_flush_unpin(cx)).await?;
