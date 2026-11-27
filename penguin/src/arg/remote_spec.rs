@@ -75,7 +75,7 @@ pub enum Error {
     #[error("invalid protocol `{0}`")]
     Protocol(String),
     #[error("cannot use {0} with {1}")]
-    UnsupportedCombination(&'static str, &'static str),
+    UnsupportedCombination(String, String),
     #[error("found more than four colon-separated segments")]
     TooManySegments,
     #[error("invalid domain name `{0}`")]
@@ -84,7 +84,7 @@ pub enum Error {
 
 /// Configuration for one item to forward
 #[derive(Debug, derive_more::Display, Clone, Eq, PartialEq)]
-#[display("{local_addr}:{remote_addr}/{protocol}")]
+#[display("{}{local_addr}:{remote_addr}/{protocol}", if *reversed { "R:" } else { "" })]
 pub struct Remote {
     /// Local-side forwarding info
     pub local_addr: LocalSpec,
@@ -93,6 +93,8 @@ pub struct Remote {
     pub remote_addr: RemoteSpec,
     /// Layer-4 protocol this instance forwards
     pub protocol: Protocol,
+    /// Whether the roles are reversed
+    pub reversed: bool,
 }
 
 /// The local side can be either IP+port or "stdio"
@@ -209,12 +211,18 @@ fn tokenize_remote(s: &str) -> Result<Vec<&str>, Error> {
     }
 }
 
+macro_rules! unsupported {
+    ($one:expr, $other:expr) => {
+        Error::UnsupportedCombination($one.to_string(), $other.to_string())
+    };
+}
+
 impl FromStr for Remote {
     type Err = Error;
 
     /// Parse a remote specification.
     #[expect(clippy::too_many_lines)]
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(mut s: &str) -> Result<Self, Self::Err> {
         macro_rules! parse_port_or_bail {
             ($port_str:expr) => {
                 $port_str
@@ -233,6 +241,12 @@ impl FromStr for Remote {
                 }
             };
         }
+        // To escape this syntax (i.e, the only case of having to specify a host of "R"),
+        // simply use a lowercase "r"
+        let reverse = s.starts_with("R:");
+        if reverse {
+            s = &s[2..];
+        }
         let (rest, proto) = match s.rsplit_once('/') {
             Some((rest, proto)) if !proto.contains(':') => (rest, proto.parse()?),
             _ => (s, Protocol::Tcp),
@@ -244,21 +258,25 @@ impl FromStr for Remote {
                 local_addr: LocalSpec::Inet((default_host!(local), SOCKS_DEFAULT_PORT)),
                 remote_addr: RemoteSpec::Socks,
                 protocol: proto,
+                reversed: reverse,
             },
             ["http"] => Self {
                 local_addr: LocalSpec::Inet((default_host!(local), HTTP_DEFAULT_PORT)),
                 remote_addr: RemoteSpec::Http,
                 protocol: proto,
+                reversed: reverse,
             },
             ["tproxy"] => Self {
                 local_addr: LocalSpec::Inet((default_host!(local), TPROXY_DEFAULT_PORT)),
                 remote_addr: RemoteSpec::Tproxy,
                 protocol: proto,
+                reversed: reverse,
             },
             [port] => Self {
                 local_addr: LocalSpec::Inet((default_host!(unspec), parse_port_or_bail!(port))),
                 remote_addr: RemoteSpec::Inet((default_host!(local), parse_port_or_bail!(port))),
                 protocol: proto,
+                reversed: reverse,
             },
             // Two elements:
             // - "stdio" and "socks", "http", or "tproxy",
@@ -271,32 +289,34 @@ impl FromStr for Remote {
                 local_addr: LocalSpec::Stdio,
                 remote_addr: parse_remote_special!(tokens[1]),
                 protocol: proto,
+                reversed: reverse,
             },
             ["stdio", "tproxy"] => {
-                return Err(Error::UnsupportedCombination(
-                    "stdio local",
-                    "tproxy remote",
-                ));
+                return Err(unsupported!(LocalSpec::Stdio, RemoteSpec::Tproxy));
             }
             ["stdio", port] => Self {
                 local_addr: LocalSpec::Stdio,
                 remote_addr: RemoteSpec::Inet((default_host!(local), parse_port_or_bail!(port))),
                 protocol: proto,
+                reversed: reverse,
             },
             [uds_path, "socks" | "http" | "tproxy"] if uds_path.starts_with("unix:") => Self {
                 local_addr: LocalSpec::DomainSocket(PathBuf::from(&uds_path[5..])),
                 remote_addr: parse_remote_special!(tokens[1]),
                 protocol: proto,
+                reversed: reverse,
             },
             [port, "socks" | "http" | "tproxy"] => Self {
                 local_addr: LocalSpec::Inet((default_host!(local), parse_port_or_bail!(port))),
                 remote_addr: parse_remote_special!(tokens[1]),
                 protocol: proto,
+                reversed: reverse,
             },
             [uds_path, port] if uds_path.starts_with("unix:") => Self {
                 local_addr: LocalSpec::DomainSocket(PathBuf::from(&uds_path[5..])),
                 remote_addr: RemoteSpec::Inet((default_host!(local), parse_port_or_bail!(port))),
                 protocol: proto,
+                reversed: reverse,
             },
             [host, port] => Self {
                 local_addr: LocalSpec::Inet((default_host!(unspec), parse_port_or_bail!(port))),
@@ -306,6 +326,7 @@ impl FromStr for Remote {
                     parse_port_or_bail!(port),
                 )),
                 protocol: proto,
+                reversed: reverse,
             },
             // Three elements:
             // - "stdio", remote host, and port number,
@@ -320,6 +341,7 @@ impl FromStr for Remote {
                     parse_port_or_bail!(remote_port),
                 )),
                 protocol: proto,
+                reversed: reverse,
             },
             [local_host, local_port, "socks" | "http" | "tproxy"] => Self {
                 local_addr: LocalSpec::Inet((
@@ -329,6 +351,7 @@ impl FromStr for Remote {
                 )),
                 remote_addr: parse_remote_special!(tokens[2]),
                 protocol: proto,
+                reversed: reverse,
             },
             [uds_path, remote_host, remote_port] if uds_path.starts_with("unix:") => Self {
                 local_addr: LocalSpec::DomainSocket(PathBuf::from(&uds_path[5..])),
@@ -338,6 +361,7 @@ impl FromStr for Remote {
                     parse_port_or_bail!(remote_port),
                 )),
                 protocol: proto,
+                reversed: reverse,
             },
             [local_port, remote_host, remote_port] => Self {
                 local_addr: LocalSpec::Inet((
@@ -350,6 +374,7 @@ impl FromStr for Remote {
                     parse_port_or_bail!(remote_port),
                 )),
                 protocol: proto,
+                reversed: reverse,
             },
             // Four elements: local host, local port, remote host, and remote port.
             [local_host, local_port, remote_host, remote_port] => Self {
@@ -364,6 +389,7 @@ impl FromStr for Remote {
                     parse_port_or_bail!(remote_port),
                 )),
                 protocol: proto,
+                reversed: reverse,
             },
             _ => {
                 // This should be unreachable since we check in `tokenize_remote`
@@ -371,41 +397,45 @@ impl FromStr for Remote {
             }
         };
         // Check for invalid cases
-        if matches!(
-            result,
-            Self {
-                remote_addr: RemoteSpec::Socks | RemoteSpec::Http,
-                protocol: Protocol::Udp,
-                ..
-            }
-        ) {
-            return Err(Error::UnsupportedCombination("socks or http local", "udp"));
+        if let Self {
+            remote_addr: r @ (RemoteSpec::Socks | RemoteSpec::Http),
+            protocol: p @ Protocol::Udp,
+            ..
+        } = result
+        {
+            return Err(unsupported!(r, p));
         }
-        if matches!(
-            result,
-            Self {
-                local_addr: LocalSpec::DomainSocket(_),
-                protocol: Protocol::Udp,
-                ..
-            }
-        ) {
-            return Err(Error::UnsupportedCombination(
-                "unix domain socket local",
-                "udp",
-            ));
+        if let Self {
+            local_addr: l @ LocalSpec::DomainSocket(_),
+            protocol: p @ Protocol::Udp,
+            ..
+        } = result
+        {
+            return Err(unsupported!(l, p));
         }
-        if matches!(
-            result,
-            Self {
-                local_addr: LocalSpec::DomainSocket(_),
-                remote_addr: RemoteSpec::Tproxy,
-                ..
-            }
-        ) {
-            return Err(Error::UnsupportedCombination(
-                "unix domain socket local",
-                "tproxy remote",
-            ));
+        if let Self {
+            local_addr: l @ LocalSpec::DomainSocket(_),
+            remote_addr: r @ RemoteSpec::Tproxy,
+            ..
+        } = result
+        {
+            return Err(unsupported!(l, r));
+        }
+        if let Self {
+            local_addr: l @ (LocalSpec::Stdio | LocalSpec::DomainSocket(_)),
+            reversed: true,
+            ..
+        } = result
+        {
+            return Err(unsupported!(l, "reversed"));
+        }
+        if let Self {
+            remote_addr: r @ (RemoteSpec::Socks | RemoteSpec::Http | RemoteSpec::Tproxy),
+            reversed: true,
+            ..
+        } = result
+        {
+            return Err(unsupported!(r, "reversed"));
         }
         Ok(result)
     }
@@ -474,6 +504,21 @@ mod tests {
                     local_addr: LocalSpec::Inet((default_host!(unspec), 3000)),
                     remote_addr: RemoteSpec::Inet((default_host!(local), 3000)),
                     protocol: Protocol::Tcp,
+                    reversed: false,
+                },
+            ),
+            (
+                "R:3000",
+                format!(
+                    "R:{}:3000:{}:3000/tcp",
+                    add_brackets!(default_host!(unspec)),
+                    add_brackets!(default_host!(local))
+                ),
+                Remote {
+                    local_addr: LocalSpec::Inet((default_host!(unspec), 3000)),
+                    remote_addr: RemoteSpec::Inet((default_host!(local), 3000)),
+                    protocol: Protocol::Tcp,
+                    reversed: true,
                 },
             ),
             (
@@ -487,6 +532,41 @@ mod tests {
                     local_addr: LocalSpec::Inet((default_host!(unspec), 4000)),
                     remote_addr: RemoteSpec::Inet((default_host!(local), 4000)),
                     protocol: Protocol::Udp,
+                    reversed: false,
+                },
+            ),
+            (
+                "R:4000/udp",
+                format!(
+                    "R:{}:4000:{}:4000/udp",
+                    add_brackets!(default_host!(unspec)),
+                    add_brackets!(default_host!(local))
+                ),
+                Remote {
+                    local_addr: LocalSpec::Inet((default_host!(unspec), 4000)),
+                    remote_addr: RemoteSpec::Inet((default_host!(local), 4000)),
+                    protocol: Protocol::Udp,
+                    reversed: true,
+                },
+            ),
+            (
+                "r:80",
+                format!("{}:80:r:80/tcp", add_brackets!(default_host!(unspec))),
+                Remote {
+                    local_addr: LocalSpec::Inet((default_host!(unspec), 80)),
+                    remote_addr: RemoteSpec::Inet((String::from("r"), 80)),
+                    protocol: Protocol::Tcp,
+                    reversed: false,
+                },
+            ),
+            (
+                "R:R:80",
+                format!("R:{}:80:R:80/tcp", add_brackets!(default_host!(unspec))),
+                Remote {
+                    local_addr: LocalSpec::Inet((default_host!(unspec), 80)),
+                    remote_addr: RemoteSpec::Inet((String::from("R"), 80)),
+                    protocol: Protocol::Tcp,
+                    reversed: true,
                 },
             ),
             (
@@ -496,6 +576,20 @@ mod tests {
                     local_addr: LocalSpec::Inet((default_host!(unspec), 80)),
                     remote_addr: RemoteSpec::Inet((String::from("google.com"), 80)),
                     protocol: Protocol::Tcp,
+                    reversed: false,
+                },
+            ),
+            (
+                "R:google.com:80",
+                format!(
+                    "R:{}:80:google.com:80/tcp",
+                    add_brackets!(default_host!(unspec))
+                ),
+                Remote {
+                    local_addr: LocalSpec::Inet((default_host!(unspec), 80)),
+                    remote_addr: RemoteSpec::Inet((String::from("google.com"), 80)),
+                    protocol: Protocol::Tcp,
+                    reversed: true,
                 },
             ),
             (
@@ -508,6 +602,7 @@ mod tests {
                     local_addr: LocalSpec::Inet((default_host!(unspec), 80)),
                     remote_addr: RemoteSpec::Inet((String::from("XN--ZCKZAH.XN--ZCKZAH"), 80)),
                     protocol: Protocol::Tcp,
+                    reversed: false,
                 },
             ),
             (
@@ -517,6 +612,20 @@ mod tests {
                     local_addr: LocalSpec::Inet((default_host!(unspec), 8080)),
                     remote_addr: RemoteSpec::Inet((String::from("example.com"), 80)),
                     protocol: Protocol::Tcp,
+                    reversed: false,
+                },
+            ),
+            (
+                "R:8080:example.com:80",
+                format!(
+                    "R:{}:8080:example.com:80/tcp",
+                    add_brackets!(default_host!(unspec))
+                ),
+                Remote {
+                    local_addr: LocalSpec::Inet((default_host!(unspec), 8080)),
+                    remote_addr: RemoteSpec::Inet((String::from("example.com"), 80)),
+                    protocol: Protocol::Tcp,
+                    reversed: true,
                 },
             ),
             (
@@ -526,6 +635,7 @@ mod tests {
                     local_addr: LocalSpec::Inet((default_host!(local), SOCKS_DEFAULT_PORT)),
                     remote_addr: RemoteSpec::Socks,
                     protocol: Protocol::Tcp,
+                    reversed: false,
                 },
             ),
             (
@@ -535,6 +645,7 @@ mod tests {
                     local_addr: LocalSpec::Inet((default_host!(local), 9050)),
                     remote_addr: RemoteSpec::Socks,
                     protocol: Protocol::Tcp,
+                    reversed: false,
                 },
             ),
             (
@@ -544,6 +655,17 @@ mod tests {
                     local_addr: LocalSpec::Inet((String::from("127.0.0.1"), 1081)),
                     remote_addr: RemoteSpec::Socks,
                     protocol: Protocol::Tcp,
+                    reversed: false,
+                },
+            ),
+            (
+                "r:1081:socks",
+                String::from("r:1081:socks/tcp"),
+                Remote {
+                    local_addr: LocalSpec::Inet((String::from("r"), 1081)),
+                    remote_addr: RemoteSpec::Socks,
+                    protocol: Protocol::Tcp,
+                    reversed: false,
                 },
             ),
             (
@@ -553,6 +675,7 @@ mod tests {
                     local_addr: LocalSpec::Inet((default_host!(local), HTTP_DEFAULT_PORT)),
                     remote_addr: RemoteSpec::Http,
                     protocol: Protocol::Tcp,
+                    reversed: false,
                 },
             ),
             (
@@ -562,6 +685,7 @@ mod tests {
                     local_addr: LocalSpec::Inet((default_host!(local), 8888)),
                     remote_addr: RemoteSpec::Http,
                     protocol: Protocol::Tcp,
+                    reversed: false,
                 },
             ),
             (
@@ -571,6 +695,7 @@ mod tests {
                     local_addr: LocalSpec::Inet((String::from("2001:db8::1"), 3081)),
                     remote_addr: RemoteSpec::Socks,
                     protocol: Protocol::Tcp,
+                    reversed: false,
                 },
             ),
             (
@@ -583,6 +708,7 @@ mod tests {
                     local_addr: LocalSpec::Inet((default_host!(local), TPROXY_DEFAULT_PORT)),
                     remote_addr: RemoteSpec::Tproxy,
                     protocol: Protocol::Tcp,
+                    reversed: false,
                 },
             ),
             (
@@ -595,6 +721,7 @@ mod tests {
                     local_addr: LocalSpec::Inet((default_host!(local), TPROXY_DEFAULT_PORT)),
                     remote_addr: RemoteSpec::Tproxy,
                     protocol: Protocol::Udp,
+                    reversed: false,
                 },
             ),
             (
@@ -604,6 +731,7 @@ mod tests {
                     local_addr: LocalSpec::Inet((default_host!(local), 5000)),
                     remote_addr: RemoteSpec::Tproxy,
                     protocol: Protocol::Tcp,
+                    reversed: false,
                 },
             ),
             (
@@ -613,6 +741,7 @@ mod tests {
                     local_addr: LocalSpec::Inet((default_host!(local), 4567)),
                     remote_addr: RemoteSpec::Tproxy,
                     protocol: Protocol::Udp,
+                    reversed: false,
                 },
             ),
             (
@@ -622,6 +751,7 @@ mod tests {
                     local_addr: LocalSpec::Inet((String::from("127.0.0.1"), 1081)),
                     remote_addr: RemoteSpec::Tproxy,
                     protocol: Protocol::Tcp,
+                    reversed: false,
                 },
             ),
             (
@@ -631,6 +761,7 @@ mod tests {
                     local_addr: LocalSpec::Inet((String::from("127.0.0.1"), 1081)),
                     remote_addr: RemoteSpec::Tproxy,
                     protocol: Protocol::Udp,
+                    reversed: false,
                 },
             ),
             (
@@ -640,6 +771,7 @@ mod tests {
                     local_addr: LocalSpec::Inet((String::from("::1"), 12345)),
                     remote_addr: RemoteSpec::Tproxy,
                     protocol: Protocol::Udp,
+                    reversed: false,
                 },
             ),
             (
@@ -649,6 +781,7 @@ mod tests {
                     local_addr: LocalSpec::DomainSocket(PathBuf::from("/tmp/socket")),
                     remote_addr: RemoteSpec::Inet((default_host!(local), 8080)),
                     protocol: Protocol::Tcp,
+                    reversed: false,
                 },
             ),
             (
@@ -658,6 +791,7 @@ mod tests {
                     local_addr: LocalSpec::DomainSocket(PathBuf::from("/tmp/socket")),
                     remote_addr: RemoteSpec::Socks,
                     protocol: Protocol::Tcp,
+                    reversed: false,
                 },
             ),
             (
@@ -667,6 +801,7 @@ mod tests {
                     local_addr: LocalSpec::DomainSocket(PathBuf::from("/tmp/path:with:a:colon")),
                     remote_addr: RemoteSpec::Http,
                     protocol: Protocol::Tcp,
+                    reversed: false,
                 },
             ),
             (
@@ -676,6 +811,7 @@ mod tests {
                     local_addr: LocalSpec::DomainSocket(PathBuf::from("/tmp/socket")),
                     remote_addr: RemoteSpec::Inet((String::from("example.com"), 80)),
                     protocol: Protocol::Tcp,
+                    reversed: false,
                 },
             ),
             (
@@ -685,6 +821,7 @@ mod tests {
                     local_addr: LocalSpec::DomainSocket(PathBuf::from("/tmp/用户路径")),
                     remote_addr: RemoteSpec::Inet((String::from("xn--0zwm56d.xn--zckzah"), 443)),
                     protocol: Protocol::Tcp,
+                    reversed: false,
                 },
             ),
             (
@@ -694,6 +831,7 @@ mod tests {
                     local_addr: LocalSpec::Inet((default_host!(unspec), 53)),
                     remote_addr: RemoteSpec::Inet((String::from("1.1.1.1"), 53)),
                     protocol: Protocol::Udp,
+                    reversed: false,
                 },
             ),
             (
@@ -703,6 +841,7 @@ mod tests {
                     local_addr: LocalSpec::Inet((String::from("localhost"), 5353)),
                     remote_addr: RemoteSpec::Inet((String::from("1.1.1.1"), 53)),
                     protocol: Protocol::Udp,
+                    reversed: false,
                 },
             ),
             (
@@ -712,6 +851,7 @@ mod tests {
                     local_addr: LocalSpec::Inet((default_host!(unspec), 22)),
                     remote_addr: RemoteSpec::Inet((String::from("example.com"), 22)),
                     protocol: Protocol::Tcp,
+                    reversed: false,
                 },
             ),
             (
@@ -724,6 +864,7 @@ mod tests {
                     local_addr: LocalSpec::Inet((default_host!(unspec), 5444)),
                     remote_addr: RemoteSpec::Inet((String::from("example.XN--9T4B11YI5A"), 5442)),
                     protocol: Protocol::Tcp,
+                    reversed: false,
                 },
             ),
             (
@@ -733,6 +874,7 @@ mod tests {
                     local_addr: LocalSpec::Inet((String::from("::1"), 8080)),
                     remote_addr: RemoteSpec::Inet((String::from("google.com"), 80)),
                     protocol: Protocol::Tcp,
+                    reversed: false,
                 },
             ),
             (
@@ -742,6 +884,27 @@ mod tests {
                     local_addr: LocalSpec::Inet((String::from("localhost"), 5354)),
                     remote_addr: RemoteSpec::Inet((String::from("2001:db8:4860:0:0:0:0:8888"), 53)),
                     protocol: Protocol::Udp,
+                    reversed: false,
+                },
+            ),
+            (
+                "R:R:5354:[2001:db8:4860:0:0:0:0:8888]:53/udp",
+                String::from("R:R:5354:[2001:db8:4860:0:0:0:0:8888]:53/udp"),
+                Remote {
+                    local_addr: LocalSpec::Inet((String::from("R"), 5354)),
+                    remote_addr: RemoteSpec::Inet((String::from("2001:db8:4860:0:0:0:0:8888"), 53)),
+                    protocol: Protocol::Udp,
+                    reversed: true,
+                },
+            ),
+            (
+                "r:5354:[2001:db8:4860:0:0:0:0:8888]:53/udp",
+                String::from("r:5354:[2001:db8:4860:0:0:0:0:8888]:53/udp"),
+                Remote {
+                    local_addr: LocalSpec::Inet((String::from("r"), 5354)),
+                    remote_addr: RemoteSpec::Inet((String::from("2001:db8:4860:0:0:0:0:8888"), 53)),
+                    protocol: Protocol::Udp,
+                    reversed: false,
                 },
             ),
             (
@@ -755,6 +918,21 @@ mod tests {
                     )),
                     remote_addr: RemoteSpec::Inet((String::from("XN--JXALPDLP.net"), 9999)),
                     protocol: Protocol::Tcp,
+                    reversed: false,
+                },
+            ),
+            (
+                // Make sure your editor supports mixed LTR and RTL before editing this line
+                "R:آزمایشی.испытание:123:δοκιμή.net:9999/tcp",
+                String::from("R:XN--HGBK6AJ7F53BBA.XN--80AKHBYKNJ4F:123:XN--JXALPDLP.net:9999/tcp"),
+                Remote {
+                    local_addr: LocalSpec::Inet((
+                        String::from("XN--HGBK6AJ7F53BBA.XN--80AKHBYKNJ4F"),
+                        123,
+                    )),
+                    remote_addr: RemoteSpec::Inet((String::from("XN--JXALPDLP.net"), 9999)),
+                    protocol: Protocol::Tcp,
+                    reversed: true,
                 },
             ),
             (
@@ -764,6 +942,7 @@ mod tests {
                     local_addr: LocalSpec::Stdio,
                     remote_addr: RemoteSpec::Inet((String::from("google.com"), 80)),
                     protocol: Protocol::Tcp,
+                    reversed: false,
                 },
             ),
             (
@@ -773,6 +952,7 @@ mod tests {
                     local_addr: LocalSpec::Stdio,
                     remote_addr: RemoteSpec::Socks,
                     protocol: Protocol::Tcp,
+                    reversed: false,
                 },
             ),
             (
@@ -782,6 +962,7 @@ mod tests {
                     local_addr: LocalSpec::Stdio,
                     remote_addr: RemoteSpec::Inet((default_host!(local), 443)),
                     protocol: Protocol::Tcp,
+                    reversed: false,
                 },
             ),
             (
@@ -791,6 +972,7 @@ mod tests {
                     local_addr: LocalSpec::Stdio,
                     remote_addr: RemoteSpec::Inet((default_host!(local), 5353)),
                     protocol: Protocol::Udp,
+                    reversed: false,
                 },
             ),
         ];
@@ -859,23 +1041,57 @@ mod tests {
             ),
             (
                 "socks/udp",
-                Error::UnsupportedCombination("socks or http local", "udp"),
+                Error::UnsupportedCombination("socks".to_string(), "udp".to_string()),
             ),
             (
                 "http/udp",
-                Error::UnsupportedCombination("socks or http local", "udp"),
+                Error::UnsupportedCombination("http".to_string(), "udp".to_string()),
             ),
             (
                 "stdio:tproxy",
-                Error::UnsupportedCombination("stdio local", "tproxy remote"),
+                Error::UnsupportedCombination("stdio".to_string(), "tproxy".to_string()),
             ),
             (
                 "[unix:/tmp/socket]:tproxy/udp",
-                Error::UnsupportedCombination("unix domain socket local", "udp"),
+                Error::UnsupportedCombination("[unix:/tmp/socket]".to_string(), "udp".to_string()),
             ),
             (
                 "[unix:/tmp/socket]:tproxy",
-                Error::UnsupportedCombination("unix domain socket local", "tproxy remote"),
+                Error::UnsupportedCombination(
+                    "[unix:/tmp/socket]".to_string(),
+                    "tproxy".to_string(),
+                ),
+            ),
+            (
+                "R:stdio:80",
+                Error::UnsupportedCombination("stdio".to_string(), "reversed".to_string()),
+            ),
+            (
+                "R:[unix:/tmp/socket]:80",
+                Error::UnsupportedCombination(
+                    "[unix:/tmp/socket]".to_string(),
+                    "reversed".to_string(),
+                ),
+            ),
+            (
+                "R:R:1081:socks",
+                Error::UnsupportedCombination("socks".to_string(), "reversed".to_string()),
+            ),
+            (
+                "R:socks",
+                Error::UnsupportedCombination("socks".to_string(), "reversed".to_string()),
+            ),
+            (
+                "R:9050:socks",
+                Error::UnsupportedCombination("socks".to_string(), "reversed".to_string()),
+            ),
+            (
+                "R:127.0.0.1:1081:socks",
+                Error::UnsupportedCombination("socks".to_string(), "reversed".to_string()),
+            ),
+            (
+                "R:http",
+                Error::UnsupportedCombination("http".to_string(), "reversed".to_string()),
             ),
         ];
         for (s, expected) in tests {
